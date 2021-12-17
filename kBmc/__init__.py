@@ -8,7 +8,6 @@ import time
 import sys
 import kmisc as km
 import json
-ats_version='2.1.101'
 
 class Ipmitool:
     def __init__(self,**opts):
@@ -1091,6 +1090,7 @@ if __name__ == "__main__":
         elif log_level < ll:
             print(msg)
 
+    ats_version='2.2'
     arg=SysArg.SysArg(program='kBmc',desc='Inteligent BMC Tool',version=ats_version,cmd_id=1)
     arg.define('ip',short='-i',long='--ip',desc='BMC IP Address',params_name='BMC_IP',required=True)
     arg.define('ipmi_user',short='-u',long='--user',desc='BMC User',params_name='BMC_USER',default='ADMIN')
