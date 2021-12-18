@@ -341,7 +341,8 @@ class kBmc:
             else:
                 break
         if isinstance(cmd, (tuple,list)) and len(cmd) >= 2 and type(cmd[0]) is bool:
-            ok,cmd,path,return_code,timeout=tuple(km.get_value(cmd,[0,1,2,3,4]))
+            #ok,cmd,path,return_code,timeout=tuple(km.get_value(cmd,[0,1,2,3,4]))
+            ok,cmd,path,return_code,timeout=km.get_value(cmd,[0,1,2,3,4],err=True)
             if not ok:
                 self.warn(_type='cmd',msg="command({}) format error".format(cmd))
                 return False,(-1,'command format error(2)','command format error',0,0,cmd,path),'command({}) format error'.format(cmd)
