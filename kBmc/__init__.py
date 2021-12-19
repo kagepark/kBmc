@@ -208,7 +208,8 @@ class kBmc:
                     self.checked_port=False
             if km.ping(ip,count=0,timeout=self.timeout,log=self.log):
                 if self.checked_port is False:
-                    if km.is_port_ip(ip,self.port):
+                    #if km.is_port_ip(ip,self.port):
+                    if km.IP(ip).IsOpenPort(self.port):
                         self.checked_port=True
                     else:
                         self.error(_type='ip',msg="{} is not IPMI IP".format(ip))
@@ -847,8 +848,50 @@ class kBmc:
     def is_down(self,timeout=1200,keep_up=240,keep_down=30,interval=8,power_down=30,**opts): # Node state
         return self.node_state(state='down',timeout=km.integer(timeout,default=1200),keep_up=km.integer(keep_up,default=240),interval=km.integer(interval,default=8),power_down=km.integer(power_down,default=60),**opts) # Node state
 
-    def get_boot_mode(self):
-        return km.get_boot_mode(self.ip,self.user,self.passwd,log=self.log)
+    def get_boot_mode(self,ipmi_ip,ipmi_user,ipmi_pass,log_file=None,log=None):
+        status='No override'
+        rc=ipmi_cmd(cmd='chassis bootparam get 5',ipmi_ip=ipmi_ip,ipmi_user=ipmi_user,ipmi_pass=ipmi_pass,log=log)
+        if rc[0] == 0:
+            efi=False
+            persistent=False
+            for ii in rc[1].split('\n'):
+                if 'Options apply to all future boots' in ii:
+                    persistent=True
+                elif 'BIOS EFI boot' in ii:
+                    efi=True
+                elif 'Boot Device Selector :' in ii:
+                    status=ii.split(':')[1]
+                    break
+            if log:
+                log("Boot mode Status:{}, EFI:{}, Persistent:{}".format(status,efi,persistent),log_level=7)
+            return [status,efi,persistent]
+        else:
+            return [False,False,False]
+
+
+    def set_boot_mode(self,ipmi_ip,ipmi_user,ipmi_pass,boot_mode,ipxe=False,persistent=False,log_file=None,log=None,force=False):
+        boot_mode_d=['pxe','ipxe','bios','hdd']
+        if not boot_mode in boot_mode_d:
+            return
+        if persistent:
+            if boot_mode == 'pxe' and ipxe in ['on','ON','On',True,'True']:
+                # ipmitool -I lanplus -H 172.16.105.74 -U ADMIN -P 'ADMIN' raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00
+                ipmi_cmd(cmd='raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00',ipmi_ip=ipmi_ip,ipmi_user=ipmi_user,ipmi_pass=ipmi_pass,log=log)
+                logging("Persistently Boot mode set to i{0} at {1}".format(boot_mode,ipmi_ip),log_file=log_file,date=True,log=log,log_level=7)
+            else:
+                ipmi_cmd(cmd='chassis bootdev {0} options=persistent'.format(boot_mode),ipmi_ip=ipmi_ip,ipmi_user=ipmi_user,ipmi_pass=ipmi_pass,log=log)
+                logging("Persistently Boot mode set to {0} at {1}".format(boot_mode,ipmi_ip),log_file=log_file,date=True,log=log,log_level=7)
+        else:
+            if boot_mode == 'pxe' and ipxe in ['on','ON','On',True,'True']:
+                    ipmi_cmd(cmd='chassis bootdev {0} options=efiboot'.format(boot_mode),ipmi_ip=ipmi_ip,ipmi_user=ipmi_user,ipmi_pass=ipmi_pass,log=log)
+            else:
+                if force and boot_mode == 'pxe':
+                    ipmi_cmd(cmd='chassis bootparam set bootflag force_pxe'.format(boot_mode),ipmi_ip=ipmi_ip,ipmi_user=ipmi_user,ipmi_pass=ipmi_pass,log=log)
+                else:
+                    ipmi_cmd(cmd='chassis bootdev {0}'.format(boot_mode),ipmi_ip=ipmi_ip,ipmi_user=ipmi_user,ipmi_pass=ipmi_pass,log=log)
+            logging("Temporary Boot mode set to {0} at {1}".format(boot_mode,ipmi_ip),log_file=log_file,date=True,log=log,log_level=7)
+
+
 
     def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,timeout=3600,lanmode=None,fail_down_time=240):
         retry=km.integer(retry,default=0)
@@ -869,8 +912,8 @@ class kBmc:
             for ii in range(0,retry+1):
                 # Find ipmi information
                 ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
-                km.set_boot_mode(self.ip,self.user,self.passwd,boot_mode,persistent=order,ipxe=ipxe,log_file=log_file,log=self.log,force=force)
-                boot_mode_state=km.get_boot_mode(self.ip,self.user,self.passwd,log_file=log_file,log=log)
+                self.set_boot_mode(self.ip,self.user,self.passwd,boot_mode,persistent=order,ipxe=ipxe,log_file=log_file,log=self.log,force=force)
+                boot_mode_state=self.get_boot_mode(self.ip,self.user,self.passwd,log_file=log_file,log=log)
                 if (boot_mode == 'pxe' and boot_mode_state[0] is not False and 'PXE' in boot_mode_state[0]) and ipxe == boot_mode_state[1] and order == boot_mode_state[2]:
                     break
                 km.logging(' retry boot mode set {} (ipxe:{},force:{})[{}/5]'.format(boot_mode,ipxe,order,ii),log=self.log,log_level=6)
@@ -1150,7 +1193,8 @@ if __name__ == "__main__":
     if km.is_ipv4(ipmi_ip) is False or km.get_value(sys.argv,1) in ['help','-h','--help']:
         help()
 
-    elif km.is_port_ip(ipmi_ip,(623,664,443)):
+    #elif km.is_port_ip(ipmi_ip,(623,664,443)):
+    elif km.IP(ipmi_ip).IsOpenPort((623,664,443)):
         print('Test at {}'.format(ipmi_ip))
         if smc_file and os.path.isfile('{}/{}'.format(tool_path,smc_file)):
             bmc=kBmc(ipmi_ip=ipmi_ip,ipmi_user=ipmi_user,ipmi_pass=ipmi_pass,test_pass=['ADMIN','Admin'],test_user=['ADMIN','Admin'],timeout=1800,log=KLog,tool_path=tool_path,ipmi_mode=[Ipmitool(),Smcipmitool(tool_path=tool_path,smc_file=smc_file)])
