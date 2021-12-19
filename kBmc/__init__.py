@@ -587,8 +587,8 @@ class kBmc:
                                 elif 'Boot Device Selector :' in ii:
                                     status=ii.split(':')[1]
                                     break
-                            if log:
-                                log("Boot mode Status:{}, EFI:{}, Persistent:{}".format(status,efi,persistent),log_level=7)
+                            if self.log:
+                                self.log("Boot mode Status:{}, EFI:{}, Persistent:{}".format(status,efi,persistent),log_level=7)
                             return [status,efi,persistent]
                         else:
                             return [False,False,False]
