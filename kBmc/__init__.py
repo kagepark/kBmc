@@ -579,7 +579,7 @@ class kBmc:
                             status='No override'
                             efi=False
                             persistent=False
-                            for ii in rc[1].split('\n'):
+                            for ii in km.get_value(rc[1],1).split('\n'):
                                 if 'Options apply to all future boots' in ii:
                                     persistent=True
                                 elif 'BIOS EFI boot' in ii:
