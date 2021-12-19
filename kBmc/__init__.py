@@ -866,6 +866,9 @@ class kBmc:
     def is_down(self,timeout=1200,keep_up=240,keep_down=30,interval=8,power_down=30,**opts): # Node state
         return self.node_state(state='down',timeout=km.integer(timeout,default=1200),keep_up=km.integer(keep_up,default=240),interval=km.integer(interval,default=8),power_down=km.integer(power_down,default=60),**opts) # Node state
 
+    def get_boot_mode(self):
+        return self.bootorder(mode='status')
+
     #def get_boot_mode(self,ipmi_ip=None,ipmi_user=None,ipmi_pass=None,log_file=None,log=None):
     #    if ipmi_ip is None: ipmi_ip=self.ip
     #    if ipmi_user is None: ipmi_user=self.user
