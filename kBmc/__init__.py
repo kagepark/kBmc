@@ -569,7 +569,7 @@ class kBmc:
                 if km.krc(rc[0],chk=True):
                     return True,rc[1][1]
             elif name == 'ipmitool':
-                if mode in [None,'order']:
+                if mode in [None,'order','status']:
                     rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5'))
                     if mode == 'order':
                         if rc[0]:
