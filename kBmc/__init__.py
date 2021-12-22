@@ -598,9 +598,12 @@ class kBmc:
                 else:
                     if persistent:
                         if mode == 'pxe' and ipxe in ['on','ON','On',True,'True']:
+                            # ipmitool -I lanplus -H 172.16.105.74 -U ADMIN -P 'ADMIN' raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00
                             rc=self.run_cmd(mm.cmd_str('raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00'))
+                            if self.log: self.log("Persistently Boot mode set to i{0} at {1}".format(boot_mode,ipmi_ip),log_file=log_file,date=True,log=log,log_level=7)
                         else:
                             rc=self.run_cmd(mm.cmd_str('chassis bootdev {0} options=persistent'.format(mode)))
+                            if self.log: self.log("Persistently Boot mode set to {0} at {1}".format(boot_mode,ipmi_ip),log_file=log_file,date=True,log=log,log_level=7)
                     else:
                         if mode == 'pxe' and ipxe in ['on','ON','On',True,'True']:
                             rc=self.run_cmd(mm.cmd_str('chassis bootdev {0} options=efiboot'.format(mode)))
