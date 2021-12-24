@@ -8,6 +8,7 @@ import time
 import sys
 import kmisc as km
 import json
+import re
 
 class Ipmitool:
     def __init__(self,**opts):
@@ -148,6 +149,38 @@ class Redfish:
             else:
                 return True,json.loads(rc[1].text)
 
+    def bootorder(self,**opts):
+        rdf_uefi=False
+        rdf_bmac=[]
+        redfish_bootorder=self.run_cmd('Systems/1/Bios',**opts)
+        if km.krc(redfish_bootorder,chk=True):
+            rdb=km.get_value(redfish_bootorder,1)
+            if isinstance(rdb,dict):
+                rdf_uefi=rdb.get('Attributes',{}).get('BootModeSelect',False)
+        return rdf_uefi,rdf_bmac
+    #def bootorder(self,**opts):
+    #    rdf_uefi=False
+    #    rdf_bmac=[]
+    #    redfish_bootorder=self.run_cmd('Systems/1/BootOptions',**opts)
+    #    if km.krc(redfish_bootorder,chk=True):
+    #        rdb=km.get_value(redfish_bootorder,1)
+    #        if isinstance(rdb,dict):
+    #            rdb_m=rdb.get('Members')
+    #            if isinstance(rdb_m,list) and rdb_m:
+    #                rdbo=rdb_m[0].get('@odata.id')
+    #                if isinstance(rdbo,str):
+    #                     rdbof=self.run_cmd(rdbo,**opts)
+    #                     if km.krc(rdbof,chk=True):
+    #                          rdbof_d=km.get_value(rdbof,1)
+    #                          if isinstance(rdbof_d,dict):
+    #                              rf_a=rdbof_d.get('DisplayName','').split()
+    #                              if 'UEFI' in rf_a:
+    #                                  rdf_uefi=True
+    #                              for ii in rf_a:
+    #                                  if ii and 'MAC:' in ii:
+    #                                      rdf_bmac=re.compile('\(MAC:([a-f0-9]*)\)').findall(ii)
+    #    return rdf_uefi,rdf_bmac
+
 #def move2first(item,pool):
 #    if item: 
 #        if type(pool) is list and item in pool:
@@ -237,6 +270,76 @@ class kBmc:
         for mm in self.mode:
             if mm.__name__ == name:
                 return mm
+
+    def find_uefi_legacy(self,bioscfg=None): # Get UEFI or Regacy mode
+        def aa(a):
+            if isinstance(a,list):
+                if len(a)==1: return a[0]
+                return ''
+            return a
+
+        def xml_find(data):
+            onboard_video_rom=[]
+            selected_option=[]
+            default_option=[]
+            first_option=[]
+            count=0
+            for i in range(0,len(data)):
+                if '<Menu name="Boot">' in data[i]:
+                    for j in range(i,len(data)):
+                        if '<Setting name="Boot Mode Select"' in data[j]:
+                            selected_option=re.compile('<Setting name="Boot Mode Select" selectedOption="(\w.*)" type="Option">').findall(data[j])
+                            count+=1
+                        elif not default_option and selected_option and '<DefaultOption>' in data[j]:
+                            default_option=re.compile('<DefaultOption>(\w.*)</DefaultOption>').findall(data[j])
+                            count+=1
+                        elif '<Setting name="Boot Option #1" order="1"' in data[j]:
+                            first_option=re.compile('<Setting name="Boot Option #1" order="1" selectedOption="(\w.*)" type="Option">').findall(data[j])
+                            if first_option:
+                                if 'EFI Network:' in first_option[0]:
+                                    first_option='IPXE'
+                                elif 'Network:' in first_option[0]:
+                                    first_option='PXE'
+                            count+=1
+#                        elif selected_option and '</Setting>' in data[j]:
+#                            break
+                elif '<Setting name="Onboard Video Option ROM" selectedOption' in data[i]:
+                    onboard_video_rom=re.compile(r'<Setting name=\"Onboard Video Option ROM\" selectedOption=\"(\w.*)\" type=\"Option\">').findall(data[i])
+                    count+=1
+                if count >= 4:
+                    return aa(selected_option),aa(default_option),aa(first_option),aa(onboard_video_rom)
+        def flat_find(data):
+            for i in range(0,len(data)):
+                if '[Boot]' in data[i]:
+                    for j in range(i,len(data)):
+                        if data[j].strip().startswith('Boot Mode Select'):
+                            sop=data[j].strip().split()[2].split('=')[1]
+                            if sop == '02':
+                                return 'DUAL','','',''
+                            elif sop == '01':
+                                return 'UEFI','','',''
+                            elif sop == '01':
+                                return 'LEGACY','','',''
+
+        def find_boot_mode(data):
+            data_a=data.split('\n')
+            for i in range(0,len(data_a)):
+                if '<?xml version' in data_a[i]:
+                    return xml_find(data_a[i:])
+                elif '[Advanced' in data_a[i]:
+                    return flat_find(data_a[i:])
+
+        # Boot mode can automatically convert iPXE or PXE function
+        # if power handle command in here then use bmc.power(xxxx,lanmode=self.bmc_lanmode) code
+        if isinstance(bioscfg,str):
+            if os.path.isfile(bioscfg):
+                with open(bioscfg,'rb') as f:
+                    bioscfg=f.read()
+        if isinstance(bioscfg,str) and bioscfg:
+            found=find_boot_mode(km._u_bytes2str(bioscfg))
+            if found:
+                return True,found
+        return False,('','','','')
 
     def find_user_pass(self,ip=None,default_range=4,check_cmd='ipmi power status',cancel_func=None):
         if cancel_func is None: cancel_func=self.cancel_func
@@ -550,7 +653,7 @@ class kBmc:
                             return True,ii_a[-1]
         return km.krc(rc[0]),None
 
-    def bootorder(self,mode=None,ipxe=False,persistent=False,force=False,boot_mode={'smc':['pxe','bios','hdd','cd','usb'],'ipmitool':['pxe','ipxe','bios','hdd']}):
+    def bootorder(self,mode=None,ipxe=False,persistent=False,force=False,boot_mode={'smc':['pxe','bios','hdd','cd','usb'],'ipmitool':['pxe','ipxe','bios','hdd']},bios_cfg=None):
         rc=False,"Unknown boot mode({})".format(mode)
         for mm in self.mode:
             name=mm.__name__
@@ -571,14 +674,25 @@ class kBmc:
             elif name == 'ipmitool':
                 if mode in [None,'order','status']:
                     rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5'))
+# Boot Flags :
+#   - Boot Flag Invalid
+#   - Options apply to only next boot
+#   - BIOS EFI boot 
+#   - Boot Device Selector : Force PXE
+#   - Console Redirection control : System Default
+#   - BIOS verbosity : Console redirection occurs per BIOS configuration setting (default)
+#   - BIOS Mux Control Override : BIOS uses recommended setting of the mux at the end of POST
                     if mode == 'order':
                         if rc[0]:
                             rc=True,km.findstr(rc[1],'- Boot Device Selector : (\w.*)')[0]
                     elif mode == 'status':
-                        if km.krc(rc,chk=True):
+                        status=False
+                        efi=False
+                        persistent=False
+                        bios_cfg=self.find_uefi_legacy(bioscfg=bios_cfg)
+                        rdf_uefi,rdf_bmac=Redfish().bootorder(**self.__dict__)
+                        if km.krc(rc,chk=True): # ipmitool bootorder
                             status='No override'
-                            efi=False
-                            persistent=False
                             for ii in km.get_value(rc[1],1).split('\n'):
                                 if 'Options apply to all future boots' in ii:
                                     persistent=True
@@ -589,9 +703,18 @@ class kBmc:
                                     break
                             if self.log:
                                 self.log("Boot mode Status:{}, EFI:{}, Persistent:{}".format(status,efi,persistent),log_level=7)
-                            return [status,efi,persistent]
-                        else:
-                            return [False,False,False]
+                        if isinstance(rdf_uefi,str): #Redfish is more detail information
+                            if self.log:
+                                self.log("Redfish Boot mode: {}".format(rdf_uefi),log_level=7)
+                            if 'EFI' in rdf_uefi:
+                                efi=True
+                            else:
+                                efi=False
+                        elif km.krc(bios_cfg,chk=True): #BIOS CFG file
+                            bios_uefi=km.get_value(bios_cfg,1)
+                            if 'EFI' in bios_uefi[0:-1] or 'UEFI' in bios_uefi[0:-1] or 'IPXE' in bios_uefi[0:-1]:
+                                efi=True
+                        return [status,efi,persistent]
                 elif mode not in chk_boot_mode:
                     self.warn(_type='boot',msg="Unknown boot mode({}) at {}".format(mode,name))
                     return False,'Unknown boot mode({}) at {}'.format(mode,name)
@@ -1265,6 +1388,8 @@ if __name__ == "__main__":
             mode=km.get_value(sys.argv,-1)
             if mode == 'ipxe':
                 print(km.get_value(bmc.bootorder(mode='pxe',ipxe=True,persistent=True,force=True),1))
+            elif mode=='status':
+                print(bmc.bootorder(mode='status'))
             else:
                 print(km.get_value(bmc.bootorder(mode=mode,persistent=True,force=True),1))
         else:
