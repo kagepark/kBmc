@@ -145,7 +145,10 @@ class Redfish:
 
             end_time=km.now()
             if rc[0] is False  or rc[1].status_code == 404:
-                return False,rc[1].text
+                try:
+                    return False,rc[1].text
+                except:
+                    return False,rc[1]
             else:
                 return True,json.loads(rc[1].text)
 
@@ -197,6 +200,7 @@ class kBmc:
         if not self.mac: self.mac=opts.get('bmc_mac')
         if not self.mac: self.mac=opts.get('ipmi_mac')
         self.eth_mac=opts.get('eth_mac')
+        self.eth_ip=opts.get('eth_ip')
         self.user=opts.get('ipmi_user')
         if not self.user: self.user=opts.get('user','ADMIN')
         self.passwd=opts.get('ipmi_pass')
