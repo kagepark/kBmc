@@ -133,24 +133,33 @@ class Redfish:
     def run_cmd(self,cmd_str,**opts):
         start_time=km.now()
         cmd_str=self.cmd_str(cmd_str)
-        if cmd_str[0]:
-            base_cmd=km.sprintf(cmd_str[1].get('base'),ip=opts.get('ip'))
-            if cmd_str[1].get('cmd'):
-                for ii in cmd_str[1].get('cmd'):
-                    rc=km.web_req(base_cmd[1],user=opts.get('user'),passwd=opts.get('passwd'),json=ii,mode=cmd_str[1].get('mode'))
-                    if rc[0] is False  or rc[1].status_code == 404:
-                        return False,rc[1].text
+        if km.Get(cmd_str,0):
+            cmd_str_1=km.Get(cmd_str,1)
+            base_cmd=km.sprintf(km.Get(cmd_str_1,'base'),ip=opts.get('ip'))
+            if km.Get(cmd_str_1,'cmd'):
+                for ii in km.Get(cmd_str_1,'cmd'):
+                    rc=km.web_req(km.Get(base_cmd,1),user=opts.get('user'),passwd=opts.get('passwd'),json=ii,mode=km.Get(cmd_str_1,'mode'))
+                    web_data=km.Get(rc,1)
+                    if km.Get(rc,0) is False or km.Get(web_data,'status') == 404:
+                        return False,km.Get(web_data,'text',err=False)
+#                    if rc[0] is False  or rc[1].status_code == 404:
+#                        return False,rc[1].text
             else:
-                rc=km.web_req(base_cmd[1],user=opts.get('user'),passwd=opts.get('passwd'),mode='get')
+                rc=km.web_req(km.Get(base_cmd,1),user=opts.get('user'),passwd=opts.get('passwd'),mode='get')
 
             end_time=km.now()
-            if rc[0] is False  or rc[1].status_code == 404:
-                try:
-                    return False,rc[1].text
-                except:
-                    return False,rc[1]
-            else:
-                return True,json.loads(rc[1].text)
+            web_data=km.Get(rc,1)
+            if km.Get(rc,0) is False or km.Get(web_data,'status') == 404:
+                return False,km.Get(web_data,'text',err=False)
+            return True,km.Get(web_data,'data',err=False)
+        return False,'Command format error({})'.format(cmd_str)
+#            if rc[0] is False  or rc[1].status_code == 404:
+#                try:
+#                    return False,rc[1].text
+#                except:
+#                    return False,rc[1]
+#            else:
+#                return True,json.loads(rc[1].text)
 
     def bootorder(self,**opts):
         rdf_uefi=False
