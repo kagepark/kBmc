@@ -853,7 +853,9 @@ class kBmc:
 
         def power_data():
             pwr_info=self.power(cmd='status')
-            return pwr_info.split()[-1]
+            if isinstance(pwr_info,str):
+                return km.Get(pwr_info.split(),-1)
+            return km.Get(pwr_info,-1)
 
         bmc_modules_num=len(self.mode)
         bmc_modules_chk=0
