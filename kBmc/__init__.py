@@ -1101,18 +1101,16 @@ class kBmc:
             # BMC Lan mode Checkup
             cur_lan_mode=self.lanmode()
             if cur_lan_mode[0]:
-                if mode.lower() in cur_lan_mode[1].lower():
-                    return mode
+                if self.lanmode_convert(mode) == self.lanmode_convert(cur_lan_mode[1]):
+                    km.logging(' Already {}'.format(self.lanmode_convert(mode,string=True)),log=self.log,log_level=7)
+                    return self.lanmode_convert(cur_lan_mode[1],string=True)
                 else:
-                    if mode == 'onboard':
-                        rc=self.lanmode(mode=1)
-                    elif mode == 'failover':
-                        rc=self.lanmode(mode=2)
-                    else:
-                        rc=self.lanmode(mode=0)
+                    rc=self.lanmode(mode)
                     if rc[0]:
-                        return mode
-
+                        km.logging(' Set to {}'.format(km.Get(rc,1)),log=self.log,log_level=5)
+                        return km.Get(rc,1)
+                    else:
+                        km.logging(' Can not set to {}'.format(self.lanmode_convert(mode,string=True)),log=self.log,log_level=1)
         chkd=False
         for mm in self.mode:
             name=mm.__name__
@@ -1160,8 +1158,8 @@ class kBmc:
                             chk+=1
                             continue
                         # BMC Lan mode Checkup before power on/cycle/reset
-                        if checked_lanmode is None and lanmode and verify_status in ['on','reset','cycle']:
-                           checked_lanmode=lanmode_check(lanmode)
+                        if checked_lanmode is None and self.lanmode_convert(lanmode) in [0,1,2] and verify_status in ['on','reset','cycle']:
+                           lanmode_check(lanmode)
 
                         if verify_status in ['reset','cycle']:
                              if init_status == 'off':
@@ -1220,22 +1218,43 @@ class kBmc:
             return False,'It looks BMC issue. (Need reset the physical power)',ii
         return False,'time out',ii
 
+    def lanmode_convert(self,mode=None,string=False):
+        if isinstance(mode,str):
+            if mode.lower() in ['dedicate','dedicated','0']:
+                mode=0
+            elif mode.lower() in ['share','shared','onboard','1']:
+                mode=1
+            elif mode.lower() in ['failover','ha','2']:
+                mode=2
+        if string:
+            if mode == 0:
+                return 'Dedicated'
+            elif mode == 1:
+                return 'Shared'
+            elif mode == 2:
+                return 'Failover'
+            else:
+                return 'Unknown'
+        else:
+            return mode
+
     def lanmode(self,mode=None):
         mm=self.get_mode('smc')
         if not mm:
             km.logging(' - SMCIPMITool not found',log=self.log,log_level=1,dsp='e')
             return False,'SMCIPMITool not found'
-        if mode in [0,1,2,'0','1','2']:
-            rc=self.run_cmd(mm.cmd_str("""ipmi oem lani {}""".format(mode)))
+        if self.lanmode_convert(mode) in [0,1,2]:
+            rc=self.run_cmd(mm.cmd_str("""ipmi oem lani {}""".format(self.lanmode_convert(mode))))
+            if km.krc(rc[0],chk=True):
+                return True,self.lanmode_convert(mode,string=True)
+            return rc
         else:
             rc=self.run_cmd(mm.cmd_str("""ipmi oem lani"""))
-        if km.krc(rc[0],chk='error'):
-            return rc
-        if km.krc(rc[0],chk=True):
-            a=km.findstr(rc[1][1],'Current LAN interface is \[ (\w.*) \]')
-            if len(a) == 1:
-                return True,a[0]
-        return False,None
+            if km.krc(rc[0],chk=True):
+                a=km.findstr(rc[1][1],'Current LAN interface is \[ (\w.*) \]')
+                if len(a) == 1:
+                    return True,a[0]
+            return False,None
 
     def error(self,_type=None,msg=None):
         if _type and msg:
