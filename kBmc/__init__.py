@@ -505,22 +505,26 @@ class kBmc:
                 else:
                     rc=km.rshell(cmd_str,path=path,timeout=timeout,progress=progress,log=self.log,progress_pre_new_line=True,progress_post_new_line=True,cd=cd)
                 if rc[0] != 0:
+                    km.logging('[WARN] Check ip,user,password again',log=self.log,log_level=4,dsp='f')
                     ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=cancel_func)
             except:
                 e = sys.exc_info()[0]
+                km.logging('[ERR] Your command got error\n{}'.format(e),log=self.log,log_level=4,dsp='f')
                 self.warn(_type='cmd',msg="Your command got error\n{}".format(e))
                 return 'error',(-1,'{}'.format(e),'unknown',0,0,cmd_str,path),'Your command got error'
             if show_str:
-                km.logging(' - RT_CODE : {}'.format(rc[0]),log=self.log,log_level=1,dsp='d')
+                km.logging(' - RT_CODE : {}'.format(km.Get(rc,0)),log=self.log,log_level=1,dsp='d')
+                if rc[0] !=0 :
+                    km.logging(' - Output  : {}'.format(km.Get(rc,1)),log=self.log,log_level=1,dsp='d')
             if dbg:
-                km.logging(' - Output  : {}'.format(rc),log=self.log,log_level=1,dsp='d')
+                km.logging(' -DBGOutput: {}'.format(rc),log=self.log,log_level=1,dsp='d')
             if rc[0] == 1:
                 return False,rc,'Command file not found'
-            elif (not rc_ok and rc[0] == 0) or km.check_value(rc_ok,rc[0]):
+            elif (not rc_ok and rc[0] == 0) or km.check_value(rc_ok,km.Get(rc,0)):
                 return True,rc,'ok'
-            elif km.check_value(rc_err_connection,rc[0]): # retry condition1
+            elif km.check_value(rc_err_connection,km.Get(rc,0)): # retry condition1
                 msg='err_connection'
-                km.logging('Connection error condition:{}, return:{}'.format(rc_err_connection,rc[0]),log=self.log,log_level=7)
+                km.logging('Connection error condition:{}, return:{}'.format(rc_err_connection,km.Get(rc,0)),log=self.log,log_level=7)
                 km.logging('Connection Error:',log=self.log,log_level=1,dsp='d',direct=True)
                 #Check connection
                 if km.is_lost(self.ip,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func))[0]:
