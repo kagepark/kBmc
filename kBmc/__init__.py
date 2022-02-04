@@ -507,6 +507,7 @@ class kBmc:
                 if rc[0] != 0:
                     km.logging('[WARN] Check ip,user,password again',log=self.log,log_level=4,dsp='f')
                     ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=cancel_func)
+                    continue
             except:
                 e = sys.exc_info()[0]
                 km.logging('[ERR] Your command got error\n{}'.format(e),log=self.log,log_level=4,dsp='f')
