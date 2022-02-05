@@ -447,7 +447,7 @@ class kBmc:
                 km.logging("""BMC Password: Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.""",log=self.log,log_level=1)
                 return False,self.user,self.passwd
                 
-    def run_cmd(self,cmd,append=None,path=None,retry=0,timeout=None,return_code={'ok':[0,True],'fail':[]},show_str=False,dbg=False,mode='app',cancel_func=None,peeling=False,progress=False,ip=None,user=None,passwd=None,cd=False):
+    def run_cmd(self,cmd,append=None,path=None,retry=0,timeout=None,return_code={'ok':[0,True],'fail':[]},show_str=False,dbg=False,mode='app',cancel_func=None,peeling=False,progress=False,ip=None,user=None,passwd=None,cd=False,check_password_rc=[]):
         if cancel_func is None: cancel_func=self.cancel_func
         error=self.error()
         if error[0]:
@@ -480,6 +480,7 @@ class kBmc:
         if passwd is None: passwd=self.passwd
         if type(append) is not str:
             append=''
+        rc=None
         for i in range(0,2+retry):
             if i > 1:
                 km.logging('Re-try command [{}/{}]'.format(i,retry+1),log=self.log,log_level=1,dsp='d')
@@ -504,7 +505,7 @@ class kBmc:
                     return Redfish().run_cmd(cmd_str,**self.__dict__)
                 else:
                     rc=km.rshell(cmd_str,path=path,timeout=timeout,progress=progress,log=self.log,progress_pre_new_line=True,progress_post_new_line=True,cd=cd)
-                if rc[0] != 0:
+                if (not check_password_rc and rc[0] != 0) or (rc[0] !=0 and rc[0] in check_password_rc):
                     km.logging('[WARN] Check ip,user,password again',log=self.log,log_level=4,dsp='f')
                     ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=cancel_func)
                     continue
@@ -577,7 +578,10 @@ class kBmc:
                             return 'fail',rc,'Not defined return-condition, So it will be fail'
                     except:
                         return 'unknown',rc,'Unknown result'
-        return False,(-1,'timeout','timeout',0,0,cmd_str,path),'Time out the running command'
+        if rc is None:
+            return False,(-1,'No more test','',0,0,cmd_str,path),'Out of testing'
+        else:
+            return False,rc,'Out of testing'
 
     def reset(self,retry=0,post_keep_up=20,pre_keep_up=0):
         rc=False,'Something issue'
