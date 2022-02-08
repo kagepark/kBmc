@@ -375,6 +375,7 @@ class kBmc:
                 if self.default_passwd not in test_pass_sample: test_pass_sample.append(self.default_passwd)
                 for uu in test_user:
                     for pp in test_pass_sample:
+                        if pp is None: continue
                         if km.ping(ip,count=1,keep_good=0,timeout=300): # Timeout :5min, count:2, just pass when pinging
                             tested_user_pass.append((uu,pp))
                             km.logging("""Try BMC User({}) and password({})""".format(uu,pp),log=self.log,log_level=7)
