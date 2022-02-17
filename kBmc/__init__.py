@@ -460,7 +460,8 @@ class kBmc:
                 break
         if isinstance(cmd, (tuple,list)) and len(cmd) >= 2 and type(cmd[0]) is bool:
             #ok,cmd,path,return_code,timeout=tuple(km.get_value(cmd,[0,1,2,3,4]))
-            ok,cmd,path,return_code,timeout=km.get_value(cmd,[0,1,2,3,4],err=True)
+            ok,cmd,path,return_code,timeout_i=km.get_value(cmd,[0,1,2,3,4],err=True)
+            if timeout_i: timeout=timeout_i
             if not ok:
                 self.warn(_type='cmd',msg="command({}) format error".format(cmd))
                 return False,(-1,'command format error(2)','command format error',0,0,cmd,path),'command({}) format error'.format(cmd)
@@ -506,6 +507,7 @@ class kBmc:
                     return Redfish().run_cmd(cmd_str,**self.__dict__)
                 else:
                     rc=km.rshell(cmd_str,path=path,timeout=timeout,progress=progress,log=self.log,progress_pre_new_line=True,progress_post_new_line=True,cd=cd)
+                    if km.Get(rc,0) == -2 : return False,rc,'Timeout({})'.format(timeout)
                 if (not check_password_rc and rc[0] != 0) or (rc[0] !=0 and rc[0] in check_password_rc):
                     km.logging('[WARN] Check ip,user,password again',log=self.log,log_level=4,dsp='f')
                     ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=cancel_func)
@@ -1254,16 +1256,19 @@ class kBmc:
             km.logging(' - SMCIPMITool not found',log=self.log,log_level=1,dsp='e')
             return False,'SMCIPMITool not found'
         if self.lanmode_convert(mode) in [0,1,2]:
-            rc=self.run_cmd(mm.cmd_str("""ipmi oem lani {}""".format(self.lanmode_convert(mode))))
+            rc=self.run_cmd(mm.cmd_str("""ipmi oem lani {}""".format(self.lanmode_convert(mode))),timeout=5)
             if km.krc(rc[0],chk=True):
                 return True,self.lanmode_convert(mode,string=True)
             return rc
         else:
             rc=self.run_cmd(mm.cmd_str("""ipmi oem lani"""))
             if km.krc(rc[0],chk=True):
-                a=km.findstr(rc[1][1],'Current LAN interface is \[ (\w.*) \]')
-                if len(a) == 1:
-                    return True,a[0]
+                if mode in ['info','support']:
+                    return True,km.Get(km.Get(rc,1),1)
+                else:
+                    a=km.findstr(rc[1][1],'Current LAN interface is \[ (\w.*) \]')
+                    if len(a) == 1:
+                        return True,a[0]
             return False,None
 
     def error(self,_type=None,msg=None):
