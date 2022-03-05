@@ -421,7 +421,7 @@ class kBmc:
         if km.krc(rc[0],chk='error'):
             km.logging("""BMC Password: Recover fail""",log=self.log,log_level=1)
             self.warn(_type='ipmi_user',msg="BMC Password: Recover fail")
-            return 'error',self.ipmi_user,self.ipmi_passwd
+            return 'error',self.user,self.passwd
         if km.krc(rc[0],chk=True):
             km.logging("""Recovered BMC: from User({}) and Password({}) to User({}) and Password({})""".format(self.user,self.passwd,self.org_user,self.org_passwd),log=self.log,log_level=6)
             self.user='{}'.format(self.org_user)
