@@ -9,6 +9,7 @@ import sys
 import kmisc as km
 import json
 import re
+import threading
 
 class Ipmitool:
     def __init__(self,**opts):
@@ -550,6 +551,187 @@ class kBmc:
                 self.redfish=rf.IsEnabled()
         if self.__dict__.get('redfish') is None:
             self.redfish=True if True in [self.redfish_hi,opts.get('redfish')] else False
+        self.power_monitor_stop=False
+
+    def sensor_data(self,cmd_str,name):
+        krc=self.run_cmd(cmd_str)
+        if km.krc(krc[0],chk=True):
+            sensor_stat='unknown'
+            for ii in krc[1][1].split('\n'):
+                ii_a=ii.split('|')
+                find=''
+                if name == 'smc' and len(ii_a) > 2:
+                    find=ii_a[1].strip().upper()
+                    tmp=ii_a[2].strip()
+                elif len(ii_a) > 4:
+                    find=ii_a[0].strip().upper()
+                    tmp=ii_a[4].strip()
+                if '_' not in find and ('CPU' in find or 'SYSTEM ' in find) and 'TEMP' in find:
+                    if sensor_stat =='unknown' and tmp == 'No Reading':
+                        self.warn(_type='sensor',msg="Can not read sensor data")
+                    elif tmp in ['N/A','Disabled','0C/32F']:
+                        sensor_stat='down'
+                    elif 'degrees C' in tmp or ('C/' in tmp and 'F' in tmp): # Up state
+                        return 'up'
+            return sensor_stat
+        return 'error'
+
+    def get_power_status(self):
+        # _: Down, -: Up, .: Unknown sensor data, !: ipmi sensor command error
+        out=['unknown','unknown','unknown'] # [Sensor(ipmitool/SMCIPMITool), Redfish, ipmitool/SMCIPMITool]
+        if self.redfish:
+            rf=Redfish(host=self.ip,user=self.user,passwd=self.passwd)
+            rt=rf.Power(cmd='status')
+            if rt in ['on','off']:
+                out[1]=rt
+        for mm in self.mode:
+            rt=self.run_cmd(mm.cmd_str('ipmi power status'))
+            if km.krc(rt,chk=True):
+                aa=rt[1][1].split()[-1]
+                if aa in ['on','off']:
+                    out[2]=aa
+                    break
+        for mm in self.mode:
+            rt=self.sensor_data(mm.cmd_str('ipmi sensor'),mm.__name__)
+            out[0]='on' if rt == 'up' else 'off' if rt == 'down' else rt
+            break 
+        return out
+
+    def power_status_monitor(self,data,monitor_status,timeout,get_current_power_status,keep_off,keep_on,sensor_on,sensor_off,status_log=True,monitor_interval=5):
+        if not isinstance(data,dict):
+            data={'power_monitor_status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0}
+        def reset_monitor(data,cid,get_current_power):
+            data['repeat']['num']+=1
+            data['repeat']['time'].append(km.now())
+            data['repeat']['status'].append('{}->{}'.format(monitor_status[cid],get_current_power))
+            # Reset data to re-monitor
+            for i in monitor_status:
+                data['power_monitor_status'][i]={}
+
+        def keep_on_off_monitor(mid,data,cid,keep_time):
+            if isinstance(data['power_monitor_status'][monitor_status[cid]].get('time'),int):
+                if keep_time > 0 and km.now() - data['power_monitor_status'][monitor_status[cid]]['time'] > keep_time:
+                    data['power_monitor_status'][monitor_status[cid]]['time_keep']=km.now()
+                    cid+=1
+                    if cid >=  mid:
+                        data['done']={km.now():'Monitor Done'}
+                    return cid
+            else:
+                data['power_monitor_status'][monitor_status[cid]]['time']=km.now()
+                if keep_time == 0:
+                    data['power_monitor_status'][monitor_status[cid]]['time_keep']=data['power_monitor_status'][monitor_status[cid]]['time']
+                    cid+=1
+                    if cid >=  mid:
+                        data['done']={km.now():'Monitor Done'}
+                    return cid
+            return -1
+
+        start_time=km.now()
+        get_current_power=get_current_power_status()
+        if 'init' not in data:
+            data['init']={'time':km.now(),'status':get_current_power}
+            if monitor_status[0] in get_current_power:
+                data['power_monitor_status'][monitor_status[0]]={'time':data['init']['time']}
+        cid=0
+        mid=len(monitor_status)
+        state_sym='.'
+        while cid < len(monitor_status):
+            if km.now() - start_time > timeout:
+                data['done']={km.now():'Timeout'}
+                break
+            while km.now() - start_time < timeout:
+                if data.get('stop'):
+                    data['done']={km.now():'Got STOP'}
+                    return
+                get_current_power=get_current_power_status()
+                if monitor_status[cid] not in data['power_monitor_status']:
+                    data['power_monitor_status'][monitor_status[cid]]={}
+                # off case
+                if monitor_status[cid] == 'off' and (monitor_status[cid] in get_current_power or (data['init']['status'][0] == 'on' and get_current_power[0] in ['unknown','off'])):
+                    if get_current_power[0] == 'off' or sensor_off == 0:
+                        state_sym='_'
+                        cid_tmp=keep_on_off_monitor(mid,data,cid,keep_off)
+                        if cid_tmp > 0:
+                            cid=cid_tmp
+                            data['count']+=1
+                            break
+                    elif sensor_off > 0: # check sensor data until sensor_monitor time
+                        # Suddenly changed sensor data (reset/cycle) then repeat check
+                        if 'off' in data['power_monitor_status'] and data['power_monitor_status']['off'].get('time'):
+                            if get_current_power[0] in ['on']:
+                                state_sym='-'
+                                reset_monitor(data,cid,get_current_power)
+                                cid=0
+                                break
+                        # Overtime for sensor monitoring but other(redfish/ipmitool or smcipmitool) are ON
+                        elif km.now() - data['power_monitor_status'].get(monitor_status[cid-1],{}).get('time',km.now()) > sensor_off:
+                            data['power_monitor_status'][monitor_status[cid]]['sensor_data']=get_current_power[0]
+                            cid_tmp=keep_on_off_monitor(mid,data,cid,keep_off)
+                            if cid_tmp > 0:
+                                cid=cid_tmp
+                                break
+                # on case
+                elif monitor_status[cid] == 'on' and monitor_status[cid] in get_current_power:
+                    # if sensor data is ON  or sensor_on == 0(sensor on condition monitor time) then just update
+                    if get_current_power[0] == 'on' or sensor_on == 0:
+                        state_sym='-'
+                        cid_tmp=keep_on_off_monitor(mid,data,cid,keep_on)
+                        if cid_tmp > 0:
+                            cid=cid_tmp
+                            data['count']+=1
+                            break
+                    elif sensor_on > 0: # check sensor data until sensor_monitor time
+                        # Suddenly changed sensor data (reset/cycle) then repeat check
+                        if 'on' in data['power_monitor_status'] and data['power_monitor_status']['on'].get('time'):
+                            if get_current_power[0] in ['unknown','off']:
+                                state_sym='_'
+                                reset_monitor(data,cid,get_current_power)
+                                cid=0
+                                break
+                        # Overtime for sensor monitoring but other(redfish/ipmitool or smcipmitool) are ON
+                        elif km.now() - data['power_monitor_status'].get(monitor_status[cid-1],{}).get('time',km.now()) > sensor_on:
+                            data['power_monitor_status'][monitor_status[cid]]['sensor_data']=get_current_power[0]
+                            cid_tmp=keep_on_off_monitor(mid,data,cid,keep_on)
+                            if cid_tmp > 0:
+                                cid=cid_tmp
+                                break
+                # for reset /cycle command monitoring : it changed only sensor data, redfish and ipmitool power status still on(not changed)
+                else: # suddenly changed different status
+                    #if (cid == 0 and get_current_power != data['init'].get('status')) or \
+                    if data['power_monitor_status'].get(monitor_status[cid],{}).get('time'):
+                        if monitor_status[cid] not in get_current_power or \
+                           (monitor_status[cid] == 'on' and sensor_on > 0 and data['power_monitor_status'].get(monitor_status[cid],{}).get('time',0) > 0 and get_current_power[0] != monitor_status[cid]) or \
+                           (monitor_status[cid] == 'off' and sensor_off > 0 and data['power_monitor_status'].get(monitor_status[cid],{}).get('time',0) > 0 and get_current_power[0] != monitor_status[cid]):
+                            if status_log:
+                                sys.stdout.write('+')
+                                sys.stdout.flush()
+                            reset_monitor(data,cid,get_current_power)
+                            cid=0
+                            data['count']+=1
+                            time.sleep(monitor_interval)
+                            break
+                data['count']+=1
+                if status_log:
+                    sys.stdout.write(state_sym)
+                    sys.stdout.flush()
+                time.sleep(monitor_interval)
+
+    def power_monitor(self,timeout=900,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=600,sensor_off_monitor=0,monitor_interval=5):
+        #timeout: monitoring timeout
+        #monitor_status: monitoring status off -> on : ['off','on'], on : ['on'], off:['off']
+        #keep_off: off state keeping time : 0: detected then accept
+        #keep_on: on state keeping time : 0: detected then accept, 30: detected and keep same condition during 30 seconds then accept
+        #sensor_on_monitor: First Temperature sensor data(cpu start) monitor time, if passed this time then use ipmitool's power status data(on)
+        #sensor_off_monitor: First Temperature sensor data(not good) monitor time, if passed this time then use ipmitool's power status(off)
+        if not isinstance(timeout,int):
+            timeout=900
+        rt={'power_monitor_status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0}
+        if rt.get('worker') and rt['worker'].isAlive():
+            print('Already running')
+            return rt
+        rt['worker']=threading.Thread(target=self.power_status_monitor,args=(rt,monitor_status,timeout,self.get_power_status,keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,False,monitor_interval))
+        rt['worker'].start()
+        return rt
 
     def check(self,mac2ip=None,cancel_func=None):
         if cancel_func is None: cancel_func=self.cancel_func
@@ -1165,32 +1347,32 @@ class kBmc:
         cancel_func=opts.get('cancel_func',self.cancel_func)
         km.logging('Node state: timeout:{}, keep_up:{}, keep_down:{} power_down:{}, keep_unknown:{}, check_down:{}'.format(timeout,keep_up,keep_down,power_down,keep_unknown,check_down),log=self.log,log_level=7)
         # _: Down, -: Up, .: Unknown sensor data, !: ipmi sensor command error
-        def sensor_data(cmd_str,name):
-            krc=self.run_cmd(cmd_str)
-            if km.krc(krc[0],chk='error'):
-               return 'error'
-            if km.krc(krc[0],chk=True):
-                sensor_stat='unknown'
-                for ii in krc[1][1].split('\n'):
-                    ii_a=ii.split('|')
-                    find=''
-                    if name == 'smc' and len(ii_a) > 2:
-                        find=ii_a[1].strip().upper()
-                        tmp=ii_a[2].strip()
-                    elif len(ii_a) > 4:
-                        find=ii_a[0].strip().upper()
-                        tmp=ii_a[4].strip()
-                    if '_' not in find and ('CPU' in find or 'SYSTEM ' in find) and 'TEMP' in find:
-                        if sensor_stat =='unknown' and tmp == 'No Reading':
-                            self.warn(_type='sensor',msg="Can not read sensor data")
-                            #return 'unknown'
-                        elif tmp in ['N/A','Disabled','0C/32F']:
-                            sensor_stat='down'
-                            #return 'down'
-                        else: # Up state
-                            return 'up'
-                return sensor_stat
-            return 'error'
+        #def sensor_data(cmd_str,name):
+        #    krc=self.run_cmd(cmd_str)
+        #    if km.krc(krc[0],chk='error'):
+        #       return 'error'
+        #    if km.krc(krc[0],chk=True):
+        #        sensor_stat='unknown'
+        #        for ii in krc[1][1].split('\n'):
+        #            ii_a=ii.split('|')
+        #            find=''
+        #            if name == 'smc' and len(ii_a) > 2:
+        #                find=ii_a[1].strip().upper()
+        #                tmp=ii_a[2].strip()
+        #            elif len(ii_a) > 4:
+        #                find=ii_a[0].strip().upper()
+        #                tmp=ii_a[4].strip()
+        #            if '_' not in find and ('CPU' in find or 'SYSTEM ' in find) and 'TEMP' in find:
+        #                if sensor_stat =='unknown' and tmp == 'No Reading':
+        #                    self.warn(_type='sensor',msg="Can not read sensor data")
+        #                    #return 'unknown'
+        #                elif tmp in ['N/A','Disabled','0C/32F']:
+        #                    sensor_stat='down'
+        #                    #return 'down'
+        #                else: # Up state
+        #                    return 'up'
+        #        return sensor_stat
+        #    return 'error'
 
         def power_data():
             pwr_info=self.power(cmd='status')
@@ -1247,7 +1429,7 @@ class kBmc:
                         # Change to Next checkup module
                         km.logging('{} state Timeout'.format(name),log=self.log,log_level=1,dsp='e')
                         break
-                sensor_state=sensor_data(cmd_str,name)
+                sensor_state=self.sensor_data(cmd_str,name)
                 pwr_state=power_data()
                 km.logging('Module:{}, Sensor state:{}, power_state:{}'.format(name,sensor_state,pwr_state),log=self.log,log_level=8)
                 if state == 'up':
