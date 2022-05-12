@@ -277,10 +277,10 @@ class Redfish:
                     mode='Legacy'
                     boot='BiosSetup'
                     keep='Once'
+                if mode == 'Dual': mode='Legacy'
                 if 'BootSourceOverrideTarget@Redfish.AllowableValues' in boot_info and 'BootSourceOverrideMode@Redfish.AllowableValues' in boot_info:
                     if boot not in boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues') or mode not in boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues'):
-                        print('Unknown boot({}) or Unknown mode({})'.format(boot,mode))
-                        os._exit(1)
+                        print('!!WARN: BOOT({}) not in {} or MODE({}) not in {}'.format(boot,boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues'),mode,boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues')))
             boot_db={'Boot':{ 
                  'BootSourceOverrideEnabled':keep,
                  'BootSourceOverrideMode':mode,
@@ -626,7 +626,9 @@ class kBmc:
                     return cid
             return -1
 
-        start_time=km.now()
+        start_time=None
+        if data.get('start') is True:
+            start_time=km.now()
         get_current_power=get_current_power_status()
         if 'init' not in data:
             data['init']={'time':km.now(),'status':get_current_power}
@@ -636,6 +638,12 @@ class kBmc:
         mid=len(monitor_status)
         state_sym='.'
         while cid < len(monitor_status):
+            if data.get('start') is False:
+                time.sleep(1)
+                continue
+            else:
+                if start_time is None:
+                    start_time=km.now()
             if km.now() - start_time > timeout:
                 data['done']={km.now():'Timeout'}
                 break
@@ -716,7 +724,7 @@ class kBmc:
                     sys.stdout.flush()
                 time.sleep(monitor_interval)
 
-    def power_monitor(self,timeout=900,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=600,sensor_off_monitor=0,monitor_interval=5):
+    def power_monitor(self,timeout=900,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=600,sensor_off_monitor=0,monitor_interval=5,start=True):
         #timeout: monitoring timeout
         #monitor_status: monitoring status off -> on : ['off','on'], on : ['on'], off:['off']
         #keep_off: off state keeping time : 0: detected then accept
@@ -725,7 +733,7 @@ class kBmc:
         #sensor_off_monitor: First Temperature sensor data(not good) monitor time, if passed this time then use ipmitool's power status(off)
         if not isinstance(timeout,int):
             timeout=900
-        rt={'power_monitor_status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0}
+        rt={'power_monitor_status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0,'start':start}
         if rt.get('worker') and rt['worker'].isAlive():
             print('Already running')
             return rt
