@@ -644,7 +644,16 @@ class kBmc:
             else:
                 if start_time is None:
                     start_time=km.now()
-            if km.now() - start_time > timeout:
+            if isinstance(data.get('timeout'),int) and data.get('timeout') != timeout:
+                timeout=data.get('timeout')
+            if isinstance(data.get('sensor_off_monitor'),int) and data.get('sensor_off_monitor') != sensor_off:
+                sensor_off=data.get('sensor_off_monitor')
+            if isinstance(data.get('sensor_on_monitor'),int) and data.get('sensor_on_monitor') != sensor_on:
+                sensor_on=data.get('sensor_on_monitor')
+            #if km.now() - start_time > timeout:
+            remain_time=timeout - (km.now() - start_time)
+            data['remain_time']=remain_time
+            if remain_time <= 0:
                 data['done']={km.now():'Timeout'}
                 break
             while km.now() - start_time < timeout:
@@ -733,7 +742,7 @@ class kBmc:
         #sensor_off_monitor: First Temperature sensor data(not good) monitor time, if passed this time then use ipmitool's power status(off)
         if not isinstance(timeout,int):
             timeout=900
-        rt={'power_monitor_status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0,'start':start}
+        rt={'power_monitor_status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0,'start':start,'timeout':timeout}
         if rt.get('worker') and rt['worker'].isAlive():
             print('Already running')
             return rt
