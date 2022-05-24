@@ -255,8 +255,11 @@ class Redfish:
                     mode='Legacy'
                 else:
                     bios_mode=self.Get('Systems/1/Bios')
-                    if bios_mode:
+                    if bios_mode and not km.IsNone(bios_mode.get('Attributes',{}).get('BootModeSelect')):
                         mode=bios_mode.get('Attributes',{}).get('BootModeSelect')
+                    elif not km.IsNone(boot_info.get('BootSourceOverrideMode')):
+                        mode=boot_info.get('BootSourceOverrideMode')
+                if km.IsNone(mode): mode='Legacy'
                 if keep in [None,False,'disable','del','disabled']:
                     keep='Disabled'
                 elif keep in ['keep','continue','force','continuous']:
@@ -597,9 +600,11 @@ class kBmc:
             break 
         return out
 
-    def power_status_monitor(self,data,monitor_status,timeout,get_current_power_status,keep_off,keep_on,sensor_on,sensor_off,status_log=True,monitor_interval=5):
+    def power_status_monitor(self,data,monitor_status,get_current_power_status,keep_off=0,keep_on=0,sensor_on=600,sensor_off=0,status_log=True,monitor_interval=5,timeout=1200):
         if not isinstance(data,dict):
             data={'power_monitor_status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0}
+        if 'timeout' not in data:
+            data['timeout']=timeout if isinstance(timeout,int) else 1200
         def reset_monitor(data,cid,get_current_power):
             data['repeat']['num']+=1
             data['repeat']['time'].append(km.now())
@@ -626,17 +631,21 @@ class kBmc:
                     return cid
             return -1
 
+        cid=0
+        mid=len(monitor_status)
+        state_sym='.'
         start_time=None
         if data.get('start') is True:
             start_time=km.now()
         get_current_power=get_current_power_status()
+        data['current']={'state':(km.now(),get_current_power),'check':(cid,monitor_status[cid])}
         if 'init' not in data:
             data['init']={'time':km.now(),'status':get_current_power}
             if monitor_status[0] in get_current_power:
-                data['power_monitor_status'][monitor_status[0]]={'time':data['init']['time']}
-        cid=0
-        mid=len(monitor_status)
-        state_sym='.'
+                data['power_monitor_status'][monitor_status[0]]={'time':data['init'].get('time')}
+                cid+=1
+        if isinstance(data.get('timeout'),int) and data.get('timeout') != timeout:
+            timeout=data.get('timeout')
         while cid < len(monitor_status):
             if data.get('start') is False:
                 time.sleep(1)
@@ -644,44 +653,53 @@ class kBmc:
             else:
                 if start_time is None:
                     start_time=km.now()
-            if isinstance(data.get('timeout'),int) and data.get('timeout') != timeout:
-                timeout=data.get('timeout')
-            if isinstance(data.get('sensor_off_monitor'),int) and data.get('sensor_off_monitor') != sensor_off:
-                sensor_off=data.get('sensor_off_monitor')
-            if isinstance(data.get('sensor_on_monitor'),int) and data.get('sensor_on_monitor') != sensor_on:
-                sensor_on=data.get('sensor_on_monitor')
-            #if km.now() - start_time > timeout:
-            remain_time=timeout - (km.now() - start_time)
-            data['remain_time']=remain_time
-            if remain_time <= 0:
-                data['done']={km.now():'Timeout'}
-                break
-            while km.now() - start_time < timeout:
+            while True:
+                #Update parameters
+                if isinstance(data.get('timeout'),int) and data.get('timeout') != timeout:
+                    timeout=data.get('timeout')
+                remain_time=timeout - (km.now() - start_time)
+                data['remain_time']=remain_time
+                if remain_time <= 0:
+                    data['done']={km.now():'Timeout'}
+                    return
+                if isinstance(data.get('sensor_off_monitor'),int) and data.get('sensor_off_monitor') != sensor_off:
+                    sensor_off=data.get('sensor_off_monitor')
+                if isinstance(data.get('sensor_on_monitor'),int) and data.get('sensor_on_monitor') != sensor_on:
+                    sensor_on=data.get('sensor_on_monitor')
+
                 if data.get('stop'):
                     data['done']={km.now():'Got STOP'}
                     return
+
+                # Get current power status
                 get_current_power=get_current_power_status()
+                # Update the current status at data
+                data['current']={'state':(km.now(),get_current_power),'check':(cid,monitor_status[cid])}
+
+                # Initialize the 
                 if monitor_status[cid] not in data['power_monitor_status']:
                     data['power_monitor_status'][monitor_status[cid]]={}
+
                 # off case
                 if monitor_status[cid] == 'off' and (monitor_status[cid] in get_current_power or (data['init']['status'][0] == 'on' and get_current_power[0] in ['unknown','off'])):
+                    data['count']+=1
                     if get_current_power[0] == 'off' or sensor_off == 0:
                         state_sym='_'
                         cid_tmp=keep_on_off_monitor(mid,data,cid,keep_off)
                         if cid_tmp > 0:
+                            #Go to next cid, because omit goal
                             cid=cid_tmp
-                            data['count']+=1
                             break
                     elif sensor_off > 0: # check sensor data until sensor_monitor time
                         # Suddenly changed sensor data (reset/cycle) then repeat check
                         if 'off' in data['power_monitor_status'] and data['power_monitor_status']['off'].get('time'):
-                            if get_current_power[0] in ['on']:
+                            if monitor_status[cid] not in ['on'] and get_current_power[0] in ['on']:
                                 state_sym='-'
                                 reset_monitor(data,cid,get_current_power)
                                 cid=0
                                 break
                         # Overtime for sensor monitoring but other(redfish/ipmitool or smcipmitool) are ON
-                        elif km.now() - data['power_monitor_status'].get(monitor_status[cid-1],{}).get('time',km.now()) > sensor_off:
+                        elif km.now() - data['power_monitor_status'].get(monitor_status[cid],{}).get('time',km.now()) > sensor_off:
                             data['power_monitor_status'][monitor_status[cid]]['sensor_data']=get_current_power[0]
                             cid_tmp=keep_on_off_monitor(mid,data,cid,keep_off)
                             if cid_tmp > 0:
@@ -690,23 +708,23 @@ class kBmc:
                 # on case
                 elif monitor_status[cid] == 'on' and monitor_status[cid] in get_current_power:
                     # if sensor data is ON  or sensor_on == 0(sensor on condition monitor time) then just update
+                    data['count']+=1
                     if get_current_power[0] == 'on' or sensor_on == 0:
                         state_sym='-'
                         cid_tmp=keep_on_off_monitor(mid,data,cid,keep_on)
                         if cid_tmp > 0:
                             cid=cid_tmp
-                            data['count']+=1
                             break
                     elif sensor_on > 0: # check sensor data until sensor_monitor time
                         # Suddenly changed sensor data (reset/cycle) then repeat check
                         if 'on' in data['power_monitor_status'] and data['power_monitor_status']['on'].get('time'):
-                            if get_current_power[0] in ['unknown','off']:
+                            if monitor_status[cid] not in ['off'] and get_current_power[0] in ['unknown','off']:
                                 state_sym='_'
                                 reset_monitor(data,cid,get_current_power)
                                 cid=0
                                 break
                         # Overtime for sensor monitoring but other(redfish/ipmitool or smcipmitool) are ON
-                        elif km.now() - data['power_monitor_status'].get(monitor_status[cid-1],{}).get('time',km.now()) > sensor_on:
+                        elif km.now() - data['power_monitor_status'].get(monitor_status[cid],{}).get('time',km.now()) > sensor_on:
                             data['power_monitor_status'][monitor_status[cid]]['sensor_data']=get_current_power[0]
                             cid_tmp=keep_on_off_monitor(mid,data,cid,keep_on)
                             if cid_tmp > 0:
@@ -714,11 +732,20 @@ class kBmc:
                                 break
                 # for reset /cycle command monitoring : it changed only sensor data, redfish and ipmitool power status still on(not changed)
                 else: # suddenly changed different status
-                    #if (cid == 0 and get_current_power != data['init'].get('status')) or \
                     if data['power_monitor_status'].get(monitor_status[cid],{}).get('time'):
-                        if monitor_status[cid] not in get_current_power or \
-                           (monitor_status[cid] == 'on' and sensor_on > 0 and data['power_monitor_status'].get(monitor_status[cid],{}).get('time',0) > 0 and get_current_power[0] != monitor_status[cid]) or \
-                           (monitor_status[cid] == 'off' and sensor_off > 0 and data['power_monitor_status'].get(monitor_status[cid],{}).get('time',0) > 0 and get_current_power[0] != monitor_status[cid]):
+                        if get_current_power[0] == 'unknown': # suddenly changed status during on
+                           if monitor_status[cid] == 'on':
+                               if status_log:
+                                   sys.stdout.write('+')
+                                   sys.stdout.flush()
+                               reset_monitor(data,cid,get_current_power)
+                               cid=0
+                               data['count']+=1
+                               time.sleep(monitor_interval)
+                               break
+                        elif monitor_status[cid] not in get_current_power or \
+                           (monitor_status[cid] == 'on' and sensor_on > 0 and data['power_monitor_status'].get('on',{}).get('time',0) > 0 and get_current_power[0] not in ['on']) or \
+                           (monitor_status[cid] == 'off' and sensor_off > 0 and data['power_monitor_status'].get('off',{}).get('time',0) > 0 and get_current_power[0] not in ['off','unknown']):
                             if status_log:
                                 sys.stdout.write('+')
                                 sys.stdout.flush()
@@ -733,20 +760,19 @@ class kBmc:
                     sys.stdout.flush()
                 time.sleep(monitor_interval)
 
-    def power_monitor(self,timeout=900,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=600,sensor_off_monitor=0,monitor_interval=5,start=True):
+    def power_monitor(self,timeout=1200,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=600,sensor_off_monitor=0,monitor_interval=5,start=True):
         #timeout: monitoring timeout
         #monitor_status: monitoring status off -> on : ['off','on'], on : ['on'], off:['off']
         #keep_off: off state keeping time : 0: detected then accept
         #keep_on: on state keeping time : 0: detected then accept, 30: detected and keep same condition during 30 seconds then accept
         #sensor_on_monitor: First Temperature sensor data(cpu start) monitor time, if passed this time then use ipmitool's power status data(on)
         #sensor_off_monitor: First Temperature sensor data(not good) monitor time, if passed this time then use ipmitool's power status(off)
-        if not isinstance(timeout,int):
-            timeout=900
+        timeout=timeout if isinstance(timeout,int) else 1200
         rt={'power_monitor_status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0,'start':start,'timeout':timeout}
         if rt.get('worker') and rt['worker'].isAlive():
             print('Already running')
             return rt
-        rt['worker']=threading.Thread(target=self.power_status_monitor,args=(rt,monitor_status,timeout,self.get_power_status,keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,False,monitor_interval))
+        rt['worker']=threading.Thread(target=self.power_status_monitor,args=(rt,monitor_status,self.get_power_status,keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,False,monitor_interval,timeout))
         rt['worker'].start()
         return rt
 
