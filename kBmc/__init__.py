@@ -236,29 +236,83 @@ class Redfish:
                     return aa.get('IndicatorLED')
     
     def Boot(self,boot=None,mode='auto',keep='once',simple_mode=False):
+        def order_boot():
+            naa={}
+            aa=self.Get('Systems/1')
+            if aa:
+                boot_info=aa.get('Boot',{})
+                if boot_info:
+                    naa['mode']=boot_info.get('BootSourceOverrideMode')
+                    naa['1']=boot_info.get('BootSourceOverrideTarget')
+                    naa['enable']=boot_info.get('BootSourceOverrideEnabled')
+                    naa['help']={}
+                    if 'BootSourceOverrideMode@Redfish.AllowableValues' in boot_info: naa['help']['mode']=boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues')
+                    if 'BootSourceOverrideTarget@Redfish.AllowableValues' in boot_info: naa['help']['boot']=boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues')
+            return naa
+
+        def bios_boot():
+            naa={}
+            #X13
+            aa=self.Get('Systems/1/BootOptions')
+            if isinstance(aa,dict):
+                #X13 VideoOptionROM
+                videorom=self.Get('Systems/1/Bios')
+                boot_info=videorom.get('Attributes',{})
+                for ii in boot_info:
+                    if ii.startswith('OnboardVideoOptionROM#'):
+                        naa['OnboardVideoOptionROM']=boot_info[ii]
+                #Boot order
+                memb=aa.get('Members',[{}])
+                if len(memb) == 1:
+                    naa['mode']='Legacy'
+                    naa['order']=['']
+                else:
+                    naa['mode']='UEFI'
+                    redirect=memb[0].get('@odata.id')
+                    if isinstance(redirect,str) and redirect:
+                        aa=self.Get(redirect)
+                        if aa:
+                            if 'UEFI Network Card' in aa.get('DisplayName',''):
+                                naa['order']=['UEFI PXE Network: UEFI']
+            #under X12
+            else:
+                if bios_mode and not km.IsNone(bios_mode.get('Attributes',{}).get('BootModeSelect')):
+                    mode=bios_mode.get('Attributes',{}).get('BootModeSelect')
+                elif not km.IsNone(boot_info.get('BootSourceOverrideMode')):
+                    mode=boot_info.get('BootSourceOverrideMode')
+                aa=self.Get('Systems/1/Bios')
+                if aa:
+                    boot_info=aa.get('Attributes',{})
+                    if boot_info:
+                        if not km.IsNone(boot_info.get('BootModeSelect')):
+                            naa['mode']=boot_info.get('BootModeSelect')
+                        elif not km.IsNone(boot_info.get('BootSourceOverrideMode')):
+                            naa['mode']=boot_info.get('BootSourceOverrideMode')
+                    naa['order']=[]
+                    for ii in boot_info:
+                        if ii.startswith('BootOption#1$') or ii in ['BootOption#1']:
+                            naa['order'].append(boot_info[ii])
+                    naa['OnboardVideoOptionROM']=boot_info.get('OnboardVideoOptionROM')
+            return naa
+
         if isinstance(boot,str) and boot.lower() in ['efi_shell','uefi_shell','shell','pxe','ipxe','cd','usb','hdd','floppy','bios','setup','biossetup']:
+            rf_boot_info={'order':order_boot(),'bios':bios_boot()}
+            if not rf_boot_info['order'] and not rf_boot_info['bios']:
+                #Redfish issue
+                return False
+
             if boot.lower() in ['efi_shell','uefi_shell','shell']:
                 keep='Continuous'
                 mode='UEFI'
                 boot='BiosSetup'
             else:
-                aa=self.Get('Systems/1')
-                if not aa:
-                    return False
-                boot_info=aa.get('Boot',{})
-                if boot.lower() == 'ipxe':
-                    boot='pxe'
-                    mode='UEFI'
+                #New Setup    
                 if mode.lower() in ['uefi','efi']:
                     mode='UEFI'
                 elif mode.lower() == 'legacy':
                     mode='Legacy'
                 else:
-                    bios_mode=self.Get('Systems/1/Bios')
-                    if bios_mode and not km.IsNone(bios_mode.get('Attributes',{}).get('BootModeSelect')):
-                        mode=bios_mode.get('Attributes',{}).get('BootModeSelect')
-                    elif not km.IsNone(boot_info.get('BootSourceOverrideMode')):
-                        mode=boot_info.get('BootSourceOverrideMode')
+                    mode=rf_boot_info.get('bios',{}).get('mode')
                 if km.IsNone(mode): mode='Legacy'
                 if keep in [None,False,'disable','del','disabled']:
                     keep='Disabled'
@@ -266,57 +320,74 @@ class Redfish:
                     keep='Continuous'
                 else:
                     keep='Once'
-                if boot.lower() in ['pxe']:
+                boot_lower=boot.lower()
+                if boot_lower == 'ipxe':
+                    boot='pxe'
+                    mode='UEFI'
+                elif boot_lower in ['pxe']:
                     boot='Pxe'
-                elif boot.lower() in ['cd']:
+                elif boot_lower in ['cd']:
                     boot='Cd'
-                elif boot.lower() in ['usb']:
+                elif boot_lower in ['usb']:
                     boot='Usb'
-                elif boot.lower() in ['hdd']:
+                elif boot_lower in ['hdd']:
                     boot='Hdd'
-                elif boot.lower() in ['floppy']:
+                elif boot_lower in ['floppy']:
                     boot='Floppy'
-                elif boot.lower() in ['bios','setup','biossetup']:
+                elif boot_lower in ['bios','setup','biossetup']:
                     mode='Legacy'
                     boot='BiosSetup'
                     keep='Once'
                 if mode == 'Dual': mode='Legacy'
-                if 'BootSourceOverrideTarget@Redfish.AllowableValues' in boot_info and 'BootSourceOverrideMode@Redfish.AllowableValues' in boot_info:
-                    if boot not in boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues') or mode not in boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues'):
-                        print('!!WARN: BOOT({}) not in {} or MODE({}) not in {}'.format(boot,boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues'),mode,boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues')))
+                #if 'BootSourceOverrideTarget@Redfish.AllowableValues' in boot_info and 'BootSourceOverrideMode@Redfish.AllowableValues' in boot_info:
+                #    if boot not in boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues') or mode not in boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues'):
+                #        print('!!WARN: BOOT({}) not in {} or MODE({}) not in {}'.format(boot,boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues'),mode,boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues')))
+
+                #########################################
+                #Check Already got same condition
+                boot_order_enable=rf_boot_info.get('order',{}).get('enable','')
+                if boot_order_enable == 'Disabled': #Follow BIOS setting
+                    if mode == rf_boot_info.get('bios',{}).get('mode','') or (mode=='Legacy' and rf_boot_info.get('bios',{}).get('mode','') == 'Dual'):
+                        if mode=='UEFI' and boot_lower in ['pxe','ipxe'] and 'UEFI PXE' in km.Get(rf_boot_info.get('bios',{}).get('order',[]),0,default=''):
+                            km.logging('Redfish: Already Same condition(1) with {}, {}, {}\n'.format(mode,boot, keep),log=self.log,log_level=6)
+                            return True
+                        elif mode == 'Legacy' and boot_lower == 'pxe' and 'Network:IBA' in km.Get(rf_boot_info.get('bios',{}).get('order',[]),0,default=''):
+                            km.logging('Redfish: Already Same condition(2) with {}, {}, {}\n'.format(mode,boot, keep),log=self.log,log_level=6)
+                            return True
+                else:#Instant Boot order
+                    if boot_order_enable == 'Continuous':
+                        if rf_boot_info.get('order',{}).get('1','') == 'Pxe':
+                            if boot_lower=='pxe' and mode == rf_boot_info.get('order',{}).get('mode'):
+                                km.logging('Redfish: Already Same condition(3) with {}, {}, {}\n'.format(mode,boot, keep),log=self.log,log_level=6)
+                                return True
+
+            #Set new boot mode
             boot_db={'Boot':{ 
                  'BootSourceOverrideEnabled':keep,
                  'BootSourceOverrideMode':mode,
                  'BootSourceOverrideTarget':boot
                  } 
             }
+            km.logging('Set Redfish Boot mode : {}, {}, {}\n'.format(mode,boot, keep),log=self.log,log_level=6)
             return self.Post('Systems/1',json=boot_db,mode='patch')
         else:
-            if simple_mode:
-                aa=self.Get('Systems/1/Bios')
-                if aa:
-                    return aa.get('Attributes',{}).get('BootModeSelect')
-            else:
-                naa={'order':{},'bios':{}}
-                aa=self.Get('Systems/1')
-                if aa:
-                    boot_info=aa.get('Boot',{})
-                    if boot_info:
-                        naa['order']['mode']=boot_info.get('BootSourceOverrideMode')
-                        naa['order']['1']=boot_info.get('BootSourceOverrideTarget')
-                        naa['order']['enable']=boot_info.get('BootSourceOverrideEnabled')
-                        naa['order']['help']={}
-                        if 'BootSourceOverrideMode@Redfish.AllowableValues' in boot_info: naa['order']['help']['mode']=boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues')
-                        if 'BootSourceOverrideTarget@Redfish.AllowableValues' in boot_info: naa['order']['help']['boot']=boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues')
-                aa=self.Get('Systems/1/Bios')
-                if aa:
-                    boot_info=aa.get('Attributes',{})
-                    naa['bios']['mode']=boot_info.get('BootModeSelect')
-                    naa['bios']['order']=[]
-                    for ii in boot_info:
-                        if ii.startswith('BootOption#1$') or ii in ['BootOption#1']:
-                            naa['bios']['order'].append(boot_info[ii])
-                    naa['bios']['OnboardVideoOptionROM']=boot_info.get('OnboardVideoOptionROM')
+            if (isinstance(simple_mode,bool) and simple_mode is True) or simple_mode == 'simple':
+                bios_boot_info=bios_boot()
+                if bios_boot_info: return bios_boot_info.get('mode')
+            elif simple_mode == 'bios':
+                return bios_boot()
+            elif simple_mode == 'order':
+                return order_boot()
+            elif simple_mode == 'flags':
+                naa={'order':order_boot(),'bios':bios_boot()}
+                return '''Boot Flags :
+   - BIOS {} boot
+   - Options apply to {}
+   - Boot Device Selector : {}
+   - Boot with {}
+'''.format(naa['bios']['mode'],'all future boots' if naa['order']['enable'] == 'Continuous' else naa['order']['enable'],naa['order']['1'],naa['order']['mode'])
+            else: #all
+                naa={'order':order_boot(),'bios':bios_boot()}
                 if isinstance(boot,str) and boot.lower() == 'order':
                     return '''Boot Flags :
    - BIOS {} boot
@@ -550,7 +621,7 @@ class kBmc:
         if opts.get('redfish') == 'auto':
             ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
             if ok:
-                rf=Redfish(host=ip,user=user,passwd=passwd)
+                rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
                 self.redfish=rf.IsEnabled()
         if self.__dict__.get('redfish') is None:
             self.redfish=True if True in [self.redfish_hi,opts.get('redfish')] else False
@@ -583,7 +654,7 @@ class kBmc:
         # _: Down, -: Up, .: Unknown sensor data, !: ipmi sensor command error
         out=['unknown','unknown','unknown'] # [Sensor(ipmitool/SMCIPMITool), Redfish, ipmitool/SMCIPMITool]
         if self.redfish:
-            rf=Redfish(host=self.ip,user=self.user,passwd=self.passwd)
+            rf=Redfish(host=self.ip,user=self.user,passwd=self.passwd,log=self.log)
             rt=rf.Power(cmd='status')
             if rt in ['on','off']:
                 out[1]=rt
@@ -1238,7 +1309,7 @@ class kBmc:
                     if mode == 'order':
                         if self.redfish:
                             ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
-                            rf=Redfish(host=ip,user=user,passwd=passwd)
+                            rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
                             return True,rf.Boot(boot='order')
                         else:
                             rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5'))
@@ -1258,11 +1329,25 @@ class kBmc:
                         persistent=False
                         if self.redfish:
                             ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
-                            rf=Redfish(host=ip,user=user,passwd=passwd)
+                            rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
                             rf_boot_info=rf.Boot()
-                            efi=True if rf_boot_info.get('bios',{}).get('mode','') == 'UEFI' else False
-                            persistent=True if rf_boot_info.get('order',{}).get('enable','') == 'Continuous' else False
-                            status=rf_boot_info.get('order',{}).get('1','').lower()
+                            boot_order_enable=rf_boot_info.get('order',{}).get('enable','')
+                            if boot_order_enable == 'Disabled': #Follow BIOS setting
+                                if rf_boot_info.get('bios',{}).get('mode','') == 'Dual':
+                                    if 'UEFI PXE' in km.Get(rf_boot_info.get('bios',{}).get('order',[]),0,default=''):
+                                        efi=True
+                                        status='pxe'
+                                    elif 'Network:IBA' in km.Get(rf_boot_info.get('bios',{}).get('order',[]),0,default=''):
+                                        efi=False
+                                        status='pxe'
+                                else:
+                                    efi=True if rf_boot_info.get('bios',{}).get('mode','') == 'UEFI' else False
+                                    if 'Network:' in km.Get(rf_boot_info.get('bios',{}).get('order',[]),0,default=''):
+                                        status='pxe'
+                            else: # Follow instant overwriten Boot-Order
+                                efi=True if rf_boot_info.get('order',{}).get('mode','') == 'UEFI' else False
+                                persistent=True if rf_boot_info.get('order',{}).get('enable','') == 'Continuous' else False
+                                status=rf_boot_info.get('order',{}).get('1','').lower()
                         else:
                             bios_cfg=self.find_uefi_legacy(bioscfg=bios_cfg)
                             if km.krc(rc,chk=True): # ipmitool bootorder
@@ -1289,7 +1374,7 @@ class kBmc:
                     if persistent:
                         if self.redfish:
                             ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
-                            rf=Redfish(host=ip,user=user,passwd=passwd)
+                            rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
                             rf_boot=rf.Boot(boot=boot_mode,keep='keep')
                             rc=rf_boot,(rf_boot,'Persistently set to {}'.format(boot_mode))
                         else:
@@ -1303,7 +1388,7 @@ class kBmc:
                     else:
                         if self.redfish:
                             ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
-                            rf=Redfish(host=ip,user=user,passwd=passwd)
+                            rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
                             rf_boot=rf.Boot(boot=boot_mode)
                             rc=rf_boot,(rf_boot,'Temporarily set to {}'.format(boot_mode))
                         else:
@@ -1643,26 +1728,28 @@ class kBmc:
             if boot_mode == 'ipxe':
                 ipxe=True
                 boot_mode='pxe'
-            ipxe=True if ipxe in ['on','On',True,'True'] else False
-            km.logging('Set Boot mode to {} with iPXE({})\n'.format(boot_mode,ipxe),log=self.log,log_level=3)
+            km.logging('Set Boot mode to {} with iPXE({})'.format(boot_mode,ipxe),log=self.log,log_level=3)
             for ii in range(0,retry+1):
                 # Find ipmi information
                 ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
                 #self.set_boot_mode(boot_mode,self.ip,self.user,self.passwd,persistent=order,ipxe=ipxe,log_file=log_file,log=self.log,force=force)
                 rf_fail=True
                 if self.redfish:
-                    rf=Redfish(host=ip,user=user,passwd=passwd)
+                    rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
                     ipxe=True if rf.Boot(simple_mode=True) in ['UEFI','EFI'] else False
                     rf_boot_mode='pxe' if boot_mode in ['ipxe','pxe'] else boot_mode
                     rf_boot=rf.Boot(boot=rf_boot_mode,keep='keep')
-                    rf_fail=False if rf_boot else True
-                if rf_fail or not self.redfish:
-                    self.bootorder(mode=boot_mode,ipxe=ipxe,persistent=force,force=force) 
-                #boot_mode_state=self.get_boot_mode(self.ip,self.user,self.passwd,log_file=log_file,log=log)
+                    if rf_boot: break
+
+                # If redfish fail or self.redfish is not set then try again
+                # IPMITOOL setup
+                ipxe=True if ipxe in ['on','On',True,'True'] else False
+                self.bootorder(mode=boot_mode,ipxe=ipxe,persistent=force,force=force) 
+
                 boot_mode_state=self.bootorder(mode='status')
                 if (boot_mode == 'pxe' and boot_mode_state[0] is not False and 'PXE' in boot_mode_state[0]) and ipxe == boot_mode_state[1] and order == boot_mode_state[2]:
                     break
-                km.logging(' retry boot mode set {} (ipxe:{},force:{})[{}/5]'.format(boot_mode,ipxe,order,ii),log=self.log,log_level=6)
+                km.logging(' retry boot mode set {} (ipxe:{},force:{})[{}/{}]'.format(boot_mode,ipxe,order,ii,retry),log=self.log,log_level=6)
                 time.sleep(2)
         return self.do_power(cmd,retry=retry,verify=verify,timeout=timeout,post_keep_up=post_keep_up,lanmode=lanmode,fail_down_time=fail_down_time)
 
