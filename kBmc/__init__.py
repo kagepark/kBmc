@@ -257,10 +257,11 @@ class Redfish:
             if isinstance(aa,dict):
                 #X13 VideoOptionROM
                 videorom=self.Get('Systems/1/Bios')
-                boot_info=videorom.get('Attributes',{})
-                for ii in boot_info:
-                    if ii.startswith('OnboardVideoOptionROM#'):
-                        naa['OnboardVideoOptionROM']=boot_info[ii]
+                if isinstance(videorom,dict):
+                    boot_info=videorom.get('Attributes',{})
+                    for ii in boot_info:
+                        if ii.startswith('OnboardVideoOptionROM#'):
+                            naa['OnboardVideoOptionROM']=boot_info[ii]
                 #Boot order
                 memb=aa.get('Members',[{}])
                 if len(memb) == 1:
@@ -276,12 +277,14 @@ class Redfish:
                                 naa['order']=['UEFI PXE Network: UEFI']
             #under X12
             else:
-                if bios_mode and not km.IsNone(bios_mode.get('Attributes',{}).get('BootModeSelect')):
+                bios_mode=self.Get('Systems/1/Bios')
+                boot_info=order_boot()
+                if isinstance(bios_mode,dict) and not km.IsNone(bios_mode.get('Attributes',{}).get('BootModeSelect')):
                     mode=bios_mode.get('Attributes',{}).get('BootModeSelect')
                 elif not km.IsNone(boot_info.get('BootSourceOverrideMode')):
                     mode=boot_info.get('BootSourceOverrideMode')
                 aa=self.Get('Systems/1/Bios')
-                if aa:
+                if isinstance(aa,dict) and aa:
                     boot_info=aa.get('Attributes',{})
                     if boot_info:
                         if not km.IsNone(boot_info.get('BootModeSelect')):
@@ -1728,7 +1731,6 @@ class kBmc:
             if boot_mode == 'ipxe':
                 ipxe=True
                 boot_mode='pxe'
-            km.logging('Set Boot mode to {} with iPXE({})'.format(boot_mode,ipxe),log=self.log,log_level=3)
             for ii in range(0,retry+1):
                 # Find ipmi information
                 ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
@@ -1737,15 +1739,15 @@ class kBmc:
                 if self.redfish:
                     rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
                     ipxe=True if rf.Boot(simple_mode=True) in ['UEFI','EFI'] else False
+                    km.logging('Set Boot mode to {} with iPXE({})(Redfish)\n'.format(boot_mode,ipxe),log=self.log,log_level=3)
                     rf_boot_mode='pxe' if boot_mode in ['ipxe','pxe'] else boot_mode
                     rf_boot=rf.Boot(boot=rf_boot_mode,keep='keep')
-                    if rf_boot: break
-
-                # If redfish fail or self.redfish is not set then try again
-                # IPMITOOL setup
-                ipxe=True if ipxe in ['on','On',True,'True'] else False
-                self.bootorder(mode=boot_mode,ipxe=ipxe,persistent=force,force=force) 
-
+                    rf_fail=False if rf_boot else True
+                if rf_fail or not self.redfish:
+                    ipxe=True if ipxe in ['on','On',True,'True'] else False
+                    km.logging('Set Boot mode to {} with iPXE({})(ipmitool)\n'.format(boot_mode,ipxe),log=self.log,log_level=3)
+                    self.bootorder(mode=boot_mode,ipxe=ipxe,persistent=force,force=force) 
+                #boot_mode_state=self.get_boot_mode(self.ip,self.user,self.passwd,log_file=log_file,log=log)
                 boot_mode_state=self.bootorder(mode='status')
                 if (boot_mode == 'pxe' and boot_mode_state[0] is not False and 'PXE' in boot_mode_state[0]) and ipxe == boot_mode_state[1] and order == boot_mode_state[2]:
                     break
