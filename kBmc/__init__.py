@@ -1595,8 +1595,7 @@ class kBmc:
 
     def is_up(self,timeout=1200,keep_up=60,interval=8,sensor_on_monitor=600,reset_after_unknown=0,status_log=True,**opts):
         rt=self.power_monitor(km.integer(timeout,default=1200),monitor_status=['on'],keep_off=0,keep_on=keep_up,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=0,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown)
-        out=rt.get('done',next(iter(rt.get('done').values())))
-        out=next(iter(out.values())) if isinstance(out,dict) else out
+        out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
         if len(rt.get('monitored_status',[])) == 1:
             if rt.get('repeat',{}).get('num') > 0:
                 return True,'{} but repeated down and up to {}'.format(out,rt.get('repeat',{}).get('num'))
@@ -1605,8 +1604,7 @@ class kBmc:
 
     def is_down_up(self,timeout=1200,keep_up=60,keep_down=0,sensor_on_monitor=600,sensor_off_monitor=0,interval=8,status_log=True,reset_after_unknown=0,**opts): # Node state
         rt=self.power_monitor(km.integer(timeout,default=1200),monitor_status=['off','on'],keep_off=keep_down,keep_on=keep_up,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown)
-        out=rt.get('done',next(iter(rt.get('done').values())))
-        out=next(iter(out.values())) if isinstance(out,dict) else out
+        out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
         if len(rt.get('monitored_status',[])) == 2:
             if rt.get('repeat',{}).get('num') > 0:
                 return True,'{} but repeated down and up to {}'.format(out,rt.get('repeat',{}).get('num'))
@@ -1615,7 +1613,7 @@ class kBmc:
 
     def is_down(self,timeout=1200,keep_down=60,interval=8,sensor_off_monitor=0,status_log=True,reset_after_unknown=0,**opts): # Node state
         rt=self.power_monitor(km.integer(timeout,default=1200),monitor_status=['off'],keep_off=keep_down,keep_on=0,sensor_on_monitor=0,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown)
-        out=rt.get('done',next(iter(rt.get('done').values())))
+        out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
         if len(rt.get('monitored_status',[])) == 1:
             if rt.get('repeat',{}).get('num') > 0:
                 return True,'{} but repeated up and down to {}'.format(out,rt.get('repeat',{}).get('num'))
