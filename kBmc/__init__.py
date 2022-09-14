@@ -391,7 +391,7 @@ class Redfish:
    - Options apply to {}
    - Boot Device Selector : {}
    - Boot with {}
-'''.format(naa['bios']['mode'],'all future boots' if naa['order']['enable'] == 'Continuous' else naa['order']['enable'],naa['order']['1'],naa['order']['mode'])
+'''.format(naa.get('bios',{}).get('mode'),'all future boots' if naa.get('order',{}).get('enable') == 'Continuous' else naa.get('order',{}).get('enable'),naa.get('order',{}).get('1'),naa.get('order',{}).get('mode'))
             else: #all
                 naa={'order':order_boot(),'bios':bios_boot()}
                 if isinstance(boot,str) and boot.lower() == 'order':
@@ -400,7 +400,7 @@ class Redfish:
    - Options apply to {}
    - Boot Device Selector : {}
    - Boot with {}
-'''.format(naa['bios']['mode'],'all future boots' if naa['order']['enable'] == 'Continuous' else naa['order']['enable'],naa['order']['1'],naa['order']['mode'])
+'''.format(naa.get('bios',{}).get('mode'),'all future boots' if naa.get('order',{}).get('enable') == 'Continuous' else naa.get('order',{}).get('enable'),naa.get('order',{}).get('1'),naa.get('order',{}).get('mode'))
                 return naa
 
     def IsUp(self,timeout=300):
@@ -1439,7 +1439,7 @@ class kBmc:
                     return True,rc[1][1]
             elif name == 'ipmitool':
                 if mode in [None,'order','status']:
-                    if mode == 'order':
+                    if mode in ['order',None]:
                         if self.redfish:
                             ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
                             rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
@@ -1455,7 +1455,10 @@ class kBmc:
 #   - BIOS verbosity : Console redirection occurs per BIOS configuration setting (default)
 #   - BIOS Mux Control Override : BIOS uses recommended setting of the mux at the end of POST
                             if rc[0]:
-                                rc=True,km.findstr(rc[1],'- Boot Device Selector : (\w.*)')[0]
+                                found=km.findstr(rc[1],'- Boot Device Selector : (\w.*)')
+                                if found:
+                                    return True,found[0]
+                                return True,None
                     elif mode == 'status':
                         status=False
                         efi=False
