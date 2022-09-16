@@ -878,7 +878,7 @@ class kBmc:
 
                     if data['status'].get(on_off):
                         if ms_id > 0:
-                            if data['monitored_status'][ms_id-1].get(monitor_status[ms_id-1]).get('time_keep') > data['status'][on_off][1]:
+                            if data['monitored_status'][ms_id-1].get(monitor_status[ms_id-1],{}).get('time_keep',0) > data['status'].get(on_off)[1]:
                                 data['status'][on_off][1]=data['current'].get('state')[0]
                         elif data['status'][on_off][0] == data['status'][on_off][1]:
                             #suddenly changed state(suddenly resetted) then initialize monitoring value
