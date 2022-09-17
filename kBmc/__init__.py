@@ -729,7 +729,6 @@ class kBmc:
         def is_on_off(data,sensor_time,start,sensor=False,now=None,mode=['a']):
             if sensor == True or sensor_time > 0:
                 if not isinstance(now,int): now=km.now()
-#                print('is_on_off: if (now){} - (start){} ({}) <= (sensor_time){}: {}'.format(now,start,now-start,sensor_time,data))
                 if now - start <= sensor_time:
                     if data[0] in ['on','off'] and data[0] in data[1:]:
                         return data[0]
@@ -737,7 +736,10 @@ class kBmc:
                         if 'on' in data[1:]:
                             return 'up'
                         elif 'off' in data[1:]:
-                            return 'dn'
+                            if now - start < sensor_time:
+                                return 'dn'
+                            else:
+                                return 'off'
                         elif sensor == False:
                             return 
             #sensor==0 or over sensor time
@@ -855,7 +857,6 @@ class kBmc:
                 if on_off not in data['status']:
                     data['status'][on_off]=[data['current'].get('state')[0],data['current'].get('state')[0],data['current'].get('state')[0]]
                                           #[initial time, correct on/off time, keep on/off time]
-                #print('{}:{}[{}->{},status:{}]'.format(ms_id,monitor_status[ms_id],before_on_off,on_off,data['status']))
 
                 #check on/off status
                 on_off=is_on_off(get_current_power,data['sensor_{}_monitor'.format(monitor_status[ms_id])],data['status'].get(monitor_status[ms_id],(km.now(),0,0))[0],now=data['current'].get('state')[0],mode=['a'],sensor=True)
@@ -869,7 +870,6 @@ class kBmc:
                     #suddenly changed state then initialize monitoring value
                     if on_off != before_on_off:
                         if not resetted and ((monitor_status[ms_id] == 'on' and before_on_off == 'on') or (monitor_status[ms_id] == 'off' and before_on_off == 'off')):
-                            #print('1:ms_id:',ms_id,',ms:',monitor_status[ms_id],',before_on_off:',before_on_off,',on_off:',on_off)
                             data['status']={}
                             resetted=True
                             reset_condition(data,before_on_off,on_off)
@@ -883,7 +883,6 @@ class kBmc:
                         elif data['status'][on_off][0] == data['status'][on_off][1]:
                             #suddenly changed state(suddenly resetted) then initialize monitoring value
                             if not resetted and monitor_status[ms_id] == 'on' and monitor_status[ms_id] != on_off and before_on_off != 'off':
-                                #print('3:ms_id:',ms_id,',ms:',monitor_status[ms_id],',before_on_off:',before_on_off,',on_off:',on_off)
                                 data['status']={}
                                 reset_condition(data,before_on_off,on_off)
                                 resetted=True
@@ -908,11 +907,9 @@ class kBmc:
                             before_on_off = 'up' ##############added
                             time.sleep(monitor_interval)
                             resetted=False
-                            #print('************* condition2',before_on_off,resetted,ms_id,monitor_status[ms_id],on_off)
                             break
                         elif not resetted:
                             #suddenly reset condition
-                            #print('0:ms_id:',ms_id,',ms:',monitor_status[ms_id],',before_on_off:',before_on_off,',on_off:',on_off)
                             data['status']={}
                             reset_condition(data,before_on_off,on_off)
                             resetted=True
@@ -952,8 +949,6 @@ class kBmc:
             if data.get('repeat',{}).get('num'):
                 ss=ss+' ({} times repeted off/on during monitoring)'.format(data.get('repeat',{}).get('num'))
             data['done']={km.now():ss}
-#        import pprint
-#        pprint.pprint(data)
 
     def power_monitor(self,timeout=1200,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=600,sensor_off_monitor=0,monitor_interval=5,reset_after_unknown=0,start=True,background=False,status_log=False,**opts):
         #timeout: monitoring timeout
