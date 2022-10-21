@@ -432,17 +432,19 @@ class Redfish:
         aa=self.Get('Systems/1/EthernetInterfaces/ToManager')
         naa={}
         if aa:
-            ipv4=aa.get('IPv4Addresses')[0]
+            ipv4=aa.get('IPv4Addresses',[{}])[0]
             naa['ip']=ipv4.get('Address')
             naa['netmask']=ipv4.get('SubnetMask')
             naa['gateway']=ipv4.get('Gateway')
+            naa['type']=ipv4.get('AddressOrigin')
             naa['mtu']=aa.get('MTUSize')
             naa['full_duplex']=aa.get('FullDuplex')
             naa['auto']=aa.get('AutoNeg')
             naa['speed']=aa.get('SpeedMbps')
             naa['mac']=aa.get('PermanentMACAddress')
             naa['enable']=aa.get('InterfaceEnabled')
-            naa['status']=aa.get('Status',{}).get('Health')
+            #naa['status']=aa.get('Status',{}).get('Health')
+            naa['status']=aa.get('Status',{}).get('State')
         return naa
 
     def BaseMac(self):
@@ -461,18 +463,22 @@ class Redfish:
         if aa:
             for ii in aa.get('Members',[]):
                 ai=self.Get(ii.get('@odata.id'))
-                naa[ai.get('Id')]={}
-                naa[ai.get('Id')]['model']=ai.get('Model')
-                naa[ai.get('Id')]['sn']=ai.get('SerialNumber')
+                ai_id=ai.get('Id')
+                naa[ai_id]={}
+                naa[ai_id]['model']=ai.get('Model')
+                naa[ai_id]['sn']=ai.get('SerialNumber')
                 if ai.get('Controllers'):
-                    naa[ai.get('Id')]['firmware']=ai.get('Controllers')[0].get('FirmwarePackageVersion')
-                    naa[ai.get('Id')]['pci']='{}({})'.format(ai.get('Controllers')[0].get('PCIeInterface',{}).get('PCIeType'),ai.get('Controllers')[0].get('PCIeInterface',{}).get('LanesInUse'))
-                    naa[ai.get('Id')]['max_pci']='{}({})'.format(ai.get('Controllers')[0].get('PCIeInterface',{}).get('MaxPCIeType'),ai.get('Controllers')[0].get('PCIeInterface',{}).get('MaxLanes'))
-                naa[ai.get('Id')]['port']={}
+                    naa[ai_id]['firmware']=ai.get('Controllers')[0].get('FirmwarePackageVersion')
+                    naa[ai_id]['pci']='{}({})'.format(ai.get('Controllers')[0].get('PCIeInterface',{}).get('PCIeType'),ai.get('Controllers')[0].get('PCIeInterface',{}).get('LanesInUse'))
+                    naa[ai_id]['max_pci']='{}({})'.format(ai.get('Controllers')[0].get('PCIeInterface',{}).get('MaxPCIeType'),ai.get('Controllers')[0].get('PCIeInterface',{}).get('MaxLanes'))
+                    naa[ai_id]['location']='{}'.format(ai.get('Controllers')[0].get('Location',{}).get('PartLocation',{}).get('LocationOrdinalValue'))
+                naa[ai_id]['port']={}
                 port=self.Get(ai.get('NetworkPorts').get('@odata.id'))
                 for pp in port.get('Members'):
                     port_q=self.Get(pp.get('@odata.id'))
-                    naa[ai.get('Id')]['port'][os.path.basename(pp.get('@odata.id'))]=port_q.get('AssociatedNetworkAddresses')[0]
+                    naa[ai_id]['port'][port_q.get('Id')]={}
+                    naa[ai_id]['port'][port_q.get('Id')]['mac']=port_q.get('AssociatedNetworkAddresses')[0]
+                    naa[ai_id]['port'][port_q.get('Id')]['state']=port_q.get('LinkStatus')
         return naa
 
     def Memory(self):
@@ -1551,7 +1557,7 @@ class kBmc:
                 return rc
         return False,rc[-1]
 
-    def get_eth_mac(self):
+    def get_eth_mac(self,port=None):
         if self.eth_mac:
             return True,self.eth_mac
         rc=False,[]
@@ -1564,10 +1570,12 @@ class kBmc:
                     mac_source=rc[1][1].split('\n')[0].strip()
                     if mac_source:
                         if len(mac_source.split()) == 10:  
-                            self.eth_mac=':'.join(mac_source.split()[-6:]).lower()
+                            eth_mac=':'.join(mac_source.split()[-6:]).lower()
                         elif len(mac_source.split()) == 16:
-                            self.eth_mac=':'.join(mac_source.split()[-12:-6]).lower()
-                        return True,self.eth_mac
+                            eth_mac=':'.join(mac_source.split()[-12:-6]).lower()
+                        if eth_mac != '00:00:00:00:00:00':
+                            self.eth_mac=eth_mac
+                            return True,self.eth_mac
             elif name == 'smc':
                 rc=self.run_cmd(mm.cmd_str('ipmi oem summary | grep "System LAN"'))
                 if km.krc(rc[0],chk=True):
@@ -1575,11 +1583,36 @@ class kBmc:
                     #for ii in rc[1].split('\n'):
                     #    rrc.append(ii.split()[-1].lower())
                     #self.eth_mac=rrc
-                    self.eth_mac=rc[1].split('\n')[0].strip().lower()
-                    return True,self.eth_mac
+                    eth_mac=rc[1].split('\n')[0].strip().lower()
+                    if eth_mac != '00:00:00:00:00:00':
+                        self.eth_mac=eth_mac
+                        return True,self.eth_mac
             if km.krc(rc[0],chk='error'):
                return rc
+        #If not found then try with redfish
+        ok,ip,user,passwd=self.check(mac2ip=self.mac2ip)
+        rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
+        rf_base=rf.BaseMac()
+        if rf_base.get('lan') and rf_base.get('lan') == rf_base.get('bmc'):
+            rf_net=rf.Network()
+            for nid in rf_net:
+                for pp in rf_net[nid].get('port',{}):
+                    port_state=rf_net[nid]['port'][pp].get('state')
+                    if port:
+                        if '{}'.format(port) == '{}'.format(pp):
+                            self.eth_mac=rf_net[nid]['port'][pp].get('mac')
+                            return True,self.eth_mac
+                    elif isinstance(port_state,str) and port_state.lower() == 'up':
+                        self.eth_mac=rf_net[nid]['port'][pp].get('mac')
+                        return True,self.eth_mac
+        else:
+            return True,rf_base.get('lan')
         return False,None
+
+    def get_eth_info(self):
+        ok,ip,user,passwd=self.check(mac2ip=self.mac2ip)
+        rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
+        return rf.Network()
 
     def ping(self,ip=None,test_num=3,retry=1,wait=1,keep=0,timeout=30): # BMC is on (pinging)
         if ip is None: ip=self.ip
