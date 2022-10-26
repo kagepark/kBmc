@@ -1141,10 +1141,17 @@ class kBmc:
         if not mm:
             km.logging("""SMCIPMITool module not found""",log=self.log,log_level=1)
             return False,'SMCIPMITool module not found'
-        if self.user == self.org_user:
-            if self.passwd == self.org_passwd:
-                km.logging("""Same user and passwrd. Do not need recover""",log=self.log,log_level=6)
-                return True,self.user,self.passwd
+        was_user='{}'.format(self.user)
+        was_passwd='{}'.format(self.passwd)
+        ok,user,passwd=self.find_user_pass()
+        if ok:
+            km.logging("""Previous User({}), Password({}). Found available current User({}), Password({})\n****** Start recovering user/password from current available user/password......\n""".format(was_user,was_passwd,user,passwd),log=self.log,log_level=3)
+        else:
+            return False,'Can not find current available user and password'
+        if user == self.org_user:
+            if passwd == self.org_passwd:
+                km.logging("""Same user and passwrd. Do not need recover""",log=self.log,log_level=4)
+                return True,user,passwd
             else:
                 #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
                 #rc=self.run_cmd(mm.cmd_str("""user setpwd 2 '{}'""".format(self.org_passwd)))
@@ -1160,14 +1167,19 @@ class kBmc:
         if km.krc(rc[0],chk='error'):
             km.logging("""BMC Password: Recover fail""",log=self.log,log_level=1)
             self.warn(_type='ipmi_user',msg="BMC Password: Recover fail")
-            return 'error',self.user,self.passwd
+            return 'error',user,passwd
         if km.krc(rc[0],chk=True):
-            km.logging("""Recovered BMC: from User({}) and Password({}) to User({}) and Password({})""".format(self.user,self.passwd,self.org_user,self.org_passwd),log=self.log,log_level=6)
-            self.user='{}'.format(self.org_user)
-            self.passwd='{}'.format(self.org_passwd)
+            km.logging("""Recovered BMC: from User({}) and Password({}) to User({}) and Password({})""".format(user,passwd,self.org_user,self.org_passwd),log=self.log,log_level=4)
+            ok2,user2,passwd2=self.find_user_pass()
+            if ok2:
+                km.logging("""Confirmed changed user password to {}:{}""".format(user2,passwd2),log=self.log,log_level=4)
+            else:
+                return False,"Looks changed command was ok. but can not found acceptable user or password"
+            self.user='{}'.format(user2)
+            self.passwd='{}'.format(passwd2)
             return True,self.user,self.passwd
         else:
-            km.logging("""Not support {}. Looks need more length. So Try again with {}""".format(self.org_passwd,self.default_passwd),log=self.log,log_level=6)
+            km.logging("""Not support {}. Looks need more length. So Try again with {}""".format(self.org_passwd,self.default_passwd),log=self.log,log_level=4)
             if self.user == self.org_user:
                 #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
                 recover_cmd=mm.cmd_str("""user setpwd 2 '{}'""".format(self.default_passwd))
@@ -1178,9 +1190,14 @@ class kBmc:
             km.logging("""Recover command: {}""".format(recover_cmd),log_level=7)
             rrc=self.run_cmd(recover_cmd)
             if km.krc(rrc[0],chk=True):
-                km.logging("""Recovered BMC: from User({}) and Password({}) to User({}) and Password({})""".format(self.user,self.passwd,self.org_user,self.default_passwd),log=self.log,log_level=6)
-                self.user='{}'.format(self.org_user)
-                self.passwd='{}'.format(self.default_passwd)
+                km.logging("""Recovered BMC: from User({}) and Password({}) to User({}) and Password({})""".format(self.user,self.passwd,self.org_user,self.default_passwd),log=self.log,log_level=4)
+                ok2,user2,passwd2=self.find_user_pass()
+                if ok2:
+                    km.logging("""Confirmed changed user password to {}:{}""".format(user2,passwd2),log=self.log,log_level=4)
+                else:
+                    return False,"Looks changed command was ok. but can not found acceptable user or password"
+                self.user='{}'.format(user2)
+                self.passwd='{}'.format(passwd2)
                 return True,self.user,self.passwd
             else:
                 self.warn(_type='ipmi_user',msg="Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.")
