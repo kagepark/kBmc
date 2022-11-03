@@ -10,6 +10,11 @@ import kmisc as km
 import json
 import re
 import threading
+power_on_tag='¯'
+power_up_tag='∸'
+power_off_tag='_'
+power_down_tag='⨪'
+power_unknown_tag='·'
 
 def stdout(a):
     sys.stdout.write(a)
@@ -113,8 +118,16 @@ class Redfish:
         if not host: host=self.host
         if not isinstance(cmd,str): return False
         data = km.web_req(self.Cmd(cmd,host=host),auth=(self.user, self.passwd),mode=mode,json=json,data=data,files=files)
-        if data[0] and data[1].status_code == 200:
-            return True
+        if data[0]:
+            if data[1].status_code == 200:
+                return True
+            else:
+                try: # sometimes, success with 202 code or maybe others(??)
+                    tmp=km.string2data(data[1].text)
+                    if next(iter(tmp)) == 'Success':
+                        return True
+                except:
+                    pass
         return False
 
     def Data(self,data):
@@ -141,7 +154,7 @@ class Redfish:
         return ndata
 
 
-    def Power(self,cmd='status',pxe=False,pxe_keep=False):
+    def Power(self,cmd='status',pxe=False,pxe_keep=False,uefi=False,sensor_up=0,timeout=600):
         def get_current_power_state():
             current_power='unknown'
             aa=self.Get('Systems/1')
@@ -164,10 +177,11 @@ class Redfish:
                 return None
             if cmd_state(cmd) == current_power: return True
             if pxe and cmd in ['on','reset','reboot','off_on']:
+                pxe_str='ipxe' if uefi is True else 'pxe'
                 if pxe_keep:
-                    self.Boot(boot='Pxe',keep='keep')
+                    self.Boot(boot=pxe_str,keep='keep')
                 else:
-                    self.Boot(boot='Pxe')
+                    self.Boot(boot=pxe_str)
             if cmd == 'on':
                 rt=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': 'On'})
             elif cmd == 'off':
@@ -189,13 +203,19 @@ class Redfish:
                         stdout('.')
                         time.sleep(1)
                 rt=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': 'On'})
-            for i in range(0,600):
-                stdout('-')
-                if cmd_state(cmd,on_s=['reset','on','reboot','off_on']) == get_current_power_state().lower():
-                    time.sleep(1)
-                    return True
-                time.sleep(1)
-            return False
+            if sensor_up > 0:
+                return self.IsUp(timeout=timeout,keep_up=sensor_up)
+            else:
+                tm_init=None
+                while True:
+                    tm_out,tm_init=km.Timeout(timeout,init_time=tm_init)
+                    if tm_out: return False
+                    if cmd_state(cmd,on_s=['reset','on','reboot','off_on']) == get_current_power_state().lower():
+                        time.sleep(1)
+                        return True
+                    stdout(power_unknown_tag)
+                    time.sleep(3)
+                return False
         else:
             if cmd == 'info':
                 naa={}
@@ -238,7 +258,7 @@ class Redfish:
                 if aa:
                     return aa.get('IndicatorLED')
     
-    def Boot(self,boot=None,mode='auto',keep='once',simple_mode=False):
+    def Boot(self,boot=None,mode='auto',keep='once',simple_mode=False,pxe_boot_mac=None):
         def order_boot():
             naa={}
             aa=self.Get('Systems/1')
@@ -253,81 +273,88 @@ class Redfish:
                     if 'BootSourceOverrideTarget@Redfish.AllowableValues' in boot_info: naa['help']['boot']=boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues')
             return naa
 
-        def bios_boot():
+        def bios_boot(pxe_boot_mac=None):
             naa={}
-            #X13
-            aa=self.Get('Systems/1/BootOptions')
-            if isinstance(aa,dict):
-                #X13 VideoOptionROM
-                videorom=self.Get('Systems/1/Bios')
-                if isinstance(videorom,dict):
-                    boot_info=videorom.get('Attributes',{})
-                    for ii in boot_info:
-                        if ii.startswith('OnboardVideoOptionROM#'):
-                            naa['OnboardVideoOptionROM']=boot_info[ii]
+            bios_info=self.Get('Systems/1/Bios')
+            if isinstance(bios_info,dict):
+                #PXE Boot Mac
+                if pxe_boot_mac is None: pxe_boot_mac=self.BaseMac().get('lan')
+                naa['pxe_boot_mac']=km.str2mac(pxe_boot_mac)
                 #Boot order
-                memb=aa.get('Members',[{}])
-                if len(memb) == 1:
-                    naa['mode']='Legacy'
-                    naa['order']=['']
-                else:
-                    naa['mode']='UEFI'
-                    redirect=memb[0].get('@odata.id')
-                    if isinstance(redirect,str) and redirect:
-                        aa=self.Get(redirect)
-                        if aa:
-                            if 'UEFI Network Card' in aa.get('DisplayName',''):
-                                naa['order']=['UEFI PXE Network: UEFI']
-            #under X12
-            else:
-                bios_mode=self.Get('Systems/1/Bios')
-                boot_info=order_boot()
-                if isinstance(bios_mode,dict) and not km.IsNone(bios_mode.get('Attributes',{}).get('BootModeSelect')):
-                    mode=bios_mode.get('Attributes',{}).get('BootModeSelect')
-                elif not km.IsNone(boot_info.get('BootSourceOverrideMode')):
-                    mode=boot_info.get('BootSourceOverrideMode')
-                aa=self.Get('Systems/1/Bios')
-                if isinstance(aa,dict) and aa:
-                    boot_info=aa.get('Attributes',{})
-                    if boot_info:
-                        if not km.IsNone(boot_info.get('BootModeSelect')):
-                            naa['mode']=boot_info.get('BootModeSelect')
-                        elif not km.IsNone(boot_info.get('BootSourceOverrideMode')):
-                            naa['mode']=boot_info.get('BootSourceOverrideMode')
-                    naa['order']=[]
-                    for ii in boot_info:
-                        if ii.startswith('BootOption#1$') or ii in ['BootOption#1']:
-                            naa['order'].append(boot_info[ii])
-                    naa['OnboardVideoOptionROM']=boot_info.get('OnboardVideoOptionROM')
+                boot_attr=bios_info.get('Attributes',{})
+                if boot_attr:
+                    mode=boot_attr.get('BootModeSelect')
+                    if km.IsNone(mode):
+                        mode=boot_attr.get('BootSourceOverrideMode')
+                    if km.IsNone(mode): #X13
+                        #VideoOptionROM
+                        for ii in boot_attr:
+                            if ii.startswith('OnboardVideoOptionROM#'):
+                                naa['OnboardVideoOptionROM']=boot_attr[ii]
+                        #Boot order
+                        aa=self.Get('Systems/1/BootOptions')
+                        memb=aa.get('Members',[{}])
+                        if len(memb) == 1:
+                            naa['mode']='Legacy'
+                            naa['order']=['']
+                            naa['pxe_boot_id']=None
+                        else:
+                            naa['mode']='UEFI'
+                            redirect=memb[0].get('@odata.id')
+                            if isinstance(redirect,str) and redirect:
+                                aa=self.Get(redirect)
+                                if aa:
+                                    if 'UEFI Network Card' in aa.get('DisplayName',''):
+                                        naa['order']=['UEFI PXE Network: UEFI']
+                                        naa['pxe_boot_id']=0
+                    else: #X12
+                        #VideoOptionROM
+                        naa['OnboardVideoOptionROM']=bios_info.get('OnboardVideoOptionROM')
+                        naa['mode']=mode
+                        #Boot order
+                        naa['order']=[]
+                        bios_boot_info=list(boot_attr.items())
+                        for i in range(0,len(bios_boot_info)):
+                            if bios_boot_info[i][0].startswith('BootOption'):
+                                naa['order'].append(bios_boot_info[i][1])
+                                a=km.findstr(bios_boot_info[i][1],"(MAC:\w+)")
+                                if a:
+                                    mac=km.str2mac(a[0][4:])
+                                    if naa.get('pxe_boot_id') is None and mac == naa['pxe_boot_mac']:
+                                        naa['pxe_boot_id']=len(naa['order'])-1
             return naa
 
-        if isinstance(boot,str) and boot.lower() in ['efi_shell','uefi_shell','shell','pxe','ipxe','cd','usb','hdd','floppy','bios','setup','biossetup']:
-            rf_boot_info={'order':order_boot(),'bios':bios_boot()}
+        if isinstance(mode,str) and isinstance(boot,str) and boot.lower() in ['efi_shell','uefi_shell','shell','pxe','ipxe','cd','usb','hdd','floppy','bios','setup','biossetup','efi','uefi','set']:
+            rf_boot_info={'order':order_boot(),'bios':bios_boot(pxe_boot_mac=pxe_boot_mac)}
             if not rf_boot_info['order'] and not rf_boot_info['bios']:
                 #Redfish issue
                 return False
 
-            if boot.lower() in ['efi_shell','uefi_shell','shell']:
+            boot_lower=boot.lower()
+            mode_lower=mode.lower()
+            if boot_lower in ['efi_shell','uefi_shell','shell']:
                 keep='Continuous'
                 mode='UEFI'
                 boot='BiosSetup'
             else:
                 #New Setup    
-                if mode.lower() in ['uefi','efi']:
+                ## Mode
+                if mode_lower in ['uefi','efi','ipxe']:
                     mode='UEFI'
-                elif mode.lower() == 'legacy':
+                elif mode_lower == 'legacy':
                     mode='Legacy'
-                else:
+                else: # auto then 
                     mode=rf_boot_info.get('bios',{}).get('mode')
-                if km.IsNone(mode): mode='Legacy'
+                if km.IsNone(mode) or mode == 'Dual': mode='Legacy'
+                ## Keep
                 if keep in [None,False,'disable','del','disabled']:
                     keep='Disabled'
                 elif keep in ['keep','continue','force','continuous']:
                     keep='Continuous'
                 else:
                     keep='Once'
-                boot_lower=boot.lower()
-                if boot_lower == 'ipxe':
+                ##  boot
+                if boot_lower in ['uefi','efi','ipxe']:
                     boot='pxe'
                     mode='UEFI'
                 elif boot_lower in ['pxe']:
@@ -344,7 +371,6 @@ class Redfish:
                     mode='Legacy'
                     boot='BiosSetup'
                     keep='Once'
-                if mode == 'Dual': mode='Legacy'
                 #if 'BootSourceOverrideTarget@Redfish.AllowableValues' in boot_info and 'BootSourceOverrideMode@Redfish.AllowableValues' in boot_info:
                 #    if boot not in boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues') or mode not in boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues'):
                 #        print('!!WARN: BOOT({}) not in {} or MODE({}) not in {}'.format(boot,boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues'),mode,boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues')))
@@ -378,51 +404,174 @@ class Redfish:
             return self.Post('Systems/1',json=boot_db,mode='patch')
         else:
             if (isinstance(simple_mode,bool) and simple_mode is True) or simple_mode == 'simple':
-                bios_boot_info=bios_boot()
+                bios_boot_info=bios_boot(pxe_boot_mac=pxe_boot_mac)
                 if bios_boot_info: return bios_boot_info.get('mode')
             elif simple_mode == 'bios':
-                return bios_boot()
+                return bios_boot(pxe_boot_mac=pxe_boot_mac)
             elif simple_mode == 'order':
                 return order_boot()
             elif simple_mode == 'flags':
-                naa={'order':order_boot(),'bios':bios_boot()}
+                naa={'order':order_boot(),'bios':bios_boot(pxe_boot_mac=pxe_boot_mac)}
                 return '''Boot Flags :
    - BIOS {} boot
+   - BIOS PXE Boot order : {}
    - Options apply to {}
    - Boot Device Selector : {}
    - Boot with {}
-'''.format(naa.get('bios',{}).get('mode'),'all future boots' if naa.get('order',{}).get('enable') == 'Continuous' else naa.get('order',{}).get('enable'),naa.get('order',{}).get('1'),naa.get('order',{}).get('mode'))
+'''.format(naa.get('bios',{}).get('mode'),naa.get('bios',{}).get('pxe_boot_id'),'all future boots' if naa.get('order',{}).get('enable') == 'Continuous' else naa.get('order',{}).get('enable'),naa.get('order',{}).get('1'),naa.get('order',{}).get('mode'))
             else: #all
-                naa={'order':order_boot(),'bios':bios_boot()}
+                naa={'order':order_boot(),'bios':bios_boot(pxe_boot_mac=pxe_boot_mac)}
                 if isinstance(boot,str) and boot.lower() == 'order':
                     return '''Boot Flags :
    - BIOS {} boot
+   - BIOS PXE Boot order : {}
    - Options apply to {}
    - Boot Device Selector : {}
    - Boot with {}
-'''.format(naa.get('bios',{}).get('mode'),'all future boots' if naa.get('order',{}).get('enable') == 'Continuous' else naa.get('order',{}).get('enable'),naa.get('order',{}).get('1'),naa.get('order',{}).get('mode'))
+'''.format(naa.get('bios',{}).get('mode'),naa.get('bios',{}).get('pxe_boot_id'),'all future boots' if naa.get('order',{}).get('enable') == 'Continuous' else naa.get('order',{}).get('enable'),naa.get('order',{}).get('1'),naa.get('order',{}).get('mode'))
                 return naa
 
-    def IsUp(self,timeout=300):
-        for ii in range(0,timeout):
-            aa=self.Get('Systems')
-            if aa is False:
-                stdout('.')
-                time.sleep(2)
-                continue
+    def Bootmode_bios(self,pxe_boot_mac=None):
+        rc=self.Get("Systems/1/Bios")
+        bios_boot=list(rc.get('Attributes',{}).items())
+        pxe_boot_wait=rc.get('Attributes',{}).get('PXEBootWaitTime',0)
+
+        if pxe_boot_mac is None:
+            rf_base=self.BaseMac()
+            if rf_base.get('lan') and rf_base.get('lan') == rf_base.get('bmc'):
+                rf_net=self.Network()
+                for nid in rf_net:
+                    for pp in rf_net[nid].get('port',{}):
+                        port_state=rf_net[nid]['port'][pp].get('state')
+                        if port:
+                            if '{}'.format(port) == '{}'.format(pp):
+                                pxe_boot_mac=rf_net[nid]['port'][pp].get('mac')
+                                break
+                        elif isinstance(port_state,str) and port_state.lower() == 'up':
+                            pxe_boot_mac=rf_net[nid]['port'][pp].get('mac')
+                            break
             else:
+                pxe_boot_mac=rf_base.get('lan')
+        pxe_boot_mac=km.str2mac(pxe_boot_mac)
+        boot_option=[]
+        boot_opt=False
+        mode=None
+        pxe_id=None
+        for i in range(0,len(bios_boot)):
+            if bios_boot[i][0] == 'BootModeSelect':
+                mode=bios_boot[i][1]
+                boot_opt=True
+            elif boot_opt:
+                if bios_boot[i][0].startswith('BootOption'):
+                    a=km.findstr(bios_boot[i][1],"(MAC:\w+)")
+                    if a:
+                        mac=km.str2mac(a[0][4:])
+                        boot_option.append((bios_boot[i][0],mac))
+                        if pxe_id is None and mac == pxe_boot_mac:
+                            pxe_id=len(boot_option)-1
+                    else:
+                        boot_option.append((bios_boot[i][0],bios_boot[i][1]))
+                else:
+                    break
+        return mode,pxe_id,boot_option
+
+    def Bootmode_bios_set(self,mode='UEFI',power='auto',power_timeout=300,monitor_timeout=600,force=False):
+        if mode not in ['UEFI','Legacy','Dual']: return False
+        #bios_boot_mode=self.Bootmode_bios()
+        bios_boot_mode=self.Boot(simple_mode='bios')
+        #if force is False and bios_boot_mode[0] == mode:# and bios_boot_mode[1] == 0:
+        if force is False and bios_boot_mode.get('mode') == mode and bios_boot_mode.get('pxe_boot_id') == 0:
+            return True
+        rc=self.Get("Systems/1/Bios")
+        setting_cmd=rc.get('@Redfish.Settings',{}).get('SettingsObject',{}).get('@odata.id')
+        if setting_cmd:
+            aa={'Attributes': {'BootModeSelect': mode}}
+            if self.Post(setting_cmd,json=aa,mode='patch'):
+                time.sleep(3)
+                if power in ['off_on','reset','on','auto']:
+                    pw=self.Power()
+                    if pw == 'off':
+                        power='on'
+                    elif pw == 'on':
+                        if power == 'auto':
+                            power='reset'
+                    if self.Power(cmd=power):
+                        tm_init=None
+                        while True:
+                            tm_out,tm_init=km.Timeout(power_timeout,init_time=tm_init)
+                            if tm_out: return False
+                            if rf.Power() == 'on':
+                                break
+                            stdout(power_unknown_tag)
+                            time.sleep(3)
+                        tm_init=None
+                        while True:
+                            stdout(power_up_tag)
+                            time.sleep(3)
+                            tm_out,tm_init=km.Timeout(monitor_timeout,init_time=tm_init)
+                            if tm_out: return False
+                            #if boot_mode_bios()[0] == mode:
+                            if self.Boot(simple_mode='bios').get('mode') == mode:
+                                return True
+                    return False
                 return True
         return False
 
+    def IsUp(self,timeout=600,keep_up=0):
+        tm_init=None
+        up_init=None
+        while True:
+            tm_out,tm_init=km.Timeout(timeout,init_time=tm_init)
+            if tm_out: break
+            aa=self.Get('Chassis/1/Thermal')
+            stat=power_unknown_tag
+            for ii in aa.get('Temperatures',[]):
+                if ii.get('PhysicalContext') == 'CPU':
+                    try:
+                        int(ii.get('ReadingCelsius'))
+                        if keep_up > 0:
+                            up_out,up_init=km.Timeout(keep_up,init_time=up_init)
+                            if up_out: return True
+                            stat=power_on_tag
+                        else:
+                            return True
+                    except:
+                        stat=power_off_tag
+            stdout(stat)
+            time.sleep(3)
+        return False
+
+    def IsDown(self,timeout=300,keep_down=0):
+        tm_init=None
+        dn_init=None
+        while True:
+            tm_out,tm_init=km.Timeout(timeout,init_time=tm_init)
+            if tm_out: break
+            aa=self.Get('Chassis/1/Thermal')
+            stat=power_unknown_tag
+            for ii in aa.get('Temperatures',[]):
+                if ii.get('PhysicalContext') == 'CPU':
+                    try:
+                        int(ii.get('ReadingCelsius'))
+                        stat=power_on_tag
+                    except:
+                        if keep_dn > 0:
+                            dn_out,dn_init=km.Timeout(keep_down,init_time=dn_init)
+                            if dn_out: return True
+                            stat=power_off_tag
+                        else:
+                            return True
+            stdout(stat)
+            time.sleep(3)
+        return False
+
     def BmcVer(self):
-        #UUID.split('-')[-1] <== BMC Mac
         aa=self.Get('UpdateService/FirmwareInventory/BMC')
         if aa: return aa.get('Version')
         aa=self.Get('Managers/1')
         if aa: return aa.get('FirmwareVersion')
 
     def BiosVer(self):
-        #UUID.split('-')[-1] <== LAN1 Mac
         aa=self.Get('UpdateService/FirmwareInventory/BIOS')
         if aa: return aa.get('Version')
         aa=self.Get('Systems/1')
@@ -455,6 +604,18 @@ class Redfish:
         aa=self.Get('Systems/1')
         if aa:
             naa['lan']=km.str2mac(aa.get('UUID').split('-')[-1])
+        if naa['lan'] and naa['lan'] == naa['bmc']:
+            rf_net=self.Network()
+            for nid in rf_net:
+                for pp in rf_net[nid].get('port',{}):
+                    port_state=rf_net[nid]['port'][pp].get('state')
+                    if port:
+                        if '{}'.format(port) == '{}'.format(pp):
+                            naa['lan']=rf_net[nid]['port'][pp].get('mac')
+                            break
+                    elif isinstance(port_state,str) and port_state.lower() == 'up':
+                        naa['lan']=rf_net[nid]['port'][pp].get('mac')
+                        break
         return naa 
 
     def Network(self):
@@ -816,14 +977,14 @@ class kBmc:
         # first initial condition check
         on_off=is_on_off(get_current_power,2,data['init'].get('time'),mode=['a'])
         if on_off == 'on':
-            if status_log: stdout('¯')
-            data['symbol']='¯'
+            if status_log: stdout(power_on_tag)
+            data['symbol']=power_on_tag
         elif on_off == 'off':
-            if status_log: stdout('_')
-            data['symbol']='_'
+            if status_log: stdout(power_off_tag)
+            data['symbol']=power_off_tag
         else:
-            if status_log: stdout('·')
-            data['symbol']='·'
+            if status_log: stdout(power_unknown_tag)
+            data['symbol']=power_unknown_tag
         # if starting check then start check condition from initialization
         if data.get('start'):
             if on_off == monitor_status[0]:
@@ -868,11 +1029,11 @@ class kBmc:
                 on_off=is_on_off(get_current_power,data['sensor_{}_monitor'.format(monitor_status[ms_id])],data['status'].get(monitor_status[ms_id],(km.now(),0,0))[0],now=data['current'].get('state')[0],mode=['a'],sensor=True)
                 if on_off in ['on','off']:
                     if on_off == 'on':
-                        if status_log: stdout('¯')
-                        data['symbol']='¯'
+                        if status_log: stdout(power_on_tag)
+                        data['symbol']=power_on_tag
                     else:
-                        if status_log: stdout('_')
-                        data['symbol']='_'
+                        if status_log: stdout(power_off_tag)
+                        data['symbol']=power_off_tag
                     #suddenly changed state then initialize monitoring value
                     if on_off != before_on_off:
                         if not resetted and ((monitor_status[ms_id] == 'on' and before_on_off == 'on') or (monitor_status[ms_id] == 'off' and before_on_off == 'off')):
@@ -905,8 +1066,8 @@ class kBmc:
                         break
                 elif on_off == 'up':
                     if before_on_off == 'on':
-                        if status_log: stdout('_')
-                        data['symbol']='_'
+                        if status_log: stdout(power_off_tag)
+                        data['symbol']=power_off_tag
                         on_off='off'
                         if monitor_status[ms_id] == 'off':
                             data['monitored_status'].append({monitor_status[ms_id]:{'time':data['current'].get('state')[0],'time_keep':data['current'].get('state')[0]}})
@@ -920,15 +1081,15 @@ class kBmc:
                             reset_condition(data,before_on_off,on_off)
                             resetted=True
                     else: 
-                        if status_log: stdout('∸')
-                        data['symbol']='∸'
+                        if status_log: stdout(power_up_tag)
+                        data['symbol']=power_up_tag
                 elif on_off == 'dn':
-                    if status_log: stdout('⨪')
-                    data['symbol']='⨪'
+                    if status_log: stdout(power_down_tag)
+                    data['symbol']=power_down_tag
                 else: #Unknown
                     data['status']={}
-                    if status_log: stdout('·')
-                    data['symbol']='·'
+                    if status_log: stdout(power_unknown_tag)
+                    data['symbol']=power_unknown_tag
                     if not isinstance(start_unknown,int): start_unknown=km.now()
                     # if reset_after_unknown has a value then over keep unknown state then reset the BMC
                     if isinstance(reset_after_unknown,int) and reset_after_unknown > 0:
@@ -1093,7 +1254,7 @@ class kBmc:
                 return True,found
         return False,('','','','')
 
-    def find_user_pass(self,ip=None,default_range=4,check_cmd='ipmi power status',cancel_func=None):
+    def find_user_pass(self,ip=None,default_range=4,check_cmd='ipmi power status',cancel_func=None,error=True):
         if cancel_func is None: cancel_func=self.cancel_func
         if ip is None: ip=self.ip
         test_user=km.move2first(self.user,self.test_user[:])
@@ -1132,8 +1293,11 @@ class kBmc:
                                 km.logging("""p""",log=self.log,direct=True,log_level=3)
                         else:
                             km.logging("""x""",log=self.log,direct=True,log_level=3)
-        km.logging("""Can not find working BMC User or password from POOL""",log=self.log,log_level=1,dsp='e')
-        self.error(_type='user_pass',msg="Can not find working BMC User or password from POOL\n{}".format(tested_user_pass))
+        if error:
+            km.logging("""Can not find working BMC User or password from POOL""",log=self.log,log_level=1,dsp='e')
+            self.error(_type='user_pass',msg="Can not find working BMC User or password from POOL\n{}".format(tested_user_pass))
+        else:
+            km.logging("""WARN: Can not find working BMC User or password from POOL\n{}""".format(tested_user_pass),log=self.log,log_level=1,dsp='e')
         return False,None,None
 
     def recover_user_pass(self):
