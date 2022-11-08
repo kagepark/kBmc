@@ -580,9 +580,9 @@ class Redfish:
 
     def BiosVer(self):
         aa=self.Get('UpdateService/FirmwareInventory/BIOS')
-        if isinstance(aa,dict)aa: return aa.get('Version')
+        if isinstance(aa,dict): return aa.get('Version')
         aa=self.Get('Systems/1')
-        if isinstance(aa,dict)aa: return aa.get('BiosVersion')
+        if isinstance(aa,dict): return aa.get('BiosVersion')
 
     def RedfishHI(self):
         aa=self.Get('Systems/1/EthernetInterfaces/ToManager')
