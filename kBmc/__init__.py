@@ -158,11 +158,11 @@ class Redfish:
         def get_current_power_state():
             current_power='unknown'
             aa=self.Get('Systems/1')
-            if aa and aa.get('PowerState'):
+            if isinstance(aa,dict) and aa.get('PowerState'):
                 current_power=aa.get('PowerState')
             if current_power is None:
                 aa=self.Get('Managers/1/Oem/Supermicro/SmartPower')
-                if aa:
+                if isinstance(aa,dict):
                     current_power=aa.get('PowerStatus')
             return current_power
         current_power=get_current_power_state().lower()
@@ -220,12 +220,12 @@ class Redfish:
             if cmd == 'info':
                 naa={}
                 aa=self.Get('Managers/1/Oem/Supermicro/SmartPower')
-                if aa:
+                if isinstance(aa,dict):
                     naa['status']=aa.get('PowerStatus')
                     naa['max']=aa.get('MaxPower')
                     naa['cap']=aa.get('PowerCapping')
                 aa=self.Get('Chassis/1/Power')
-                if aa:
+                if isinstance(aa,dict):
                     naa['psu']={}
                     if aa.get('PowerControl'):
                         interval='{}m'.format(aa.get('PowerControl')[0].get('PowerMetrics',{}).get('IntervalInMin'))
@@ -255,14 +255,14 @@ class Redfish:
                 return naa
             elif cmd == 'ID_LED':
                 aa=self.Get('Chassis/1')
-                if aa:
+                if isinstance(aa,dict):
                     return aa.get('IndicatorLED')
     
     def Boot(self,boot=None,mode='auto',keep='once',simple_mode=False,pxe_boot_mac=None):
         def order_boot():
             naa={}
             aa=self.Get('Systems/1')
-            if aa:
+            if isinstance(aa,dict):
                 boot_info=aa.get('Boot',{})
                 if boot_info:
                     naa['mode']=boot_info.get('BootSourceOverrideMode')
@@ -293,20 +293,21 @@ class Redfish:
                                 naa['OnboardVideoOptionROM']=boot_attr[ii]
                         #Boot order
                         aa=self.Get('Systems/1/BootOptions')
-                        memb=aa.get('Members',[{}])
-                        if len(memb) == 1:
-                            naa['mode']='Legacy'
-                            naa['order']=['']
-                            naa['pxe_boot_id']=None
-                        else:
-                            naa['mode']='UEFI'
-                            redirect=memb[0].get('@odata.id')
-                            if isinstance(redirect,str) and redirect:
-                                aa=self.Get(redirect)
-                                if aa:
-                                    if 'UEFI Network Card' in aa.get('DisplayName',''):
-                                        naa['order']=['UEFI PXE Network: UEFI']
-                                        naa['pxe_boot_id']=0
+                        if isinstance(aa,dict):
+                            memb=aa.get('Members',[{}])
+                            if len(memb) == 1:
+                                naa['mode']='Legacy'
+                                naa['order']=['']
+                                naa['pxe_boot_id']=None
+                            else:
+                                naa['mode']='UEFI'
+                                redirect=memb[0].get('@odata.id')
+                                if isinstance(redirect,str) and redirect:
+                                    aa=self.Get(redirect)
+                                    if isinstance(aa,dict):
+                                        if 'UEFI Network Card' in aa.get('DisplayName',''):
+                                            naa['order']=['UEFI PXE Network: UEFI']
+                                            naa['pxe_boot_id']=0
                     else: #X12
                         #VideoOptionROM
                         naa['OnboardVideoOptionROM']=bios_info.get('OnboardVideoOptionROM')
@@ -433,8 +434,11 @@ class Redfish:
 
     def Bootmode_bios(self,pxe_boot_mac=None):
         rc=self.Get("Systems/1/Bios")
-        bios_boot=list(rc.get('Attributes',{}).items())
-        pxe_boot_wait=rc.get('Attributes',{}).get('PXEBootWaitTime',0)
+        bios_boot=[]
+        pxe_boot_wait=0
+        if isinstance(rc,dict):
+            bios_boot=list(rc.get('Attributes',{}).items())
+            pxe_boot_wait=rc.get('Attributes',{}).get('PXEBootWaitTime',0)
 
         if pxe_boot_mac is None:
             rf_base=self.BaseMac()
@@ -483,6 +487,7 @@ class Redfish:
         if force is False and bios_boot_mode.get('mode') == mode and bios_boot_mode.get('pxe_boot_id') == 0:
             return True
         rc=self.Get("Systems/1/Bios")
+        if not isinstance(rc,dict): return False
         setting_cmd=rc.get('@Redfish.Settings',{}).get('SettingsObject',{}).get('@odata.id')
         if setting_cmd:
             aa={'Attributes': {'BootModeSelect': mode}}
@@ -523,20 +528,21 @@ class Redfish:
         while True:
             tm_out,tm_init=km.Timeout(timeout,init_time=tm_init)
             if tm_out: break
-            aa=self.Get('Chassis/1/Thermal')
             stat=power_unknown_tag
-            for ii in aa.get('Temperatures',[]):
-                if ii.get('PhysicalContext') == 'CPU':
-                    try:
-                        int(ii.get('ReadingCelsius'))
-                        if keep_up > 0:
-                            up_out,up_init=km.Timeout(keep_up,init_time=up_init)
-                            if up_out: return True
-                            stat=power_on_tag
-                        else:
-                            return True
-                    except:
-                        stat=power_off_tag
+            aa=self.Get('Chassis/1/Thermal')
+            if isinstance(aa,dict):
+                for ii in aa.get('Temperatures',[]):
+                    if ii.get('PhysicalContext') == 'CPU':
+                        try:
+                            int(ii.get('ReadingCelsius'))
+                            if keep_up > 0:
+                                up_out,up_init=km.Timeout(keep_up,init_time=up_init)
+                                if up_out: return True
+                                stat=power_on_tag
+                            else:
+                                return True
+                        except:
+                            stat=power_off_tag
             stdout(stat)
             time.sleep(3)
         return False
@@ -547,40 +553,41 @@ class Redfish:
         while True:
             tm_out,tm_init=km.Timeout(timeout,init_time=tm_init)
             if tm_out: break
-            aa=self.Get('Chassis/1/Thermal')
             stat=power_unknown_tag
-            for ii in aa.get('Temperatures',[]):
-                if ii.get('PhysicalContext') == 'CPU':
-                    try:
-                        int(ii.get('ReadingCelsius'))
-                        stat=power_on_tag
-                    except:
-                        if keep_dn > 0:
-                            dn_out,dn_init=km.Timeout(keep_down,init_time=dn_init)
-                            if dn_out: return True
-                            stat=power_off_tag
-                        else:
-                            return True
+            aa=self.Get('Chassis/1/Thermal')
+            if isinstance(aa,dict):
+                for ii in aa.get('Temperatures',[]):
+                    if ii.get('PhysicalContext') == 'CPU':
+                        try:
+                            int(ii.get('ReadingCelsius'))
+                            stat=power_on_tag
+                        except:
+                            if keep_dn > 0:
+                                dn_out,dn_init=km.Timeout(keep_down,init_time=dn_init)
+                                if dn_out: return True
+                                stat=power_off_tag
+                            else:
+                                return True
             stdout(stat)
             time.sleep(3)
         return False
 
     def BmcVer(self):
         aa=self.Get('UpdateService/FirmwareInventory/BMC')
-        if aa: return aa.get('Version')
+        if isinstance(aa,dict): return aa.get('Version')
         aa=self.Get('Managers/1')
-        if aa: return aa.get('FirmwareVersion')
+        if isinstance(aa,dict): return aa.get('FirmwareVersion')
 
     def BiosVer(self):
         aa=self.Get('UpdateService/FirmwareInventory/BIOS')
-        if aa: return aa.get('Version')
+        if isinstance(aa,dict)aa: return aa.get('Version')
         aa=self.Get('Systems/1')
-        if aa: return aa.get('BiosVersion')
+        if isinstance(aa,dict)aa: return aa.get('BiosVersion')
 
     def RedfishHI(self):
         aa=self.Get('Systems/1/EthernetInterfaces/ToManager')
         naa={}
-        if aa:
+        if isinstance(aa,dict):
             ipv4=aa.get('IPv4Addresses',[{}])[0]
             naa['ip']=ipv4.get('Address')
             naa['netmask']=ipv4.get('SubnetMask')
@@ -599,10 +606,10 @@ class Redfish:
     def BaseMac(self):
         naa={}
         aa=self.Get('Managers/1')
-        if aa:
+        if isinstance(aa,dict):
             naa['bmc']=km.str2mac(aa.get('UUID').split('-')[-1])
         aa=self.Get('Systems/1')
-        if aa:
+        if isinstance(aa,dict):
             naa['lan']=km.str2mac(aa.get('UUID').split('-')[-1])
         if naa['lan'] and naa['lan'] == naa['bmc']:
             rf_net=self.Network()
@@ -621,59 +628,63 @@ class Redfish:
     def Network(self):
         naa={}
         aa=self.Get('Chassis/1/NetworkAdapters')
-        if aa:
+        if isinstance(aa,dict):
             for ii in aa.get('Members',[]):
                 ai=self.Get(ii.get('@odata.id'))
-                ai_id=ai.get('Id')
-                naa[ai_id]={}
-                naa[ai_id]['model']=ai.get('Model')
-                naa[ai_id]['sn']=ai.get('SerialNumber')
-                if ai.get('Controllers'):
-                    naa[ai_id]['firmware']=ai.get('Controllers')[0].get('FirmwarePackageVersion')
-                    naa[ai_id]['pci']='{}({})'.format(ai.get('Controllers')[0].get('PCIeInterface',{}).get('PCIeType'),ai.get('Controllers')[0].get('PCIeInterface',{}).get('LanesInUse'))
-                    naa[ai_id]['max_pci']='{}({})'.format(ai.get('Controllers')[0].get('PCIeInterface',{}).get('MaxPCIeType'),ai.get('Controllers')[0].get('PCIeInterface',{}).get('MaxLanes'))
-                    naa[ai_id]['location']='{}'.format(ai.get('Controllers')[0].get('Location',{}).get('PartLocation',{}).get('LocationOrdinalValue'))
+                if isinstance(ai,dict):
+                    ai_id=ai.get('Id')
+                    naa[ai_id]={}
+                    naa[ai_id]['model']=ai.get('Model')
+                    naa[ai_id]['sn']=ai.get('SerialNumber')
+                    if ai.get('Controllers'):
+                        naa[ai_id]['firmware']=ai.get('Controllers')[0].get('FirmwarePackageVersion')
+                        naa[ai_id]['pci']='{}({})'.format(ai.get('Controllers')[0].get('PCIeInterface',{}).get('PCIeType'),ai.get('Controllers')[0].get('PCIeInterface',{}).get('LanesInUse'))
+                        naa[ai_id]['max_pci']='{}({})'.format(ai.get('Controllers')[0].get('PCIeInterface',{}).get('MaxPCIeType'),ai.get('Controllers')[0].get('PCIeInterface',{}).get('MaxLanes'))
+                        naa[ai_id]['location']='{}'.format(ai.get('Controllers')[0].get('Location',{}).get('PartLocation',{}).get('LocationOrdinalValue'))
                 naa[ai_id]['port']={}
                 port=self.Get(ai.get('NetworkPorts').get('@odata.id'))
-                for pp in port.get('Members'):
-                    port_q=self.Get(pp.get('@odata.id'))
-                    naa[ai_id]['port'][port_q.get('Id')]={}
-                    naa[ai_id]['port'][port_q.get('Id')]['mac']=port_q.get('AssociatedNetworkAddresses')[0]
-                    naa[ai_id]['port'][port_q.get('Id')]['state']=port_q.get('LinkStatus')
+                if isinstance(port,dict):
+                    for pp in port.get('Members'):
+                        port_q=self.Get(pp.get('@odata.id'))
+                        naa[ai_id]['port'][port_q.get('Id')]={}
+                        naa[ai_id]['port'][port_q.get('Id')]['mac']=port_q.get('AssociatedNetworkAddresses')[0]
+                        naa[ai_id]['port'][port_q.get('Id')]['state']=port_q.get('LinkStatus')
         return naa
 
     def Memory(self):
         naa={}
         aa=self.Get('Systems/1/Memory')
-        if aa:
+        if isinstance(aa,dict):
             for ii in aa.get('Members',[]):
                 ai=self.Get(ii.get('@odata.id'))
-                idx=ai.get('Id')
-                naa[idx]={}
-                naa[idx]['dimm']=ai.get('DeviceLocator')
-                naa[idx]['speed']=ai.get('AllowedSpeedsMHz')[0]
-                naa[idx]['size']=ai.get('LogicalSizeMiB')
-                naa[idx]['ecc']=ai.get('ErrorCorrection')
-                naa[idx]['brand']=ai.get('Manufacturer')
-                naa[idx]['partnumber']=ai.get('PartNumber')
-                naa[idx]['sn']=ai.get('SerialNumber')
+                if isinstance(ai,dict):
+                    idx=ai.get('Id')
+                    naa[idx]={}
+                    naa[idx]['dimm']=ai.get('DeviceLocator')
+                    naa[idx]['speed']=ai.get('AllowedSpeedsMHz')[0]
+                    naa[idx]['size']=ai.get('LogicalSizeMiB')
+                    naa[idx]['ecc']=ai.get('ErrorCorrection')
+                    naa[idx]['brand']=ai.get('Manufacturer')
+                    naa[idx]['partnumber']=ai.get('PartNumber')
+                    naa[idx]['sn']=ai.get('SerialNumber')
         return naa
 
     def Cpu(self):
         naa={}
         aa=self.Get('Systems/1/Processors')
-        if aa:
+        if isinstance(aa,dict):
             for ii in aa.get('Members',[]):
                 ai=self.Get(ii.get('@odata.id'))
-                idx=ai.get('Id')
-                naa[idx]={}
-                naa[idx]['watt']=ai.get('MaxTDPWatts')
-                naa[idx]['type']=ai.get('Location',{}).get('PartLocation',{}).get('LocationType')
-                naa[idx]['location']=ai.get('Location',{}).get('PartLocation',{}).get('ServiceLabel')
-                naa[idx]['model']=ai.get('Model')
-                naa[idx]['speed']=ai.get('MaxSpeedMHz')
-                naa[idx]['step']=ai.get('ProcessorId',{}).get('Step')
-                naa[idx]['cores']=ai.get('TotalCores')
+                if isinstance(ai,dict):
+                    idx=ai.get('Id')
+                    naa[idx]={}
+                    naa[idx]['watt']=ai.get('MaxTDPWatts')
+                    naa[idx]['type']=ai.get('Location',{}).get('PartLocation',{}).get('LocationType')
+                    naa[idx]['location']=ai.get('Location',{}).get('PartLocation',{}).get('ServiceLabel')
+                    naa[idx]['model']=ai.get('Model')
+                    naa[idx]['speed']=ai.get('MaxSpeedMHz')
+                    naa[idx]['step']=ai.get('ProcessorId',{}).get('Step')
+                    naa[idx]['cores']=ai.get('TotalCores')
         return naa
 
     def Info(self):
@@ -686,13 +697,13 @@ class Redfish:
         naa['cpu']=self.Cpu()
         aa=self.Get('Managers/1')
         naa['mac']={}
-        if aa:
+        if isinstance(aa,dict):
             naa['mac']['bmc']=km.str2mac(aa.get('UUID').split('-')[-1])
         aa=self.Get('Systems/1')
-        if aa:
+        if isinstance(aa,dict):
             naa['mac']['lan']=km.str2mac(aa.get('UUID').split('-')[-1])
         aa=self.Get('Chassis/1')
-        if aa:
+        if isinstance(aa,dict):
             manufacturer=aa.get('Manufacturer')
             naa['manufacturer']=manufacturer
             naa['boardid']=aa.get('Oem',{}).get(manufacturer,{}).get('BoardID')
@@ -713,25 +724,26 @@ class Redfish:
         return self.Post('Systems/1/Bios/Actions/Bios.ResetBios')
 
     def VirtualMedia(self,mode='floppy'):
-        vv=self.Get('Managers/1/VirtualMedia')
         mode=mode.lower()
         info=[]
-        for ii in vv.get('Members',[]):
-            redfish_path=None
-            if mode == 'floppy' and os.path.basename(ii.get('@odata.id')).startswith('Floppy'):
-                redfish_path=ii.get('@odata.id')
-            elif mode == 'cd' and os.path.basename(ii.get('@odata.id')).startswith('CD'):
-                redfish_path=ii.get('@odata.id')
-            elif mode == 'all':
-                redfish_path=ii.get('@odata.id')
-            if redfish_path:
-                aa=self.Get(redfish_path)
-                if aa:
-                    if aa.get('Inserted'):
-                        if aa.get('ConnectedVia') == 'URI':
-                            info.append('SUM:{}'.format(aa.get('Id')))
-                        elif aa.get('ConnectedVia') == 'Applet':
-                            info.append('KVM:{}'.format(aa.get('Id')))
+        vv=self.Get('Managers/1/VirtualMedia')
+        if isinstance(vv,dict):
+            for ii in vv.get('Members',[]):
+                redfish_path=None
+                if mode == 'floppy' and os.path.basename(ii.get('@odata.id')).startswith('Floppy'):
+                    redfish_path=ii.get('@odata.id')
+                elif mode == 'cd' and os.path.basename(ii.get('@odata.id')).startswith('CD'):
+                    redfish_path=ii.get('@odata.id')
+                elif mode == 'all':
+                    redfish_path=ii.get('@odata.id')
+                if redfish_path:
+                    aa=self.Get(redfish_path)
+                    if aa:
+                        if aa.get('Inserted'):
+                            if aa.get('ConnectedVia') == 'URI':
+                                info.append('SUM:{}'.format(aa.get('Id')))
+                            elif aa.get('ConnectedVia') == 'Applet':
+                                info.append('KVM:{}'.format(aa.get('Id')))
         if info:
             return ','.join(info)
         return False
@@ -740,7 +752,7 @@ class Redfish:
         old=km.now()
         while km.now() - old < timeout:
             aa=self.Get('Systems')
-            if aa is False:
+            if not isinstance(aa,dict):
                 stdout('.')
                 time.sleep(1)
                 continue
