@@ -611,7 +611,7 @@ class Redfish:
         aa=self.Get('Systems/1')
         if isinstance(aa,dict):
             naa['lan']=km.str2mac(aa.get('UUID').split('-')[-1])
-        if naa['lan'] and naa['lan'] == naa['bmc']:
+        if naa.get('lan') and naa['lan'] == naa.get('bmc'):
             rf_net=self.Network()
             for nid in rf_net:
                 for pp in rf_net[nid].get('port',{}):
@@ -641,14 +641,14 @@ class Redfish:
                         naa[ai_id]['pci']='{}({})'.format(ai.get('Controllers')[0].get('PCIeInterface',{}).get('PCIeType'),ai.get('Controllers')[0].get('PCIeInterface',{}).get('LanesInUse'))
                         naa[ai_id]['max_pci']='{}({})'.format(ai.get('Controllers')[0].get('PCIeInterface',{}).get('MaxPCIeType'),ai.get('Controllers')[0].get('PCIeInterface',{}).get('MaxLanes'))
                         naa[ai_id]['location']='{}'.format(ai.get('Controllers')[0].get('Location',{}).get('PartLocation',{}).get('LocationOrdinalValue'))
-                naa[ai_id]['port']={}
-                port=self.Get(ai.get('NetworkPorts').get('@odata.id'))
-                if isinstance(port,dict):
-                    for pp in port.get('Members'):
-                        port_q=self.Get(pp.get('@odata.id'))
-                        naa[ai_id]['port'][port_q.get('Id')]={}
-                        naa[ai_id]['port'][port_q.get('Id')]['mac']=port_q.get('AssociatedNetworkAddresses')[0]
-                        naa[ai_id]['port'][port_q.get('Id')]['state']=port_q.get('LinkStatus')
+                    naa[ai_id]['port']={}
+                    port=self.Get(ai.get('NetworkPorts').get('@odata.id'))
+                    if isinstance(port,dict):
+                        for pp in port.get('Members'):
+                            port_q=self.Get(pp.get('@odata.id'))
+                            naa[ai_id]['port'][port_q.get('Id')]={}
+                            naa[ai_id]['port'][port_q.get('Id')]['mac']=port_q.get('AssociatedNetworkAddresses')[0]
+                            naa[ai_id]['port'][port_q.get('Id')]['state']=port_q.get('LinkStatus')
         return naa
 
     def Memory(self):
