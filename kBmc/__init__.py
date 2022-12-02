@@ -603,7 +603,7 @@ class Redfish:
             naa['status']=aa.get('Status',{}).get('State')
         return naa
 
-    def BaseMac(self):
+    def BaseMac(self,port=None):
         naa={}
         aa=self.Get('Managers/1')
         if isinstance(aa,dict):
@@ -1022,10 +1022,18 @@ class kBmc:
                 remain_time=data.get('timeout') - (km.now() - start_time)
                 data['remain_time']=remain_time
                 if remain_time <= 0:
-                    data['done']={km.now():'Timeout for {}'.format('_'.join(monitor_status))}
+                    ss=''
+                    for i in data['monitored_status']:
+                        ss='{}->{}'.format(ss,next(iter(i))) if ss else next(iter(i))
+                    data['done']={km.now():'Timeout for {} with state {}'.format('_'.join(monitor_status),ss)}
+                    data['done_reason']='timeout'
                     return
                 if data.get('stop'):
-                    data['done']={km.now():'Got STOP for {}'.format('_'.join(monitor_status))}
+                    ss=''
+                    for i in data['monitored_status']:
+                        ss='{}->{}'.format(ss,next(iter(i))) if ss else next(iter(i))
+                    data['done']={km.now():'Got STOP for {} with state {}'.format('_'.join(monitor_status),ss)}
+                    data['done_reason']='stop'
                     return
 
                 # Get current power status
@@ -1121,6 +1129,7 @@ class kBmc:
                 time.sleep(monitor_interval)
         if err_cnt > 2 and get_current_power[0] == 'error':
             data['done']={km.now():'Unknown state because can not read sensor data'}
+            data['done_reason']='error'
         else:
             ss=''
             for i in data['monitored_status']:
@@ -1128,6 +1137,7 @@ class kBmc:
             if data.get('repeat',{}).get('num'):
                 ss=ss+' ({} times repeted off/on during monitoring)'.format(data.get('repeat',{}).get('num'))
             data['done']={km.now():ss}
+            data['done_reason']='ok'
 
     def power_monitor(self,timeout=1200,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=600,sensor_off_monitor=0,monitor_interval=5,reset_after_unknown=0,start=True,background=False,status_log=False,**opts):
         #timeout: monitoring timeout
