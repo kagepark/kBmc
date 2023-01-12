@@ -757,20 +757,15 @@ class Redfish:
 
 class kBmc:
     def __init__(self,*inps,**opts):
-        self.ip=opts.get('ipmi_ip')
-        if not self.ip: self.ip=opts.get('ip')
-        self.port=opts.get('ipmi_port',(623,664,443))
-        self.mac=opts.get('mac')
-        if not self.mac: self.mac=opts.get('bmc_mac')
-        if not self.mac: self.mac=opts.get('ipmi_mac')
+        self.ip=Get(inps,0) if Get(inps,0,err=True) else Get(opts,['ip','ipmi_ip'],default=None,err=True,peel='force')
+        self.user=Get(inps,1) if Get(inps,1,err=True) else Get(opts,['user','ipmi_user'],default='ADMIN',err=True,peel='force')
+        self.passwd=Get(inps,2) if Get(inps,2,err=True) else Get(opts,['password','passwd','ipmi_pass'],default='ADMIN',err=True,peel='force')
+        self.port=Get(opts,['port','ipmi_port'],default=(623,664,443),err=True,peel='force')
+        Get(opts,['port','ipmi_port'],default=(623,664,443),err=True,peel='force')
+        self.mac=Get(opts,['mac','ipmi_mac','bmc_mac'],default=None,err=True,peel='force')
+        self.upasswd=Get(opts,['ipmi_upass','upasswd'],default=None,err=True,peel='force')
         self.eth_mac=opts.get('eth_mac')
         self.eth_ip=opts.get('eth_ip')
-        self.user=opts.get('ipmi_user')
-        if not self.user: self.user=opts.get('user','ADMIN')
-        self.passwd=opts.get('ipmi_pass')
-        if not self.passwd:  self.passwd=opts.get('passwd','ADMIN') # current password
-        self.upasswd=opts.get('ipmi_upass')
-        if not self.upasswd: self.upasswd=opts.get('upasswd')
         self.redfish_hi=opts.get('redfish_hi')
         self.err={}
         self.warning={}
@@ -1156,7 +1151,7 @@ class kBmc:
             rt['worker'].start()
             return rt
         else:
-            self.power_status_monitor(monitor_status,rt,self.power_get_status,keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,status_log,monitor_interval,timeout,reset_after_unknown)
+            aa=self.power_status_monitor(monitor_status,rt,self.power_get_status,keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,status_log,monitor_interval,timeout,reset_after_unknown)
             return rt
 
     def check(self,mac2ip=None,cancel_func=None):
