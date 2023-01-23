@@ -1268,6 +1268,7 @@ class kBmc:
     def find_user_pass(self,ip=None,default_range=4,check_cmd='ipmi power status',cancel_func=None,error=True):
         if cancel_func is None: cancel_func=self.cancel_func
         if ip is None: ip=self.ip
+        if not IpV4(ip): return False,None,None
         test_user=MoveData(self.test_user[:],self.user,to='first')
         tt=1
         if len(self.test_passwd) > default_range: tt=2
@@ -1544,8 +1545,7 @@ class kBmc:
             return True,self.mac
         if ip is None: ip=self.ip
         ok,user,passwd=self.find_user_pass()
-        #if user is None: user=self.user
-        #if passwd is None: passwd=self.passwd
+        if not ok: return False,None
         for mm in self.mode:
             name=mm.__name__
             cmd_str=mm.cmd_str('ipmi lan mac')
