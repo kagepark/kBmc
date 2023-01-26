@@ -1633,11 +1633,11 @@ class kBmc:
             elif name == 'ipmitool':
                 if mode in [None,'order','status']:
                     if mode in ['order',None]:
+                        #If exist redfish then try redfish first
                         if self.redfish:
                             ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
                             rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
                             return True,rf.Boot(boot='order')
-                        else:
 # Boot Flags :
 #   - Boot Flag Invalid
 #   - Options apply to only next boot
@@ -1646,12 +1646,12 @@ class kBmc:
 #   - Console Redirection control : System Default
 #   - BIOS verbosity : Console redirection occurs per BIOS configuration setting (default)
 #   - BIOS Mux Control Override : BIOS uses recommended setting of the mux at the end of POST
-                            rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5'))
-                            if rc[0]:
-                                found=FIND(rc[1]).Find('- Boot Device Selector : (\w.*)')
-                                if found:
-                                    return True,found[0]
-                                return True,None
+                        rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5'))
+                        if rc[0]:
+                            found=FIND(rc[1]).Find('- Boot Device Selector : (\w.*)')
+                            if found:
+                                return True,found[0]
+                            return True,None
                     elif mode == 'status':
                         status=False
                         efi=False
@@ -1660,16 +1660,15 @@ class kBmc:
                             ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
                             rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
                             rf_boot_info=rf.Boot()
-                            boot_order_enable=rf_boot_info.get('order',{}).get('enable','')
-                            if boot_order_enable == 'Disabled': #Follow BIOS setting
+                            if rf_boot_info.get('order',{}).get('enable','') == 'Disabled': #Follow BIOS setting
                                 if rf_boot_info.get('bios',{}).get('mode','') == 'Dual':
                                     if 'UEFI PXE' in Get(rf_boot_info.get('bios',{}).get('order',[]),0,default=''):
-                                        efi=True
                                         status='pxe'
+                                        efi=True
                                         persistent=True
                                     elif 'Network:IBA' in Get(rf_boot_info.get('bios',{}).get('order',[]),0,default=''):
-                                        efi=False
                                         status='pxe'
+                                        efi=False
                                         persistent=True
                                 else:
                                     efi=True if rf_boot_info.get('bios',{}).get('mode','') == 'UEFI' else False
@@ -1680,36 +1679,36 @@ class kBmc:
                                 efi=True if rf_boot_info.get('order',{}).get('mode','') == 'UEFI' else False
                                 status=rf_boot_info.get('order',{}).get('1','').lower()
                                 persistent=True if rf_boot_info.get('order',{}).get('enable','') == 'Continuous' else False
-                        else:
-                            if bios_cfg:
-                                bios_cfg=self.find_uefi_legacy(bioscfg=bios_cfg)
-                                if krc(rc,chk=True): # ipmitool bootorder
-                                    status='No override'
-                                    for ii in Get(rc[1],1).split('\n'):
-                                        if 'Options apply to all future boots' in ii:
-                                            persistent=True
-                                        elif 'BIOS EFI boot' in ii:
-                                            efi=True
-                                        elif 'Boot Device Selector :' in ii:
-                                            status=ii.split(':')[1]
-                                            break
-                                    if self.log:
-                                        self.log("Boot mode Status:{}, EFI:{}, Persistent:{}".format(status,efi,persistent),log_level=7)
-                                if krc(bios_cfg,chk=True): #BIOS CFG file
-                                    bios_uefi=Get(bios_cfg,1)
-                                    if 'EFI' in bios_uefi[0:-1] or 'UEFI' in bios_uefi[0:-1] or 'IPXE' in bios_uefi[0:-1]:
+                            return [status,efi,persistent]
+                        if bios_cfg:
+                            bios_cfg=self.find_uefi_legacy(bioscfg=bios_cfg)
+                            if krc(rc,chk=True): # ipmitool bootorder
+                                status='No override'
+                                for ii in Get(rc[1],1).split('\n'):
+                                    if 'Options apply to all future boots' in ii:
+                                        persistent=True
+                                    elif 'BIOS EFI boot' in ii:
                                         efi=True
-                            else:
-                                rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5'))
-                                if rc[0]:
-                                    efi_found=FIND(rc[1]).Find('- BIOS (\w.*) boot')
-                                    if efi_found:
-                                        if efi_found[0] == 'EFI':
-                                            efi=True
-                                    found=FIND(rc[1]).Find('- Boot Device Selector : (\w.*)')
-                                    if found:
-                                        if 'Force' in found[0]:
-                                            persistent=True
+                                    elif 'Boot Device Selector :' in ii:
+                                        status=ii.split(':')[1]
+                                        break
+                                if self.log:
+                                    self.log("Boot mode Status:{}, EFI:{}, Persistent:{}".format(status,efi,persistent),log_level=7)
+                            if krc(bios_cfg,chk=True): #BIOS CFG file
+                                bios_uefi=Get(bios_cfg,1)
+                                if 'EFI' in bios_uefi[0:-1] or 'UEFI' in bios_uefi[0:-1] or 'IPXE' in bios_uefi[0:-1]:
+                                    efi=True
+                        else:
+                            rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5'))
+                            if rc[0]:
+                                efi_found=FIND(rc[1]).Find('- BIOS (\w.*) boot')
+                                if efi_found:
+                                    if efi_found[0] == 'EFI':
+                                        efi=True
+                                found=FIND(rc[1]).Find('- Boot Device Selector : (\w.*)')
+                                if found:
+                                    if 'Force' in found[0]:
+                                        persistent=True
                         return [status,efi,persistent]
                 elif mode not in chk_boot_mode:
                     self.warn(_type='boot',msg="Unknown boot mode({}) at {}".format(mode,name))
@@ -1877,20 +1876,22 @@ class kBmc:
                 ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
                 #Check Status
                 boot_mode_state=self.bootorder(mode='status')
-                #if IsSame(boot_mode,'pxe') and (isinstance(boot_mode_state[0],str) and 'pxe' in boot_mode_state[0].lower()) and IsSame(ipxe,boot_mode_state[1]) and IsSame(order,boot_mode_state[2]):
-                if IsSame(boot_mode,boot_mode_state[0]) and IsSame(ipxe,boot_mode_state[1]) and IsSame(order,boot_mode_state[2]):
-                    break
-                #Setup Boot order
+                rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
+                if IsSame(boot_mode,boot_mode_state[0]) and IsSame(ipxe,boot_mode_state[1]):
+                    if boot_mode_state[2] is True or IsSame(order,boot_mode_state[2]):
+                        print('break')
+                        break
+                #If boot_mode_state is False or different condition then setup Boot order
                 rf_fail=True
                 if self.redfish:
                     rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
-                    ipxe=True if rf.Boot(simple_mode=True) in ['UEFI','EFI'] else False
+                    ipxe=True if rf.Boot(simple_mode=True) in ['UEFI','EFI'] or boot_mode == 'ipxe' else False
                     printf('Set Boot mode to {} with iPXE({})(Redfish)({}/{})\n'.format(boot_mode,ipxe,ii,retry),log=self.log,log_level=3)
                     rf_boot_mode='pxe' if boot_mode in ['ipxe','pxe'] else boot_mode
-                    rf_boot=rf.Boot(boot=rf_boot_mode,keep='keep')
+                    rf_boot=rf.Boot(boot=rf_boot_mode,mode='UEFI' if ipxe is True else 'Legacy',keep='keep')
                     rf_fail=False if rf_boot else True
                 if rf_fail or not self.redfish:
-                    ipxe=True if ipxe in ['on','On',True,'True'] else False
+                    ipxe=True if ipxe in ['on','On',True,'True'] or boot_mode in ['ipxe','uefi','efi'] else False
                     printf('Set Boot mode to {} with iPXE({})(ipmitool)({}/{})\n'.format(boot_mode,ipxe,ii,retry),log=self.log,log_level=3)
                     self.bootorder(mode=boot_mode,ipxe=ipxe,persistent=force,force=force) 
                 time.sleep(2)
