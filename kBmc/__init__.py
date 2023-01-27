@@ -1879,7 +1879,6 @@ class kBmc:
                 rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
                 if IsSame(boot_mode,boot_mode_state[0]) and IsSame(ipxe,boot_mode_state[1]):
                     if boot_mode_state[2] is True or IsSame(order,boot_mode_state[2]):
-                        print('break')
                         break
                 #If boot_mode_state is False or different condition then setup Boot order
                 rf_fail=True
