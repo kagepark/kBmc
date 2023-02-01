@@ -16,6 +16,10 @@ power_off_tag='_'
 power_down_tag='⨪'
 power_unknown_tag='·'
 
+def stdout(a):
+    sys.stdout.write(a)
+    sys.stdout.flush()
+
 class Ipmitool:
     def __init__(self,**opts):
         self.__name__='ipmitool'
@@ -196,7 +200,7 @@ class Redfish:
                         if current_power == 'off':
                             time.sleep(2)
                             break
-                        StdOut('.')
+                        stdout('.')
                         time.sleep(1)
                 rt=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': 'On'})
             if sensor_up > 0:
@@ -208,7 +212,7 @@ class Redfish:
                     if cmd_state(cmd,on_s=['reset','on','reboot','off_on']) == get_current_power_state().lower():
                         time.sleep(1)
                         return True
-                    StdOut(power_unknown_tag)
+                    stdout(power_unknown_tag)
                     time.sleep(3)
                 return False
         else:
@@ -501,11 +505,11 @@ class Redfish:
                             if Time.Out(power_timeout): return False
                             if rf.Power() == 'on':
                                 break
-                            StdOut(power_unknown_tag)
+                            stdout(power_unknown_tag)
                             time.sleep(3)
                         Time=TIME()
                         while True:
-                            StdOut(power_up_tag)
+                            stdout(power_up_tag)
                             time.sleep(3)
                             if Time.Out(monitor_timeout): return False
                             #if boot_mode_bios()[0] == mode:
@@ -535,7 +539,7 @@ class Redfish:
                                 return True
                         except:
                             stat=power_off_tag
-            StdOut(stat)
+            stdout(stat)
             time.sleep(3)
         return False
 
@@ -559,7 +563,7 @@ class Redfish:
                                 stat=power_off_tag
                             else:
                                 return True
-            StdOut(stat)
+            stdout(stat)
             time.sleep(3)
         return False
 
@@ -744,7 +748,7 @@ class Redfish:
         while TIME().Int() - old < timeout:
             aa=self.Get('Systems')
             if not isinstance(aa,dict):
-                StdOut('.')
+                stdout('.')
                 time.sleep(1)
                 continue
             else:
@@ -920,7 +924,7 @@ class kBmc:
             
             
         def reset_condition(data,a,b):
-            if status_log: StdOut('+')
+            if status_log: stdout('+')
             data['symbol']='+'
             data['repeat']['num']+=1
             data['repeat']['time'].append(TIME().Int())
@@ -975,13 +979,13 @@ class kBmc:
         # first initial condition check
         on_off=is_on_off(get_current_power,2,data['init'].get('time'),mode=['a'])
         if on_off == 'on':
-            if status_log: StdOut(power_on_tag)
+            if status_log: stdout(power_on_tag)
             data['symbol']=power_on_tag
         elif on_off == 'off':
-            if status_log: StdOut(power_off_tag)
+            if status_log: stdout(power_off_tag)
             data['symbol']=power_off_tag
         else:
-            if status_log: StdOut(power_unknown_tag)
+            if status_log: stdout(power_unknown_tag)
             data['symbol']=power_unknown_tag
         # if starting check then start check condition from initialization
         if data.get('start'):
@@ -1035,10 +1039,10 @@ class kBmc:
                 on_off=is_on_off(get_current_power,data['sensor_{}_monitor'.format(monitor_status[ms_id])],data['status'].get(monitor_status[ms_id],(TIME().Int(),0,0))[0],now=data['current'].get('state')[0],mode=['a'],sensor=True)
                 if on_off in ['on','off']:
                     if on_off == 'on':
-                        if status_log: StdOut(power_on_tag)
+                        if status_log: stdout(power_on_tag)
                         data['symbol']=power_on_tag
                     else:
-                        if status_log: StdOut(power_off_tag)
+                        if status_log: stdout(power_off_tag)
                         data['symbol']=power_off_tag
                     #suddenly changed state then initialize monitoring value
                     if on_off != before_on_off:
@@ -1072,7 +1076,7 @@ class kBmc:
                         break
                 elif on_off == 'up':
                     if before_on_off == 'on':
-                        if status_log: StdOut(power_off_tag)
+                        if status_log: stdout(power_off_tag)
                         data['symbol']=power_off_tag
                         on_off='off'
                         if monitor_status[ms_id] == 'off':
@@ -1087,14 +1091,14 @@ class kBmc:
                             reset_condition(data,before_on_off,on_off)
                             resetted=True
                     else: 
-                        if status_log: StdOut(power_up_tag)
+                        if status_log: stdout(power_up_tag)
                         data['symbol']=power_up_tag
                 elif on_off == 'dn':
-                    if status_log: StdOut(power_down_tag)
+                    if status_log: stdout(power_down_tag)
                     data['symbol']=power_down_tag
                 else: #Unknown
                     data['status']={}
-                    if status_log: StdOut(power_unknown_tag)
+                    if status_log: stdout(power_unknown_tag)
                     data['symbol']=power_unknown_tag
                     if not isinstance(start_unknown,int): start_unknown=TIME().Int()
                     # if reset_after_unknown has a value then over keep unknown state then reset the BMC
@@ -2121,7 +2125,7 @@ if __name__ == "__main__":
         direct=agc.get('direct',False)
         log_level=agc.get('log_level',6)
         ll=agc.get('log_level',5)
-        if direct: StdOut(msg)
+        if direct: stdout(msg)
         elif log_level < ll:
             print(msg)
 
