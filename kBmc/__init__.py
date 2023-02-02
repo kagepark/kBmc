@@ -783,6 +783,9 @@ class kBmc:
         if self.passwd in self.test_passwd: self.test_passwd.remove(self.passwd)
         self.mode=opts.get('mode',[Ipmitool()])
         self.log_level=opts.get('log_level',5)
+        if self.log is None:
+            global printf_log_base
+            printf_log_base=6
         self.timeout=opts.get('timeout',1800)
         self.checked_ip=False
         self.checked_port=False
@@ -2112,6 +2115,214 @@ class kBmc:
                     if not ok: break
         return False
         
+    def screen(self,cmd='info',title=None,find=[],timeout=600,session_out=10,stdout=False):
+        def _id_(title=None):
+            scs=[]
+            rc=rshell('''screen -ls''')
+            if rc[0] == 0:
+                for ii in rc[1].split('\n')[1:]:
+                    jj=ii.split()
+                    if len(jj) == 2:
+                        if title:
+                            zz=jj[0].split('.')
+                            if zz[1] == title:
+                                scs.append(jj[0])
+                        else:
+                            scs.append(jj[0])
+            return scs
+
+        def _kill_(title,log_file=None):
+            ids=_id_(title)
+            if len(ids) == 1:
+                for i in range(0,5):
+                    rc=rshell('''screen -X -S {} quit'''.format(ids[0]))
+                    if rc[0] == 0:
+                        if isinstance(log_file,str) and os.path.isfile(log_file): os.unlink(log_file)
+                        return True
+                    time.sleep(1)
+            return False
+
+        def _log_(title,cmd):
+            pid=os.getpid()
+            tmp_file='/tmp/.slc.{}_{}.cfg'.format(title,pid)
+            log_file='/tmp/.screen_ck_{}_{}.log'.format(title,pid)
+            if os.path.isfile(log_file):
+                log_file=''
+            with open(tmp_file,'w') as f:
+                f.write('''logfile {}\nlogfile flush 0\nlog on\n'''.format(log_file))
+            if os.path.isfile(tmp_file):
+                mm=self.get_mode('ipmitool')
+                cmd_str_dict=mm.cmd_str(cmd)
+                if cmd_str_dict[0]:
+                    ok,ipmi_user,ipmi_pass=self.find_user_pass()
+                    if not ok: return False
+                    base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':self.ip,'user':ipmi_user,'passwd':ipmi_pass})
+                    cmd_str='{} {}'.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
+                rc=rshell('''screen -c {} -dmSL "{}" {}'''.format(tmp_file,title,cmd_str))
+                if krc(rc,chk=True):
+                    if rc[0] == 0:
+                        for ii in range(0,50):
+                            if os.path.isfile(log_file):
+                                os.unlink(tmp_file)
+                                return log_file
+                            time.sleep(0.1)
+                    elif rc[0] == 127:
+                        print(rc[2])
+            return False
+
+        def _info_():
+            mm=self.get_mode('ipmitool')
+            rc=self.run_cmd(mm.cmd_str("""sol info"""))
+            enable=False
+            channel=1
+            rate=9600
+            port=623
+            if krc(rc,chk=True):
+                for ii in rc[1][1].split('\n'):
+                    ii_a=ii.split()
+                    if ii_a[0] == 'Enabled' and ii_a[-1] == 'true':
+                        enable=True
+                    elif ii_a[0] == 'Volatile':
+                        if '.' in ii_a[-1]:
+                            try:
+                                rate=int(float(ii_a[-1]) * 1000)
+                            except:
+                                pass
+                        else:
+                            try:
+                                rate=int(ii_a[-1])
+                            except:
+                                pass
+                    elif ii_a[0] == 'Payload':
+                        if ii_a[1] == 'Channel':
+                            try:
+                                channel=int(ii_a[-2])
+                            except:
+                                pass
+                        elif ii_a[1] == 'Port':
+                            try:
+                                port=int(ii_a[-1])
+                            except:
+                                pass
+            return enable,rate,channel,port,'~~~ console=ttyS1,{}'.format(rate)
+
+        def _monitor_(title,find=[],timeout=600,session_out=30,stdout=False):
+            # Linux OS Boot (Completely kernel loaded): find=['initrd0.img','\xff']
+            # PXE Boot prompt: find=['boot:']
+            # PXE initial : find=['PXE ']
+            # DHCP initial : find=['DHCP']
+            # PXE Loading : find=['pxe... ok','Trying to load files']
+            # ex: aa=screen(cmd='monitor',title='test',find=['pxe... ok','Trying to load files'],timeout=300)
+            if not isinstance(title,str) or not title:
+                print('no title')
+                return False,'no title'
+            scr_id=_id_(title)
+            if scr_id:
+                print('Already has the title at {}'.format(scr_id))
+                return False,'Already has the title at {}'.format(scr_id)
+            if _info_()[0] is False:
+                print('The BMC is not support SOL function now. Please check up the BIOS or BMC')
+                return False,'The BMC is not support SOL function now. Please check up the BIOS or BMC'
+            log_file=_log_(title,'sol activate')
+            if not log_file:
+                return False,'Log file not found'
+            mon_line=0
+            mon_line_len=0
+            old_mon_line=-1
+            found=0
+            find_num=len(find)
+            Time=TIME()
+            sTime=TIME()
+            old_end_line=''
+            while True:
+                if not os.path.isfile(log_file):
+                    if sTime.Out(session_out):
+                        print('Lost log file({})'.format(log_file))
+                        return False,'Lost log file'
+                    time.sleep(1)
+                    continue
+                with open(log_file,'rb') as f:
+                    tmp=f.read()
+                tmp=CleanAnsi(Str(tmp))
+                if '\x1b' in tmp:
+                    tmp_a=tmp.split('\x1b')
+                elif '\r\n' in tmp:
+                    tmp_a=tmp.split('\r\n')
+                elif '\r' in tmp:
+                    tmp_a=tmp.split('\r')
+                else:
+                    tmp_a=tmp.split('\n')
+                tmp_n=len(tmp_a)
+                # Time Out
+                if Time.Out(timeout):
+                    print('Monitoring timeout({} sec)'.format(timeout))
+                    _kill_(title,log_file)
+                    if old_end_line:
+                        return False,old_end_line
+                    return False,tmp_a[mon_line-1]
+                # Analysis log
+                for ii in range(mon_line,tmp_n):
+                    if stdout:
+                        if len(tmp_a[ii]) != mon_line_len:
+                            tmp_a_a=tmp_a[ii].split('                                                    ')
+                            print(tmp_a_a[-1])
+                    if find: # check stop condition
+                        for ff in range(0,find_num):
+                            find_i=find[ff]
+                            found_i=tmp_a[ii].find(find_i)
+                            if found_i < 0:
+                                if ff > 0 or ff == find_num:
+                                    del find[ff-1]
+                                    find_num=find_num-1
+                                break #if can not find first item then no more find
+                            found+=1
+                            if found >= find_num:
+                                _kill_(title,log_file)
+                                if stdout: print('Found all requirements')
+                                return True,'Found all requirements'
+                    # If not update any screen information then kill early session
+                    if mon_line == tmp_n-1 and mon_line_len == len(tmp_a[tmp_n-1]):
+                        if 'SOL Session operational' in old_end_line:
+                            #If SOL Session operational message only then send <Enter> key
+                            # control+c : "^C", Enter: "^M", any command "<linux command> ^M"
+                            rshell('screen -S {} -p 0 -X stuff "^M"'.format(title))
+                        elif 'SOL Session operational' in tmp_a[mon_line-1]:
+                            # If BIOS initialization then increase session out time to 480(8min)
+                            if old_end_line and old_end_line.split()[-1].split('.')[0] in ['Initialization','Started','connect']:
+                                #session_out=480
+                                session_out=timeout
+                            if sTime.Out(session_out):
+                                msg='maybe not updated any screen information'
+                                if stdout: print('{} (over {}seconds)'.format(msg,session_out))
+                                _kill_(title,log_file)
+                                if old_end_line:
+                                    return False,old_end_line
+                                return False,tmp_a[mon_line-1]
+                        time.sleep(1)
+                        break 
+                    else:
+                        sTime.Reset()
+                if tmp_n > 0:
+                    mon_line=tmp_n -1
+                else:
+                    mon_line=tmp_n
+                old_end_line=tmp_a[mon_line]
+                mon_line_len=len(old_end_line)
+                time.sleep(1)
+            return False,None
+        if cmd == 'info':
+            return _info_()
+        elif cmd == 'id':
+            return _id_(title),None
+        elif cmd == 'kill':
+            if title: return _kill_(title)
+            return False,None
+        else:
+            return _monitor_(title,find,timeout,session_out,stdout)
+
+      
+
+
 if __name__ == "__main__":
     import SysArg
     import sys
