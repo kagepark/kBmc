@@ -781,7 +781,14 @@ class kBmc:
             if ii not in self.test_passwd: self.test_passwd.append(ii)
         if self.user in self.test_user: self.test_user.remove(self.user)
         if self.passwd in self.test_passwd: self.test_passwd.remove(self.passwd)
-        self.mode=opts.get('mode',[Ipmitool()])
+        if opts.get('mode'):
+            self.mode=opts.get('mode')
+        else:
+            if opts.get('smc_file') and os.path.isfile(opts.get('smc_file')):
+                self.mode=opts.get('mode',[Ipmitool(),Smcipmitool(smc_file=opts.get('smc_file'))])
+            else:
+                self.mode=opts.get('mode',[Ipmitool()])
+
         self.log_level=opts.get('log_level',5)
         if self.log is None:
             global printf_log_base
@@ -1704,10 +1711,13 @@ class kBmc:
                                 if efi_found:
                                     if efi_found[0] == 'EFI':
                                         efi=True
+                                        status='pxe'
                                 found=FIND(rc[1]).Find('- Boot Device Selector : (\w.*)')
                                 if found:
                                     if 'Force' in found[0]:
                                         persistent=True
+                                    if 'PXE' in found[0]:
+                                        status='pxe'
                         return [status,efi,persistent]
                 elif mode not in chk_boot_mode:
                     self.warn(_type='boot',msg="Unknown boot mode({}) at {}".format(mode,name))
@@ -1948,11 +1958,13 @@ class kBmc:
                         continue
                 printf('Power {} at {} (try:{}/{}) (limit:{} sec)'.format(cmd,self.ip,ii,retry+1,timeout),log=self.log,log_level=3)
                 chk=1
-                for rr in list(mm.power_mode[cmd]):
-                    verify_status=rr.split(' ')[-1]
+                do_power_mode=mm.power_mode[cmd]
+                verify_num=len(do_power_mode)
+                for rr in range(0,verify_num):
+                    verify_status=do_power_mode[rr].split(' ')[-1]
                     if verify:
                         if chk == 1 and init_rc[0] and init_status == verify_status:
-                            if chk == len(mm.power_mode[cmd]):
+                            if chk == verify_num:
                                 return True,verify_status,ii
                             chk+=1
                             continue
@@ -1965,8 +1977,8 @@ class kBmc:
                                  self.warn(_type='power',msg="Can not set {} on the off mode".format(verify_status))
                                  printf(' ! can not {} the power'.format(verify_status),log=self.log,log_level=6)
                                  return False,'can not {} the power'.format(verify_status)
-                    rc=self.run_cmd(mm.cmd_str(rr),retry=retry)
-                    printf('rr:{} cmd:{} rc:{}'.format(rr,mm.cmd_str(rr),rc),log=self.log,log_level=8)
+                    rc=self.run_cmd(mm.cmd_str(do_power_mode[rr]),retry=retry)
+                    printf('{} : {}'.format(do_power_mode[rr],rc),log=self.log,log_level=8)
                     if krc(rc,chk='error'):
                         return rc
                     if krc(rc,chk=True):
@@ -2009,6 +2021,19 @@ class kBmc:
                             time.sleep(3)
                         chk+=1
                     else:
+                        if verify_num-1 > rr:
+                            if verify_status in ['off','down']:
+                                for i in range(0,10):
+                                    time.sleep(3)
+                                    init_rc=self.run_cmd(mm.cmd_str('ipmi power status'))
+                                    if krc(init_rc,chk=True):
+                                        if init_rc[1][1].split()[-1] == 'off':
+                                            chkd=True
+                                            chk+=1
+                                            time.sleep(2)
+                                            break
+                                    StdOut('.')
+                            continue
                         return True,Get(Get(rc,1),1),ii
                 time.sleep(3)
         if chkd:
@@ -2234,6 +2259,9 @@ class kBmc:
             Time=TIME()
             sTime=TIME()
             old_end_line=''
+            if isinstance(find,str): find=[find]
+            find_type='or' if isinstance(find,tuple) else 'and'
+            find=list(find)
             while True:
                 if not os.path.isfile(log_file):
                     if sTime.Out(session_out):
@@ -2271,15 +2299,22 @@ class kBmc:
                             find_i=find[ff]
                             found_i=tmp_a[ii].find(find_i)
                             if found_i < 0:
-                                if ff > 0 or ff == find_num:
+                                if find_type == 'and' and (ff > 0 or ff == find_num):
                                     del find[ff-1]
                                     find_num=find_num-1
-                                break #if can not find first item then no more find
+                                if find_type == 'or':
+                                    continue
+                                else:
+                                    break #if can not find first item then no more find
                             found+=1
-                            if found >= find_num:
+                            if find_type == 'or':
                                 _kill_(title,log_file)
-                                if stdout: print('Found all requirements')
-                                return True,'Found all requirements'
+                                return True,'Found requirement {}'.format(find_i)
+                            else:
+                                if found >= find_num:
+                                    _kill_(title,log_file)
+                                    if stdout: print('Found all requirements')
+                                    return True,'Found all requirements'
                     # If not update any screen information then kill early session
                     if mon_line == tmp_n-1 and mon_line_len == len(tmp_a[tmp_n-1]):
                         if 'SOL Session operational' in old_end_line:
@@ -2288,16 +2323,15 @@ class kBmc:
                             rshell('screen -S {} -p 0 -X stuff "^M"'.format(title))
                         elif 'SOL Session operational' in tmp_a[mon_line-1]:
                             # If BIOS initialization then increase session out time to 480(8min)
-                            if old_end_line and old_end_line.split()[-1].split('.')[0] in ['Initialization','Started','connect']:
-                                #session_out=480
-                                session_out=timeout
-                            if sTime.Out(session_out):
-                                msg='maybe not updated any screen information'
-                                if stdout: print('{} (over {}seconds)'.format(msg,session_out))
-                                _kill_(title,log_file)
-                                if old_end_line:
-                                    return False,old_end_line
-                                return False,tmp_a[mon_line-1]
+                            if not old_end_line or old_end_line.split()[-1].split('.')[0] not in ['Initialization','initialization','Started','connect','Presence','Present']:
+                                #session_out=timeout
+                                if sTime.Out(session_out):
+                                    msg='maybe not updated any screen information'
+                                    if stdout: print('{} (over {}seconds)'.format(msg,session_out))
+                                    _kill_(title,log_file)
+                                    if old_end_line:
+                                        return False,old_end_line
+                                    return False,tmp_a[mon_line-1]
                         time.sleep(1)
                         break 
                     else:
