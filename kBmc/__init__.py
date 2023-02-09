@@ -753,7 +753,13 @@ class Redfish:
 
 class kBmc:
     def __init__(self,*inps,**opts):
-        self.ip=Get(inps,0) if Get(inps,0,err=True) else Get(opts,['ip','ipmi_ip'],default=None,err=True,peel='force')
+        env=Get(inps,0) if Get(inps,0,err=True) else Get(opts,['ip','ipmi_ip'],default=None,err=True,peel='force')
+        if isinstance(env,dict):
+            if opts: env.update(opts)
+            opts=env
+            self.ip=Get(opts,['ip','ipmi_ip'],default=None,err=True,peel='force')
+        else:
+            self.ip=env
         self.user=Get(inps,1) if Get(inps,1,err=True) else Get(opts,['user','ipmi_user'],default='ADMIN',err=True,peel='force')
         self.passwd=Get(inps,2) if Get(inps,2,err=True) else Get(opts,['password','passwd','ipmi_pass'],default='ADMIN',err=True,peel='force')
         self.port=Get(opts,['port','ipmi_port'],default=(623,664,443),err=True,peel='force')
@@ -762,7 +768,6 @@ class kBmc:
         self.upasswd=Get(opts,['ipmi_upass','upasswd'],default=None,err=True,peel='force')
         self.eth_mac=opts.get('eth_mac')
         self.eth_ip=opts.get('eth_ip')
-        self.redfish_hi=opts.get('redfish_hi')
         self.err={}
         self.warning={}
         self.canceling={}
@@ -797,13 +802,18 @@ class kBmc:
         self.checked_ip=False
         self.checked_port=False
         self.org_ip='{}'.format(self.ip)
-        if opts.get('redfish') == 'auto':
-            ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
-            if ok:
-                rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
-                self.redfish=rf.IsEnabled()
-        if self.__dict__.get('redfish') is None:
-            self.redfish=True if True in [self.redfish_hi,opts.get('redfish')] else False
+        if isinstance(opts.get('redfish'),bool):
+            self.redfish=opts.get('redfish')
+        else:
+            if isinstance(opts.get('redfish_hi'),bool):
+                self.redfish=opts.get('redfish_hi')
+            else:
+                ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
+                if ok:
+                    rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
+                    self.redfish=rf.IsEnabled()
+                else:
+                    self.redfish=False
         self.power_monitor_stop=False
         self.power_get_redfish=opts.get('power_get_redfish',True)
         self.power_get_sensor=opts.get('power_get_sensor',True)
