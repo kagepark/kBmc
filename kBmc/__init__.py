@@ -22,16 +22,17 @@ class Ipmitool:
         self.tool_path=None
         self.log=opts.get('log',None)
         self.power_mode=opts.get('power_mode',{'on':['chassis power on'],'off':['chassis power off'],'reset':['chassis power reset'],'off_on':['chassis power off','chassis power on'],'on_off':['chassis power on','chassis power off'],'cycle':['chassis power cycle'],'status':['chassis power status'],'shutdown':['chassis power soft']})
-        self.ipmitool=True
+        self.ready=True
+        self.return_code={'ok':[0],'fail':[1]}
         if find_executable('ipmitool') is False:
             os.system('which apt >/dev/null && sudo apt install -y ipmitool || sudo yum install -y ipmitool')
             if find_executable('ipmitool') is False:
-                self.ipmitool=False
+                self.ready=False
 
     def cmd_str(self,cmd,**opts):
-        if not self.ipmitool:
+        if not self.ready:
             printf('Install ipmitool package(yum install ipmitool)',log=self.log,log_level=1,dsp='e')
-            return False,'ipmitool file not found',{}
+            return False,'ipmitool file not found',None,self.return_code,None
         cmd_a=cmd.split()
         option=opts.get('option','lanplus')
         if IsIn('ipmi',cmd_a,idx=0) and IsIn('power',cmd_a,idx=1) and Get(cmd_a,2) in self.power_mode:
@@ -44,23 +45,29 @@ class Ipmitool:
         elif IsIn('ipmi',cmd_a,idx=0) and IsIn('sensor',cmd_a,idx=1):
             #cmd_a=['sdr','type','Temperature']
             cmd_a=['sensor']
-        return True,{'base':'''ipmitool -I %s -H {ip} -U {user} -P '{passwd}' '''%(option),'cmd':'''%s'''%(' '.join(cmd_a))},None,{'ok':[0],'fail':[1]},None
+        return True,{'base':'''ipmitool -I %s -H {ip} -U {user} -P '{passwd}' '''%(option),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
 
 
 class Smcipmitool:
     def __init__(self,**opts):
         self.__name__='smc'
         self.smc_file=opts.get('smc_file',None)
-        if self.smc_file and not os.path.isfile(self.smc_file):
-            self.smc_file=None
+        self.ready=True
+        if not self.smc_file or not os.path.isfile(self.smc_file):
+            self.ready=False
         self.log=opts.get('log',None)
         self.power_mode=opts.get('power_mode',{'on':['ipmi power up'],'off':['ipmi power down'],'reset':['ipmi power reset'],'off_on':['ipmi power down','ipmi power up'],'on_off':['ipmi power up','ipmi power down'],'cycle':['ipmi power cycle'],'status':['ipmi power status'],'shutdown':['ipmi power softshutdown']})
+        self.return_code={'ok':[0,144],'error':[180],'err_bmc_user':[146],'err_connection':[145]}
 
     def cmd_str(self,cmd,**opts):
         cmd_a=cmd.split()
-        if not self.smc_file:
-            printf('- SMCIPMITool({}) not found'.format(self.smc_file),log=self.log,log_level=1,dsp='e')
-            return False,'SMCIPMITool file not found',{}
+        if not self.ready:
+            if self.smc_file:
+                lmmsg='- SMCIPMITool({}) not found'.format(self.smc_file)
+                printf(lmmsg,log=self.log,log_level=1,dsp='e')
+            else:
+                lmmsg='- Not assigned SMCIPMITool'
+            return False,lmmsg,None,self.return_code,None
         if IsIn('chassis',cmd_a,idx=0) and IsIn('power',cmd_a,idx=1):
             cmd_a[0] == 'ipmi'
         elif IsIn('mc',cmd_a,idx=0) and IsIn('reset',cmd_a,idx=1) and IsIn('cold',cmd_a,idx=2):
@@ -69,7 +76,7 @@ class Smcipmitool:
             cmd_a=['ipmi','lan','mac']
         elif IsIn('sdr',cmd_a,idx=0) and IsIn('Temperature',cmd_a,idx=2):
             cmd_a=['ipmi','sensor']
-        return True,{'base':'''sudo java -jar %s {ip} {user} '{passwd}' '''%(self.smc_file),'cmd':'''%s'''%(' '.join(cmd_a))},None,{'ok':[0,144],'error':[180],'err_bmc_user':[146],'err_connection':[145]},None
+        return True,{'base':'''sudo java -jar %s {ip} {user} '{passwd}' '''%(self.smc_file),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
 
 class Redfish:
     def __init__(self,**opts):
@@ -788,13 +795,14 @@ class kBmc:
             if ii not in self.test_passwd: self.test_passwd.append(ii)
         if self.user in self.test_user: self.test_user.remove(self.user)
         if self.passwd in self.test_passwd: self.test_passwd.remove(self.passwd)
+        self.cmd_module=[Ipmitool()]
         if opts.get('cmd_module') and isinstance(opts.get('cmd_module'),list):
             self.cmd_module=opts.get('cmd_module')
-        else:
-            if opts.get('smc_file') and os.path.isfile(opts.get('smc_file')):
-                self.cmd_module=[Ipmitool(),Smcipmitool(smc_file=opts.get('smc_file'))]
+        if opts.get('smc_file') and os.path.isfile(opts.get('smc_file')):
+            if isinstance(self.cmd_module,list):
+                self.cmd_module.append(Smcipmitool(smc_file=opts.get('smc_file')))
             else:
-                self.cmd_module=[Ipmitool()]
+                self.cmd_module=[Ipmitool(),Smcipmitool(smc_file=opts.get('smc_file'))]
 
         self.log_level=opts.get('log_level',5)
         if self.log is None:
@@ -1212,7 +1220,21 @@ class kBmc:
         if isinstance(self.cmd_module,list):
             for mm in self.cmd_module:
                 if Type(mm,('classobj','instance')) and IsSame(mm.__name__,name):
-                    return mm
+                    if mm.ready:
+                        return mm,'Found'
+                    else:
+                        if mm.__name == 'ipmitool':
+                            lmmsg='Please install ipmitool package!!'
+                            printf(lmmsg,log=self.log,log_level=1,dsp='e')
+                        elif mm.smc_file:
+                            lmmsg='SMCIPMITool file ({}) not found!!'.format(mm.smc_file)
+                            printf(lmmsg,log=self.log,log_level=1,dsp='e')
+                        else:
+                            lmmsg='NOT defined SMCIPMITool file parameter'
+                        return False,lmmsg
+            return None,'not defined module {}'.format(name)
+        printf('wrong cmd_module',log=self.log,log_level=1,dsp='e')
+        return None,'wrong cmd_module'
 
     def find_uefi_legacy(self,bioscfg=None): # Get UEFI or Regacy mode
         def aa(a):
@@ -1332,10 +1354,9 @@ class kBmc:
         return False,None,None
 
     def recover_user_pass(self):
-        mm=self.get_cmd_module_name('smc')
+        mm,msg=self.get_cmd_module_name('smc')
         if not mm:
-            printf("""SMCIPMITool module not found""",log=self.log,log_level=1)
-            return False,'SMCIPMITool module not found',None
+            return False,msg,None
         was_user='{}'.format(self.user)
         was_passwd='{}'.format(self.passwd)
         ok,user,passwd=self.find_user_pass()
@@ -2073,10 +2094,9 @@ class kBmc:
             return mode
 
     def lanmode(self,mode=None):
-        mm=self.get_cmd_module_name('smc')
+        mm,msg=self.get_cmd_module_name('smc')
         if not mm:
-            printf(' - SMCIPMITool not found',log=self.log,log_level=1,dsp='e')
-            return False,'SMCIPMITool not found'
+            return False,msg
         if self.lanmode_convert(mode) in [0,1,2]:
             rc=self.run_cmd(mm.cmd_str("""ipmi oem lani {}""".format(self.lanmode_convert(mode))),timeout=5)
             if krc(rc[0],chk=True):
@@ -2186,9 +2206,8 @@ class kBmc:
             with open(tmp_file,'w') as f:
                 f.write('''logfile {}\nlogfile flush 0\nlog on\n'''.format(log_file))
             if os.path.isfile(tmp_file):
-                mm=self.get_cmd_module_name('ipmitool')
+                mm,msg=self.get_cmd_module_name('ipmitool')
                 if not mm:
-                    printf("""ipmitool module not found""",log=self.log,log_level=1)
                     return False
                 cmd_str_dict=mm.cmd_str(cmd)
                 if cmd_str_dict[0]:
@@ -2213,7 +2232,7 @@ class kBmc:
             channel=1
             rate=9600
             port=623
-            mm=self.get_cmd_module_name('ipmitool')
+            mm,msg=self.get_cmd_module_name('ipmitool')
             if not mm:
                 return enable,rate,channel,port,'~~~ console=ttyS1,{}'.format(rate)
             rc=self.run_cmd(mm.cmd_str("""sol info"""))
