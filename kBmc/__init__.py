@@ -2171,61 +2171,67 @@ class kBmc:
         return False
         
     def screen(self,cmd='info',title=None,find=[],timeout=600,session_out=10,stdout=False):
+        pid=os.getpid()
+        screen_tmp_file='/tmp/.screen.{}_{}.cfg'.format(title if title else 'kBmc',pid)
+        screen_log_file='/tmp/.screen.{}_{}.log'.format(title if title else 'kBmc',pid)
         def _id_(title=None):
             scs=[]
             rc=rshell('''screen -ls''')
-            if rc[0] == 0:
-                for ii in rc[1].split('\n')[1:]:
-                    jj=ii.split()
-                    if len(jj) == 2:
-                        if title:
-                            zz=jj[0].split('.')
-                            if zz[1] == title:
-                                scs.append(jj[0])
-                        else:
+            #rc[0] should be 1, not 0
+            for ii in rc[1].split('\n')[1:]:
+                jj=ii.split()
+                if len(jj) == 2 and jj[1] == '(Detached)':
+                    if title:
+                        zz=jj[0].split('.')
+                        if '.'.join(zz[1:]) == title:
                             scs.append(jj[0])
+                    else:
+                        scs.append(jj[0])
             return scs
 
-        def _kill_(title,log_file=None):
+        def _kill_(title):
             ids=_id_(title)
             if len(ids) == 1:
-                for i in range(0,5):
+                for i in range(0,10):
                     rc=rshell('''screen -X -S {} quit'''.format(ids[0]))
                     if rc[0] == 0:
-                        if isinstance(log_file,str) and os.path.isfile(log_file): os.unlink(log_file)
+                        if os.path.isfile(screen_tmp_file): os.unlink(screen_tmp_file)
+                        if os.path.isfile(screen_log_file): os.unlink(screen_log_file)
                         return True
-                    time.sleep(1)
+                    time.sleep(0.5)
             return False
 
         def _log_(title,cmd):
-            pid=os.getpid()
-            tmp_file='/tmp/.slc.{}_{}.cfg'.format(title,pid)
-            log_file='/tmp/.screen_ck_{}_{}.log'.format(title,pid)
-            if os.path.isfile(log_file):
-                log_file=''
-            with open(tmp_file,'w') as f:
-                f.write('''logfile {}\nlogfile flush 0\nlog on\n'''.format(log_file))
-            if os.path.isfile(tmp_file):
+            omsg=''
+            with open(screen_tmp_file,'w') as f:
+                f.write('''logfile {}\nlogfile flush 0\nlog on\n'''.format(screen_log_file))
+            if os.path.isfile(screen_tmp_file):
                 mm,msg=self.get_cmd_module_name('ipmitool')
                 if not mm:
-                    return False
+                    if os.path.isfile(screen_tmp_file): os.unlink(screen_tmp_file)
+                    return False,msg
                 cmd_str_dict=mm.cmd_str(cmd)
                 if cmd_str_dict[0]:
                     ok,ipmi_user,ipmi_pass=self.find_user_pass()
-                    if not ok: return False
+                    if not ok:
+                        if os.path.isfile(screen_tmp_file): os.unlink(screen_tmp_file)
+                        return False,'IPMI User or Password not found'
                     base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':self.ip,'user':ipmi_user,'passwd':ipmi_pass})
                     cmd_str='{} {}'.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
-                rc=rshell('''screen -c {} -dmSL "{}" {}'''.format(tmp_file,title,cmd_str))
-                if krc(rc,chk=True):
-                    if rc[0] == 0:
-                        for ii in range(0,50):
-                            if os.path.isfile(log_file):
-                                os.unlink(tmp_file)
-                                return log_file
-                            time.sleep(0.1)
-                    elif rc[0] == 127:
-                        print(rc[2])
-            return False
+                rc=rshell('''screen -c {} -dmSL "{}" {}'''.format(screen_tmp_file,title,cmd_str))
+                if rc[0] == 0:
+                    for ii in range(0,50):
+                        if os.path.isfile(screen_log_file):
+                            os.unlink(screen_tmp_file)
+                            return True,'log file found'
+                        time.sleep(0.2)
+                elif rc[0] == 127:
+                    omsg=rc[2]
+            else:
+                omsg='can not create {} file'.format(screen_tmp_file)
+            if os.path.isfile(screen_tmp_file): os.unlink(screen_tmp_file)
+            if os.path.isfile(screen_log_file): os.unlink(screen_log_file)
+            return False,msg
 
         def _info_():
             enable=False
@@ -2273,18 +2279,16 @@ class kBmc:
             # PXE Loading : find=['pxe... ok','Trying to load files']
             # ex: aa=screen(cmd='monitor',title='test',find=['pxe... ok','Trying to load files'],timeout=300)
             if not isinstance(title,str) or not title:
-                print('no title')
                 return False,'no title'
             scr_id=_id_(title)
             if scr_id:
-                print('Already has the title at {}'.format(scr_id))
                 return False,'Already has the title at {}'.format(scr_id)
             if _info_()[0] is False:
-                print('The BMC is not support SOL function now. Please check up the BIOS or BMC')
                 return False,'The BMC is not support SOL function now. Please check up the BIOS or BMC'
-            log_file=_log_(title,'sol activate')
-            if not log_file:
-                return False,'Log file not found'
+            ok,msg=_log_(title,'sol activate')
+            if not ok:
+                _kill_(title)
+                return False,msg
             mon_line=0
             mon_line_len=0
             old_mon_line=-1
@@ -2297,13 +2301,13 @@ class kBmc:
             find_type='or' if isinstance(find,tuple) else 'and'
             find=list(find)
             while True:
-                if not os.path.isfile(log_file):
+                if not os.path.isfile(screen_log_file):
                     if sTime.Out(session_out):
-                        print('Lost log file({})'.format(log_file))
-                        return False,'Lost log file'
+                        _kill_(title)
+                        return False,'Lost log file({})'.format(screen_log_file)
                     time.sleep(1)
                     continue
-                with open(log_file,'rb') as f:
+                with open(screen_log_file,'rb') as f:
                     tmp=f.read()
                 tmp=CleanAnsi(Str(tmp))
                 if '\x1b' in tmp:
@@ -2318,7 +2322,7 @@ class kBmc:
                 # Time Out
                 if Time.Out(timeout):
                     print('Monitoring timeout({} sec)'.format(timeout))
-                    _kill_(title,log_file)
+                    _kill_(title)
                     if old_end_line:
                         return False,old_end_line
                     return False,tmp_a[mon_line-1]
@@ -2337,16 +2341,16 @@ class kBmc:
                                     del find[ff-1]
                                     find_num=find_num-1
                                 if find_type == 'or':
-                                    continue
+                                    continue # keep check next items
                                 else:
                                     break #if can not find first item then no more find
                             found+=1
                             if find_type == 'or':
-                                _kill_(title,log_file)
+                                _kill_(title)
                                 return True,'Found requirement {}'.format(find_i)
                             else:
                                 if found >= find_num:
-                                    _kill_(title,log_file)
+                                    _kill_(title)
                                     if stdout: print('Found all requirements')
                                     return True,'Found all requirements'
                     # If not update any screen information then kill early session
@@ -2362,7 +2366,7 @@ class kBmc:
                                 if sTime.Out(session_out):
                                     msg='maybe not updated any screen information'
                                     if stdout: print('{} (over {}seconds)'.format(msg,session_out))
-                                    _kill_(title,log_file)
+                                    _kill_(title)
                                     if old_end_line:
                                         return False,old_end_line
                                     return False,tmp_a[mon_line-1]
@@ -2377,6 +2381,7 @@ class kBmc:
                 old_end_line=tmp_a[mon_line]
                 mon_line_len=len(old_end_line)
                 time.sleep(1)
+            _kill_(title)
             return False,None
         if cmd == 'info':
             return _info_()
