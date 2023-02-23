@@ -8,13 +8,7 @@ import sys
 import time
 import json
 import threading
-import kmisc as km
 from kmport import *
-power_on_tag='¯'
-power_up_tag='∸'
-power_off_tag='_'
-power_down_tag='⨪'
-power_unknown_tag='·'
 
 class Ipmitool:
     def __init__(self,**opts):
@@ -76,10 +70,18 @@ class Smcipmitool:
             cmd_a=['ipmi','lan','mac']
         elif IsIn('sdr',cmd_a,idx=0) and IsIn('Temperature',cmd_a,idx=2):
             cmd_a=['ipmi','sensor']
-        return True,{'base':'''sudo java -jar %s {ip} {user} '{passwd}' '''%(self.smc_file),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
+        if os.path.basename(self.smc_file).split('.')[-1] == 'jar':
+            return True,{'base':'''sudo java -jar %s {ip} {user} '{passwd}' '''%(self.smc_file),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
+        else:
+            return True,{'base':'''%s {ip} {user} '{passwd}' '''%(self.smc_file),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
 
 class Redfish:
     def __init__(self,**opts):
+        self.power_on_tag='¯'
+        self.power_up_tag='∸'
+        self.power_off_tag='_'
+        self.power_down_tag='⨪'
+        self.power_unknown_tag='·'
         self.__name__='redfish'
         self.log=opts.get('log',None)
         if isinstance(opts.get('path'),dict):
@@ -217,7 +219,7 @@ class Redfish:
                     if cmd_state(cmd,on_s=['reset','on','reboot','off_on']) == get_current_power_state().lower():
                         time.sleep(1)
                         return True
-                    StdOut(power_unknown_tag)
+                    StdOut(self.power_unknown_tag)
                     time.sleep(3)
                 return False
         else:
@@ -510,11 +512,11 @@ class Redfish:
                             if Time.Out(power_timeout): return False
                             if rf.Power() == 'on':
                                 break
-                            StdOut(power_unknown_tag)
+                            StdOut(self.power_unknown_tag)
                             time.sleep(3)
                         Time=TIME()
                         while True:
-                            StdOut(power_up_tag)
+                            StdOut(self.power_up_tag)
                             time.sleep(3)
                             if Time.Out(monitor_timeout): return False
                             #if boot_mode_bios()[0] == mode:
@@ -529,7 +531,7 @@ class Redfish:
         Time=TIME()
         while True:
             if Time.Out(timeout): break
-            stat=power_unknown_tag
+            stat=self.power_unknown_tag
             aa=self.Get('Chassis/1/Thermal')
             if isinstance(aa,dict):
                 for ii in aa.get('Temperatures',[]):
@@ -539,11 +541,11 @@ class Redfish:
                             if keep_up > 0:
                                 if up_init is None: up_init=TIME()
                                 if up_init.Out(keep_up): return True
-                                stat=power_on_tag
+                                stat=self.power_on_tag
                             else:
                                 return True
                         except:
-                            stat=power_off_tag
+                            stat=self.power_off_tag
             StdOut(stat)
             time.sleep(3)
         return False
@@ -553,19 +555,19 @@ class Redfish:
         Time=TIME()
         while True:
             if Time.Out(timeout): break
-            stat=power_unknown_tag
+            stat=self.power_unknown_tag
             aa=self.Get('Chassis/1/Thermal')
             if isinstance(aa,dict):
                 for ii in aa.get('Temperatures',[]):
                     if ii.get('PhysicalContext') == 'CPU':
                         try:
                             int(ii.get('ReadingCelsius'))
-                            stat=power_on_tag
+                            stat=self.power_on_tag
                         except:
                             if keep_dn > 0:
                                 if dn_init is None: dn_init=TIME()
                                 if dn_init.Out(keep_down): return True
-                                stat=power_off_tag
+                                stat=self.power_off_tag
                             else:
                                 return True
             StdOut(stat)
@@ -709,6 +711,7 @@ class Redfish:
             naa['boardid']=aa.get('Oem',{}).get(manufacturer,{}).get('BoardID')
             naa['sn']=aa.get('Oem',{}).get(manufacturer,{}).get('BoardSerialNumber')
             naa['guid']=aa.get('Oem',{}).get(manufacturer,{}).get('GUID')
+        naa['bootmode']=self.Boot()
         return naa
 
     def BiosPassword(self,new,old=''):
@@ -762,6 +765,11 @@ class Redfish:
 
 class kBmc:
     def __init__(self,*inps,**opts):
+        self.power_on_tag='¯'
+        self.power_up_tag='∸'
+        self.power_off_tag='_'
+        self.power_down_tag='⨪'
+        self.power_unknown_tag='·'
         env=Get(inps,0) if Get(inps,0,err=True) else Get(opts,['ip','ipmi_ip'],default=None,err=True,peel='force')
         if isinstance(env,dict):
             if opts: env.update(opts)
@@ -1005,14 +1013,14 @@ class kBmc:
         # first initial condition check
         on_off=is_on_off(get_current_power,2,data['init'].get('time'),mode=['a'])
         if on_off == 'on':
-            if status_log: StdOut(power_on_tag)
-            data['symbol']=power_on_tag
+            if status_log: StdOut(self.power_on_tag)
+            data['symbol']=self.power_on_tag
         elif on_off == 'off':
-            if status_log: StdOut(power_off_tag)
-            data['symbol']=power_off_tag
+            if status_log: StdOut(self.power_off_tag)
+            data['symbol']=self.power_off_tag
         else:
-            if status_log: StdOut(power_unknown_tag)
-            data['symbol']=power_unknown_tag
+            if status_log: StdOut(self.power_unknown_tag)
+            data['symbol']=self.power_unknown_tag
         # if starting check then start check condition from initialization
         if data.get('start'):
             if on_off == monitor_status[0]:
@@ -1065,11 +1073,11 @@ class kBmc:
                 on_off=is_on_off(get_current_power,data['sensor_{}_monitor'.format(monitor_status[ms_id])],data['status'].get(monitor_status[ms_id],(TIME().Int(),0,0))[0],now=data['current'].get('state')[0],mode=['a'],sensor=True)
                 if on_off in ['on','off']:
                     if on_off == 'on':
-                        if status_log: StdOut(power_on_tag)
-                        data['symbol']=power_on_tag
+                        if status_log: StdOut(self.power_on_tag)
+                        data['symbol']=self.power_on_tag
                     else:
-                        if status_log: StdOut(power_off_tag)
-                        data['symbol']=power_off_tag
+                        if status_log: StdOut(self.power_off_tag)
+                        data['symbol']=self.power_off_tag
                     #suddenly changed state then initialize monitoring value
                     if on_off != before_on_off:
                         if not resetted and ((monitor_status[ms_id] == 'on' and before_on_off == 'on') or (monitor_status[ms_id] == 'off' and before_on_off == 'off')):
@@ -1102,8 +1110,8 @@ class kBmc:
                         break
                 elif on_off == 'up':
                     if before_on_off == 'on':
-                        if status_log: StdOut(power_off_tag)
-                        data['symbol']=power_off_tag
+                        if status_log: StdOut(self.power_off_tag)
+                        data['symbol']=self.power_off_tag
                         on_off='off'
                         if monitor_status[ms_id] == 'off':
                             data['monitored_status'].append({monitor_status[ms_id]:{'time':data['current'].get('state')[0],'time_keep':data['current'].get('state')[0]}})
@@ -1117,15 +1125,15 @@ class kBmc:
                             reset_condition(data,before_on_off,on_off)
                             resetted=True
                     else: 
-                        if status_log: StdOut(power_up_tag)
-                        data['symbol']=power_up_tag
+                        if status_log: StdOut(self.power_up_tag)
+                        data['symbol']=self.power_up_tag
                 elif on_off == 'dn':
-                    if status_log: StdOut(power_down_tag)
-                    data['symbol']=power_down_tag
+                    if status_log: StdOut(self.power_down_tag)
+                    data['symbol']=self.power_down_tag
                 else: #Unknown
                     data['status']={}
-                    if status_log: StdOut(power_unknown_tag)
-                    data['symbol']=power_unknown_tag
+                    if status_log: StdOut(self.power_unknown_tag)
+                    data['symbol']=self.power_unknown_tag
                     if not isinstance(start_unknown,int): start_unknown=TIME().Int()
                     # if reset_after_unknown has a value then over keep unknown state then reset the BMC
                     if isinstance(reset_after_unknown,int) and reset_after_unknown > 0:
@@ -1503,13 +1511,13 @@ class kBmc:
                 printf('Connection error condition:{}, return:{}'.format(rc_err_connection,Get(rc,0)),log=self.log,log_level=7)
                 printf('Connection Error:',log=self.log,log_level=1,dsp='d',direct=True)
                 #Check connection
-                if km.is_lost(self.ip,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func))[0]:
+                if ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func)):
                     printf('Lost Network',log=self.log,log_level=1,dsp='d')
                     self.error(_type='net',msg="{} lost network(over 30min)".format(self.ip))
                     return False,rc,'Lost Network, Please check your server network(1)'
             elif IsIn(rc_0,rc_err_bmc_user): # retry condition1
                 #Check connection
-                if km.is_lost(self.ip,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func))[0]:
+                if ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func)):
                     printf('Lost Network',log=self.log,log_level=1,dsp='d')
                     self.error(_type='net',msg="{} lost network".format(self.ip))
                     return False,rc,'Lost Network, Please check your server network(2)'
@@ -1524,7 +1532,7 @@ class kBmc:
             else:
                 if 'ipmitool' in cmd_str and i < 1:
                     #Check connection
-                    if km.is_lost(self.ip,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func))[0]:
+                    if ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func)):
                         printf('Lost Network',log=self.log,log_level=1,dsp='d')
                         self.error(_type='net',msg="{} lost network".format(self.ip))
                         return False,rc,'Lost Network, Please check your server network(3)'
@@ -1557,25 +1565,23 @@ class kBmc:
         else:
             return False,rc,'Out of testing'
 
-    def reset(self,retry=0,post_keep_up=20,pre_keep_up=0):
-        rc=False,'Something issue'
+    def reset(self,retry=0,post_keep_up=20,pre_keep_up=0,retry_interval=5):
         for i in range(0,1+retry):
             for mm in self.cmd_module:
-                if km.is_comeback(self.ip,keep=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0]):
+                if ping(self.ip,timeout=1800,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func)):
                     printf('R',log=self.log,log_level=1,direct=True)
                     rc=self.run_cmd(mm.cmd_str('ipmi reset'))
                     if krc(rc[0],chk='error'):
                         return rc
                     if krc(rc[0],chk=True):
-                        if km.is_comeback(self.ip,keep=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0]):
+                        if ping(self.ip,timeout=1800,keep_good=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func)):
                             return True,'Pinging to BMC after reset BMC'
                         else:
                             return False,'Can not Pinging to BMC after reset BMC'
-                else:
+                elif i >= retry:
                     return False,'Can not Pinging to BMC. I am not reset the BMC. please check the network first!'
-                time.sleep(5)
-        return rc
-            
+                time.sleep(retry_interval)
+        return False,'Something issue'
 
     def get_mac(self,ip=None,user=None,passwd=None):
         if self.mac:
@@ -2390,6 +2396,20 @@ class kBmc:
         elif cmd == 'kill':
             if title: return _kill_(title)
             return False,None
+        elif cmd == 'console':
+            mm,msg=self.get_cmd_module_name('ipmitool')
+            if not mm:
+                return False,msg
+            cmd_str_dict=mm.cmd_str('sol activate')
+            if cmd_str_dict[0]:
+                ok,ipmi_user,ipmi_pass=self.find_user_pass()
+                if not ok:
+                    return False,'IPMI User or Password not found'
+                base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':self.ip,'user':ipmi_user,'passwd':ipmi_pass})
+                cmd_str='{} {}'.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
+                rc=rshell(cmd_str,nteractive=True)
+                return True if Get(rc,0)==0 else False,Get(rc,1)
+            return False,'Command not found'
         else:
             return _monitor_(title,find,timeout,session_out,stdout)
 
