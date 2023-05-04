@@ -1320,7 +1320,8 @@ class kBmc:
         if not IpV4(ip): return False,None,None
         test_user=MoveData(self.test_user[:],self.user,to='first')
         tt=1
-        if len(self.test_passwd) > default_range: tt=2
+        #if len(self.test_passwd) > default_range: tt=2
+        tt=(len(self.test_passwd) // default_range) + 1
         tested_user_pass=[]
         for mm in self.cmd_module:
             cmd_str=mm.cmd_str(check_cmd)
@@ -1335,8 +1336,9 @@ class kBmc:
                 test_pass_sample=MoveData(test_pass_sample,self.passwd,to='first')
                 if self.default_passwd not in test_pass_sample: test_pass_sample.append(self.default_passwd)
                 for uu in test_user:
+                    if uu is None: continue
                     for pp in test_pass_sample:
-                        if uu is None or pp is None: continue
+                        if pp is None: continue
                         if ping(ip,count=1,keep_good=0,timeout=300): # Timeout :5min, count:2, just pass when pinging
                             tested_user_pass.append((uu,pp))
                             printf("""Try BMC User({}) and password({})""".format(uu,pp),log=self.log,log_level=7,dsp='s' if trace else 'a')
