@@ -39,7 +39,9 @@ class Ipmitool:
         elif IsIn('ipmi',cmd_a,idx=0) and IsIn('sensor',cmd_a,idx=1):
             #cmd_a=['sdr','type','Temperature']
             cmd_a=['sensor']
-        return True,{'base':'''ipmitool -I %s -H {ip} -U {user} -P '{passwd}' '''%(option),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
+        passwd=opts.get('passwd')
+        sym='"' if isinstance(passwd,str) and "'" in passwd else "'"
+        return True,{'base':'''ipmitool -I %s -H {ip} -U {user} -P %s{passwd}%s '''%(option,sym,sym),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
 
 
 class Smcipmitool:
@@ -70,10 +72,12 @@ class Smcipmitool:
             cmd_a=['ipmi','lan','mac']
         elif IsIn('sdr',cmd_a,idx=0) and IsIn('Temperature',cmd_a,idx=2):
             cmd_a=['ipmi','sensor']
+        passwd=opts.get('passwd')
+        sym='"' if isinstance(passwd,str) and "'" in passwd else "'"
         if os.path.basename(self.smc_file).split('.')[-1] == 'jar':
-            return True,{'base':'''sudo java -jar %s {ip} {user} '{passwd}' '''%(self.smc_file),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
+            return True,{'base':'''sudo java -jar %s {ip} {user} %s{passwd}%s '''%(self.smc_file,sym,sym),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
         else:
-            return True,{'base':'''%s {ip} {user} '{passwd}' '''%(self.smc_file),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
+            return True,{'base':'''%s {ip} {user} %s{passwd}%s '''%(self.smc_file,sym,sym),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
 
 class Redfish:
     def __init__(self,**opts):
@@ -910,7 +914,7 @@ class kBmc:
                 out[1]=rt
         if tools:
             for mm in self.cmd_module:
-                rt=self.run_cmd(mm.cmd_str('ipmi power status'))
+                rt=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
                 if krc(rt,chk=True):
                     aa=rt[1][1].split()[-1]
                     if isinstance(aa,str) and aa.lower() in ['on','off']:
@@ -918,7 +922,7 @@ class kBmc:
                         break
         if sensor:
             for mm in self.cmd_module:
-                rt=self.power_sensor_data(mm.cmd_str('ipmi sensor'),mm.__name__)
+                rt=self.power_sensor_data(mm.cmd_str('ipmi sensor',passwd=self.passwd),mm.__name__)
                 out[0]='on' if rt == 'up' else 'off' if rt == 'down' else rt
                 break 
         return out
@@ -1324,7 +1328,6 @@ class kBmc:
         tt=(len(self.test_passwd) // default_range) + 1
         tested_user_pass=[]
         for mm in self.cmd_module:
-            cmd_str=mm.cmd_str(check_cmd)
             for t in range(0,tt):
                 if t == 0:
                     test_pass_sample=self.test_passwd[:default_range]
@@ -1342,6 +1345,7 @@ class kBmc:
                         if ping(ip,count=1,keep_good=0,timeout=300): # Timeout :5min, count:2, just pass when pinging
                             tested_user_pass.append((uu,pp))
                             printf("""Try BMC User({}) and password({})""".format(uu,pp),log=self.log,log_level=7,dsp='s' if trace else 'a')
+                            cmd_str=mm.cmd_str(check_cmd,passwd=pp)
                             full_str=cmd_str[1]['base'].format(ip=ip,user=uu,passwd=pp)+' '+cmd_str[1]['cmd']
                             rc=rshell(full_str)
                             if rc[0] in cmd_str[3]['ok']:
@@ -1381,10 +1385,16 @@ class kBmc:
                 return True,user,passwd
             else:
                 #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
-                recover_cmd=mm.cmd_str("""user setpwd 2 '{}'""".format(self.org_passwd))
+                if "'" in self.org_passwd:
+                    recover_cmd=mm.cmd_str('''user setpwd 2 "{}"'''.format(self.org_passwd))
+                else:
+                    recover_cmd=mm.cmd_str("""user setpwd 2 '{}'""".format(self.org_passwd))
         else:
             #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
-            recover_cmd=mm.cmd_str("""user add 2 {} '{}' 4""".format(self.org_user,self.org_passwd))
+            if "'" in self.org_passwd:
+                recover_cmd=mm.cmd_str('''user add 2 {} "{}" 4'''.format(self.org_user,self.org_passwd))
+            else:
+                recover_cmd=mm.cmd_str("""user add 2 {} '{}' 4""".format(self.org_user,self.org_passwd))
         printf("""Recover command: {}""".format(recover_cmd),log_level=7)
         rc=self.run_cmd(recover_cmd)
         
@@ -1406,10 +1416,16 @@ class kBmc:
             printf("""Not support {}. Looks need more length. So Try again with {}""".format(self.org_passwd,self.default_passwd),log=self.log,log_level=4)
             if self.user == self.org_user:
                 #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
-                recover_cmd=mm.cmd_str("""user setpwd 2 '{}'""".format(self.default_passwd))
+                if "'" in self.default_passwd:
+                    recover_cmd=mm.cmd_str('''user setpwd 2 "{}"'''.format(self.default_passwd))
+                else:
+                    recover_cmd=mm.cmd_str("""user setpwd 2 '{}'""".format(self.default_passwd))
             else:
                 #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
-                recover_cmd=mm.cmd_str("""user add 2 {} '{}' 4""".format(self.org_user,self.default_passwd))
+                if "'" in self.default_passwd:
+                    recover_cmd=mm.cmd_str('''user add 2 {} "{}" 4'''.format(self.org_user,self.default_passwd))
+                else:
+                    recover_cmd=mm.cmd_str("""user add 2 {} '{}' 4""".format(self.org_user,self.default_passwd))
         #    print('\n*kBMC2: {}'.format(recover_cmd))
             printf("""Recover command: {}""".format(recover_cmd),log_level=7)
             rrc=self.run_cmd(recover_cmd)
@@ -1594,7 +1610,7 @@ class kBmc:
         if not ok: return False,None
         for mm in self.cmd_module:
             name=mm.__name__
-            cmd_str=mm.cmd_str('ipmi lan mac')
+            cmd_str=mm.cmd_str('ipmi lan mac',passwd=self.passwd)
             full_str=cmd_str[1]['base'].format(ip=ip,user=user,passwd=passwd)+' '+cmd_str[1]['cmd']
             rc=rshell(full_str,log=self.log,progress_pre_new_line=True,progress_post_new_line=True)
             if krc(rc[0],chk=True):
@@ -1612,7 +1628,7 @@ class kBmc:
     def dhcp(self):
         for mm in self.cmd_module:
             name=mm.__name__
-            rc=self.run_cmd(mm.cmd_str('ipmi lan dhcp'))
+            rc=self.run_cmd(mm.cmd_str('ipmi lan dhcp',passwd=self.passwd))
             if krc(rc[0],chk='error'):
                 return rc
             if krc(rc[0],chk=True):
@@ -1628,7 +1644,7 @@ class kBmc:
     def gateway(self):
         for mm in self.cmd_module:
             name=mm.__name__
-            rc=self.run_cmd(mm.cmd_str('ipmi lan gateway'))
+            rc=self.run_cmd(mm.cmd_str('ipmi lan gateway',passwd=self.passwd))
             if krc(rc[0],chk='error'):
                 return rc
             if krc(rc[0],chk=True):
@@ -1644,7 +1660,7 @@ class kBmc:
     def netmask(self):
         for mm in self.cmd_module:
             name=mm.__name__
-            rc=self.run_cmd(mm.cmd_str('ipmi lan netmask'))
+            rc=self.run_cmd(mm.cmd_str('ipmi lan netmask',passwd=self.passwd))
             if krc(rc[0],chk='error'):
                 return rc
             if krc(rc[0],chk=True):
@@ -1665,15 +1681,15 @@ class kBmc:
             chk_boot_mode=boot_mode.get(name,{})
             if name == 'smc' and mode in chk_boot_mode:
                 if mode == 'pxe':
-                    rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 1'))
+                    rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 1',passwd=self.passwd))
                 elif mode == 'hdd':
-                    rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 2'))
+                    rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 2',passwd=self.passwd))
                 elif mode == 'cd':
-                    rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 3'))
+                    rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 3',passwd=self.passwd))
                 elif mode == 'bios':
-                    rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 4'))
+                    rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 4',passwd=self.passwd))
                 elif mode == 'usb':
-                    rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 6'))
+                    rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 6',passwd=self.passwd))
                 if krc(rc[0],chk=True):
                     return True,rc[1][1]
             elif name == 'ipmitool':
@@ -1692,7 +1708,7 @@ class kBmc:
 #   - Console Redirection control : System Default
 #   - BIOS verbosity : Console redirection occurs per BIOS configuration setting (default)
 #   - BIOS Mux Control Override : BIOS uses recommended setting of the mux at the end of POST
-                        rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5'))
+                        rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5',passwd=self.passwd))
                         if rc[0]:
                             found=FIND(rc[1]).Find('- Boot Device Selector : (\w.*)')
                             if found:
@@ -1745,7 +1761,7 @@ class kBmc:
                                 if 'EFI' in bios_uefi[0:-1] or 'UEFI' in bios_uefi[0:-1] or 'IPXE' in bios_uefi[0:-1]:
                                     efi=True
                         else:
-                            rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5'))
+                            rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5',passwd=self.passwd))
                             if rc[0]:
                                 efi_found=FIND(rc[1]).Find('- BIOS (\w.*) boot')
                                 if efi_found:
@@ -1772,10 +1788,10 @@ class kBmc:
                         else:
                             if mode == 'pxe' and ipxe in ['on','ON','On',True,'True']:
                                 # ipmitool -I lanplus -H 172.16.105.74 -U ADMIN -P 'ADMIN' raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00
-                                rc=self.run_cmd(mm.cmd_str('raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00'))
+                                rc=self.run_cmd(mm.cmd_str('raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00',passwd=self.passwd))
                                 if self.log: self.log("Persistently Boot mode set to i{0} at {1}".format(boot_mode,ipmi_ip),date=True,log_level=7)
                             else:
-                                rc=self.run_cmd(mm.cmd_str('chassis bootdev {0} options=persistent'.format(mode)))
+                                rc=self.run_cmd(mm.cmd_str('chassis bootdev {0} options=persistent'.format(mode),passwd=self.passwd))
                                 if self.log: self.log("Persistently Boot mode set to {0} at {1}".format(boot_mode,ipmi_ip),date=True,log_level=7)
                     else:
                         if self.redfish:
@@ -1785,12 +1801,12 @@ class kBmc:
                             rc=rf_boot,(rf_boot,'Temporarily set to {}'.format(boot_mode))
                         else:
                             if mode == 'pxe' and ipxe in ['on','ON','On',True,'True']:
-                                rc=self.run_cmd(mm.cmd_str('chassis bootdev {0} options=efiboot'.format(mode)))
+                                rc=self.run_cmd(mm.cmd_str('chassis bootdev {0} options=efiboot'.format(mode),passwd=self.passwd))
                             else:
                                 if force and chk_boot_mode == 'pxe':
-                                    rc=self.run_cmd(mm.cmd_str('chassis bootparam set bootflag force_pxe'.format(mode)))
+                                    rc=self.run_cmd(mm.cmd_str('chassis bootparam set bootflag force_pxe'.format(mode),passwd=self.passwd))
                                 else:
-                                    rc=self.run_cmd(mm.cmd_str('chassis bootdev {0}'.format(mode)))
+                                    rc=self.run_cmd(mm.cmd_str('chassis bootdev {0}'.format(mode),passwd=self.passwd))
                 if krc(rc[0],chk=True):
                     return True,rc[1][1]
             if krc(rc[0],chk='error'):
@@ -1804,7 +1820,7 @@ class kBmc:
         for mm in self.cmd_module:
             name=mm.__name__
             if name == 'ipmitool':
-                aaa=mm.cmd_str('''raw 0x30 0x21''')
+                aaa=mm.cmd_str('''raw 0x30 0x21''',passwd=self.passwd)
                 rc=self.run_cmd(aaa)
                 if krc(rc[0],chk=True) and rc[1][1]:
                     mac_source=rc[1][1].split('\n')[0].strip()
@@ -1817,7 +1833,7 @@ class kBmc:
                             self.eth_mac=eth_mac
                             return True,self.eth_mac
             elif name == 'smc':
-                rc=self.run_cmd(mm.cmd_str('ipmi oem summary | grep "System LAN"'))
+                rc=self.run_cmd(mm.cmd_str('ipmi oem summary | grep "System LAN"',passwd=self.passwd))
                 if krc(rc[0],chk=True):
                     #rrc=[]
                     #for ii in rc[1].split('\n'):
@@ -1972,7 +1988,7 @@ class kBmc:
             for ii in range(1,int(retry)+2):
                 checked_lanmode=None
                 if verify or cmd == 'status':
-                    init_rc=self.run_cmd(mm.cmd_str('ipmi power status'))
+                    init_rc=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
                     if krc(init_rc[0],chk='error'):
                         return init_rc[0],init_rc[1],ii
                     if init_rc[0] is False:
@@ -2017,7 +2033,7 @@ class kBmc:
                                  self.warn(_type='power',msg="Can not set {} on the off mode".format(verify_status))
                                  printf(' ! can not {} the power'.format(verify_status),log=self.log,log_level=6)
                                  return False,'can not {} the power'.format(verify_status)
-                    rc=self.run_cmd(mm.cmd_str(do_power_mode[rr]),retry=retry)
+                    rc=self.run_cmd(mm.cmd_str(do_power_mode[rr],passwd=self.passwd),retry=retry)
                     printf('{} : {}'.format(do_power_mode[rr],rc),log=self.log,log_level=8)
                     if krc(rc,chk='error'):
                         return rc
@@ -2065,7 +2081,7 @@ class kBmc:
                             if verify_status in ['off','down']:
                                 for i in range(0,10):
                                     time.sleep(3)
-                                    init_rc=self.run_cmd(mm.cmd_str('ipmi power status'))
+                                    init_rc=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
                                     if krc(init_rc,chk=True):
                                         if init_rc[1][1].split()[-1] == 'off':
                                             chkd=True
@@ -2107,12 +2123,12 @@ class kBmc:
         if not mm:
             return False,msg
         if self.lanmode_convert(mode) in [0,1,2]:
-            rc=self.run_cmd(mm.cmd_str("""ipmi oem lani {}""".format(self.lanmode_convert(mode))),timeout=5)
+            rc=self.run_cmd(mm.cmd_str("""ipmi oem lani {}""".format(self.lanmode_convert(mode)),passwd=self.passwd),timeout=5)
             if krc(rc[0],chk=True):
                 return True,self.lanmode_convert(mode,string=True)
             return rc
         else:
-            rc=self.run_cmd(mm.cmd_str("""ipmi oem lani"""))
+            rc=self.run_cmd(mm.cmd_str("""ipmi oem lani""",passwd=self.passwd))
             if krc(rc[0],chk=True):
                 if mode in ['info','support']:
                     return True,Get(Get(rc,1),1)
@@ -2166,7 +2182,7 @@ class kBmc:
         for mm in self.cmd_module:
             #name=mm.__name__
             for j in range(0,2):
-                rc=self.run_cmd(mm.cmd_str("""user list"""))
+                rc=self.run_cmd(mm.cmd_str("""user list""",passwd=self.passwd))
                 if krc(rc,chk=True):
                     for i in Get(Get(rc,1),1).split('\n'):
                         i_a=i.strip().split()
@@ -2219,7 +2235,7 @@ class kBmc:
                 if not mm:
                     if os.path.isfile(screen_tmp_file): os.unlink(screen_tmp_file)
                     return False,msg
-                cmd_str_dict=mm.cmd_str(cmd)
+                cmd_str_dict=mm.cmd_str(cmd,passwd=self.passwd)
                 if cmd_str_dict[0]:
                     ok,ipmi_user,ipmi_pass=self.find_user_pass()
                     if not ok:
@@ -2250,7 +2266,7 @@ class kBmc:
             mm,msg=self.get_cmd_module_name('ipmitool')
             if not mm:
                 return enable,rate,channel,port,'~~~ console=ttyS1,{}'.format(rate)
-            rc=self.run_cmd(mm.cmd_str("""sol info"""))
+            rc=self.run_cmd(mm.cmd_str("""sol info""",passwd=self.passwd))
             if krc(rc,chk=True):
                 for ii in rc[1][1].split('\n'):
                     ii_a=ii.split()
@@ -2403,7 +2419,7 @@ class kBmc:
             mm,msg=self.get_cmd_module_name('ipmitool')
             if not mm:
                 return False,msg
-            cmd_str_dict=mm.cmd_str('sol activate')
+            cmd_str_dict=mm.cmd_str('sol activate',passwd=self.passwd)
             if cmd_str_dict[0]:
                 ok,ipmi_user,ipmi_pass=self.find_user_pass()
                 if not ok:
