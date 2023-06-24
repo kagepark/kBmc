@@ -269,6 +269,7 @@ class Redfish:
                     return aa.get('IndicatorLED')
     
     def Boot(self,boot=None,mode='auto',keep='once',simple_mode=False,pxe_boot_mac=None):
+        # mode : auto will default set to UEFI
         def order_boot():
             naa={}
             aa=self.Get('Systems/1')
@@ -293,8 +294,13 @@ class Redfish:
                 #Boot order
                 boot_attr=bios_info.get('Attributes',{})
                 if boot_attr:
-                    mode=boot_attr.get('BootModeSelect')
-                    if IsNone(mode):
+                    mode=None
+                    #Need update for H13, X13, B13, B2 information
+                    if 'BootModeSelect' in boot_attr: #X12
+                        mode=boot_attr.get('BootModeSelect')
+                    elif 'Bootmodeselect' in boot_attr: #X11
+                        mode=boot_attr.get('Bootmodeselect')
+                    elif 'BootSourceOverrideMode' in boot_attr:
                         mode=boot_attr.get('BootSourceOverrideMode')
                     if IsNone(mode): #X13
                         #VideoOptionROM
@@ -330,19 +336,25 @@ class Redfish:
                                 naa['order'].append(bios_boot_info[i][1])
                                 a=FIND(bios_boot_info[i][1]).Find("(MAC:\w+)")
                                 if a:
-                                    mac=MacV4(a[0][4:])
+                                    mac=MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a)
                                     if naa.get('pxe_boot_id') is None and mac == naa['pxe_boot_mac']:
                                         naa['pxe_boot_id']=len(naa['order'])-1
+                                        break
             return naa
 
         if isinstance(mode,str) and isinstance(boot,str) and boot.lower() in ['efi_shell','uefi_shell','shell','pxe','ipxe','cd','usb','hdd','floppy','bios','setup','biossetup','efi','uefi','set']:
+            boot_lower=boot.lower()
+            mode_lower=mode.lower()
+            if boot_lower in ['uefi','efi','ipxe'] and mode_lower in ['auto','uefi_bootmode','uefi','efi']:
+                if self.Bootmode_bios_set(): # Set to UEFI Bootmode in BIOS CFG
+                    return True
+                else:
+                    mode='UEFI'
             rf_boot_info={'order':order_boot(),'bios':bios_boot(pxe_boot_mac=pxe_boot_mac)}
             if not rf_boot_info['order'] and not rf_boot_info['bios']:
                 #Redfish issue
                 return False
 
-            boot_lower=boot.lower()
-            mode_lower=mode.lower()
             if boot_lower in ['efi_shell','uefi_shell','shell']:
                 keep='Continuous'
                 mode='UEFI'
@@ -414,7 +426,7 @@ class Redfish:
             printf('Set Redfish Boot mode : {}, {}, {}\n'.format(mode,boot, keep),log=self.log,log_level=6)
             return self.Post('Systems/1',json=boot_db,mode='patch')
         else:
-            if (isinstance(simple_mode,bool) and simple_mode is True) or simple_mode == 'simple':
+            if simple_mode is True or simple_mode == 'simple':
                 bios_boot_info=bios_boot(pxe_boot_mac=pxe_boot_mac)
                 if bios_boot_info: return bios_boot_info.get('mode')
             elif simple_mode == 'bios':
@@ -493,14 +505,22 @@ class Redfish:
         if mode not in ['UEFI','Legacy','Dual']: return False
         #bios_boot_mode=self.Bootmode_bios()
         bios_boot_mode=self.Boot(simple_mode='bios')
-        #if force is False and bios_boot_mode[0] == mode:# and bios_boot_mode[1] == 0:
         if force is False and bios_boot_mode.get('mode') == mode and bios_boot_mode.get('pxe_boot_id') == 0:
             return True
         rc=self.Get("Systems/1/Bios")
         if not isinstance(rc,dict): return False
         setting_cmd=rc.get('@Redfish.Settings',{}).get('SettingsObject',{}).get('@odata.id')
         if setting_cmd:
-            aa={'Attributes': {'BootModeSelect': mode}}
+            if 'BootModeSelect' in rc.get('Attributes',{}): #X12 & H12
+                boot_mode_name='BootModeSelect'
+            elif 'Bootmodeselect' in rc.get('Attributes',{}): #X11
+                boot_mode_name='Bootmodeselect'
+            else:
+                #Need update for H13, X13, B13, B2 information
+                #Not found Boot mode select name in BIOS
+                return False
+            aa={'Attributes': {boot_mode_name: mode}}
+            #if self.Post('Systems/1/Bios',json=aa,mode='patch'): # this is also working
             if self.Post(setting_cmd,json=aa,mode='patch'):
                 time.sleep(3)
                 if power in ['off_on','reset','on','auto']:
@@ -508,13 +528,13 @@ class Redfish:
                     if pw == 'off':
                         power='on'
                     elif pw == 'on':
-                        if power == 'auto':
+                        if power in ['auto','on','reset']:
                             power='reset'
                     if self.Power(cmd=power):
                         Time=TIME()
                         while True:
                             if Time.Out(power_timeout): return False
-                            if rf.Power() == 'on':
+                            if self.Power() == 'on':
                                 break
                             StdOut(self.power_unknown_tag)
                             time.sleep(3)
@@ -697,6 +717,7 @@ class Redfish:
         naa={}
         naa['version']={'bios':self.BiosVer(),'bmc':self.BmcVer()}
         naa['network']=self.Network()
+        naa['redfish']=self.IsEnabled()
         naa['redfish_hi']=self.RedfishHI()
         naa['power']=self.Power('info')
         naa['memory']=self.Memory()
@@ -824,18 +845,26 @@ class kBmc:
         self.checked_ip=False
         self.checked_port=False
         self.org_ip='{}'.format(self.ip)
-        if isinstance(opts.get('redfish'),bool):
-            self.redfish=opts.get('redfish')
-        else:
-            if isinstance(opts.get('redfish_hi'),bool):
-                self.redfish=opts.get('redfish_hi')
+        # Redfish Support
+        self.redfish=opts.get('redfish') if isinstance(opts.get('redfish'),bool) else True if opts.get('redfish_hi') is True else None
+        rf=None
+        if self.redfish is None:
+            ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
+            if ok:
+                rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
+                self.redfish=rf.IsEnabled()
             else:
-                ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
-                if ok:
-                    rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
-                    self.redfish=rf.IsEnabled()
-                else:
-                    self.redfish=False
+                self.redfish=False
+        if self.redfish:
+            # If support Redfish then check redfish_hi interface
+            if isinstance(opts.get('redfish_hi'),bool):
+                self.redfish_hi=opts.get('redfish_hi')
+            else:
+                if rf is None:
+                    rf=Redfish(host=self.ip,user=self.user,passwd=self.passwd,log=self.log)
+                self.redfish_hi=rf.RedfishHI().get('enable')
+        else:
+            self.redfish_hi=False
         self.power_monitor_stop=False
         self.power_get_redfish=opts.get('power_get_redfish',True)
         self.power_get_sensor=opts.get('power_get_sensor',True)
@@ -1673,7 +1702,7 @@ class kBmc:
                             return True,ii_a[-1]
         return krc(rc[0]),None
 
-    def bootorder(self,mode=None,ipxe=False,persistent=False,force=False,boot_mode={'smc':['pxe','bios','hdd','cd','usb'],'ipmitool':['pxe','ipxe','bios','hdd']},bios_cfg=None):
+    def bootorder(self,mode=None,ipxe=False,persistent=False,force=False,boot_mode={'smc':['pxe','bios','hdd','cd','usb'],'ipmitool':['pxe','ipxe','bios','hdd']},bios_cfg=None,rf_uefi_bootmode=False):
         rc=False,"Unknown boot mode({})".format(mode)
         ipmi_ip=self.ip
         for mm in self.cmd_module:
@@ -1693,7 +1722,7 @@ class kBmc:
                 if krc(rc[0],chk=True):
                     return True,rc[1][1]
             elif name == 'ipmitool':
-                if mode in [None,'order','status']:
+                if mode in [None,'order','status','detail']:
                     if mode in ['order',None]:
                         #If exist redfish then try redfish first
                         if self.redfish:
@@ -1714,7 +1743,7 @@ class kBmc:
                             if found:
                                 return True,found[0]
                             return True,None
-                    elif mode == 'status':
+                    elif mode in ['status','detail']:
                         status=False
                         efi=False
                         persistent=False
@@ -1722,6 +1751,9 @@ class kBmc:
                             ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
                             rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
                             rf_boot_info=rf.Boot()
+                            if mode == 'detail':
+                                return rf_boot_info
+
                             if rf_boot_info.get('order',{}).get('enable','') == 'Disabled': #Follow BIOS setting
                                 if rf_boot_info.get('bios',{}).get('mode','') == 'Dual':
                                     if 'UEFI PXE' in Get(rf_boot_info.get('bios',{}).get('order',[]),0,default=''):
@@ -1762,18 +1794,32 @@ class kBmc:
                                     efi=True
                         else:
                             rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5',passwd=self.passwd))
+                            if mode == 'detail':
+                                return rc
+
                             if rc[0]:
                                 efi_found=FIND(rc[1]).Find('- BIOS (\w.*) boot')
                                 if efi_found:
-                                    if efi_found[0] == 'EFI':
-                                        efi=True
-                                        status='pxe'
+                                    if isinstance(efi_found,list):
+                                        if 'EFI' in efi_found[0]:
+                                            efi=True
+                                            status='pxe'
+                                    elif isinstance(efi_found,str):
+                                        if 'EFI' in efi_found:
+                                            efi=True
+                                            status='pxe'
                                 found=FIND(rc[1]).Find('- Boot Device Selector : (\w.*)')
                                 if found:
-                                    if 'Force' in found[0]:
-                                        persistent=True
-                                    if 'PXE' in found[0]:
-                                        status='pxe'
+                                    if isinstance(found,list):
+                                        if 'Force' in found[0]:
+                                            persistent=True
+                                        if 'PXE' in found[0]:
+                                            status='pxe'
+                                    elif isinstance(found,str):
+                                        if 'Force' in found:
+                                            persistent=True
+                                        if 'PXE' in found:
+                                            status='pxe'
                         return [status,efi,persistent]
                 elif mode not in chk_boot_mode:
                     self.warn(_type='boot',msg="Unknown boot mode({}) at {}".format(mode,name))
@@ -1783,6 +1829,7 @@ class kBmc:
                         if self.redfish:
                             ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
                             rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
+                            #if rf_uefi_bootmode:
                             rf_boot=rf.Boot(boot=boot_mode,keep='keep')
                             rc=rf_boot,(rf_boot,'Persistently set to {}'.format(boot_mode))
                         else:
@@ -1941,7 +1988,7 @@ class kBmc:
                 ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
                 #Check Status
                 boot_mode_state=self.bootorder(mode='status')
-                rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
+                #rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
                 if IsSame(boot_mode,boot_mode_state[0]) and IsSame(ipxe,boot_mode_state[1]):
                     if boot_mode_state[2] is True or IsSame(order,boot_mode_state[2]):
                         break
@@ -1949,7 +1996,7 @@ class kBmc:
                 rf_fail=True
                 if self.redfish:
                     rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
-                    ipxe=True if rf.Boot(simple_mode=True) in ['UEFI','EFI'] or boot_mode == 'ipxe' else False
+                    ipxe=True if rf.Boot(simple_mode=True) in ['UEFI','EFI'] or boot_mode == 'ipxe' or ipxe else False
                     printf('Set Boot mode to {} with iPXE({})(Redfish)({}/{})\n'.format(boot_mode,ipxe,ii,retry),log=self.log,log_level=3)
                     rf_boot_mode='pxe' if boot_mode in ['ipxe','pxe'] else boot_mode
                     rf_boot=rf.Boot(boot=rf_boot_mode,mode='UEFI' if ipxe is True else 'Legacy',keep='keep')
