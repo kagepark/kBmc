@@ -916,6 +916,26 @@ class Redfish:
                 return True
         return False
 
+    def iKVM(self,mode=None):
+        import webbrowser
+        aa=self.Get('/Managers/1/Oem/Supermicro/IKVM')
+        if aa[0]:
+            if aa[1].get('Current interface') == 'HTML 5':
+                webbrowser.open_new('https://{}/{}'.format(self.host,aa[1].get('URI')))
+                return True
+            else:
+                if self.Post('/redfish/v1/Managers/1/Oem/Supermicro/IKVM',json={'Current interface':'HTML 5'},mode='patch'):
+                    aa=self.Get('/Managers/1/Oem/Supermicro/IKVM')
+                    if aa[0]:
+                        if aa[1].get('Current interface') == 'HTML 5':
+                            webbrowser.open_new('https://{}/{}'.format(self.host,aa[1].get('URI')))
+                            return True
+                else:
+                    print('Can not set to HTML 5')
+                    return False
+        print('Can not login to the server')
+        return False
+
 class kBmc:
     def __init__(self,*inps,**opts):
         self.power_on_tag='¯'
