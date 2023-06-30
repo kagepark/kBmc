@@ -1549,8 +1549,8 @@ class kBmc:
         mm,msg=self.get_cmd_module_name('smc')
         if not mm:
             return False,msg,None
-        was_user='{}'.format(self.user)
-        was_passwd='{}'.format(self.passwd)
+        was_user='''{}'''.format(self.user)
+        was_passwd='''{}'''.format(self.passwd)
         ok,user,passwd=self.find_user_pass()
         if ok:
             printf("""Previous User({}), Password({}). Found available current User({}), Password({})\n****** Start recovering user/password from current available user/password......\n""".format(was_user,was_passwd,user,passwd),log=self.log,log_level=3)
@@ -1613,8 +1613,8 @@ class kBmc:
                     printf("""Confirmed changed user password to {}:{}""".format(user2,passwd2),log=self.log,log_level=4)
                 else:
                     return False,"Looks changed command was ok. but can not found acceptable user or password",None
-                self.user='{}'.format(user2)
-                self.passwd='{}'.format(passwd2)
+                self.user='''{}'''.format(user2)
+                self.passwd='''{}'''.format(passwd2)
                 return True,self.user,self.passwd
             else:
                 self.warn(_type='ipmi_user',msg="Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.")
@@ -1660,10 +1660,10 @@ class kBmc:
                 printf('Re-try command [{}/{}]'.format(i,retry+1),log=self.log,log_level=1,dsp='d')
             if isinstance(cmd,dict):
                 base_cmd=sprintf(cmd['base'],**{'ip':ip,'user':user,'passwd':passwd})
-                cmd_str='{} {} {}'.format(base_cmd[1],cmd.get('cmd'),append)
+                cmd_str='''{} {} {}'''.format(base_cmd[1],cmd.get('cmd'),append)
             else:
                 base_cmd=sprintf(cmd,**{'ip':ip,'user':user,'passwd':passwd})
-                cmd_str='{} {}'.format(base_cmd[1],append)
+                cmd_str='''{} {}'''.format(base_cmd[1],append)
             if not base_cmd[0]:
                 return False,(-1,'Wrong commnd format','Wrong command format',0,0,cmd_str,path),'Command format is wrong'
             if dbg or show_str:
@@ -2436,8 +2436,11 @@ class kBmc:
                         if os.path.isfile(screen_tmp_file): os.unlink(screen_tmp_file)
                         return False,'IPMI User or Password not found'
                     base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':self.ip,'user':ipmi_user,'passwd':ipmi_pass})
-                    cmd_str='{} {}'.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
-                rc=rshell('''screen -c {} -dmSL "{}" {}'''.format(screen_tmp_file,title,cmd_str))
+                    cmd_str='''{} {}'''.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
+                if "'" in title:
+                    rc=rshell('''screen -c {} -dmSL "{}" {}'''.format(screen_tmp_file,title,cmd_str))
+                else:
+                    rc=rshell('''screen -c {} -dmSL '{}' {}'''.format(screen_tmp_file,title,cmd_str))
                 if rc[0] == 0:
                     for ii in range(0,50):
                         if os.path.isfile(screen_log_file):
