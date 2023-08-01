@@ -246,7 +246,8 @@ class Redfish:
                     if cmd_state(cmd,on_s=['reset','on','reboot','off_on']) == get_current_power_state().lower():
                         time.sleep(1)
                         return True
-                    StdOut(self.power_unknown_tag)
+                    #StdOut(self.power_unknown_tag)
+                    printf(self.power_unknown_tag,log=self.log,direct=True,log_level=1)
                     time.sleep(3)
                 return False
         else:
@@ -596,11 +597,13 @@ class Redfish:
                             if Time.Out(power_timeout): return False
                             if self.Power() == 'on':
                                 break
-                            StdOut(self.power_unknown_tag)
+                            #StdOut(self.power_unknown_tag)
+                            printf(self.power_unknown_tag,log=self.log,direct=True,log_level=1)
                             time.sleep(3)
                         Time=TIME()
                         while True:
-                            StdOut(self.power_up_tag)
+                            #StdOut(self.power_up_tag)
+                            printf(self.power_up_tag,log=self.log,direct=True,log_level=1)
                             time.sleep(3)
                             if Time.Out(monitor_timeout): return False
                             #if boot_mode_bios()[0] == mode:
@@ -917,24 +920,23 @@ class Redfish:
         return False
 
     def iKVM(self,mode=None):
-        import webbrowser
-        aa=self.Get('/Managers/1/Oem/Supermicro/IKVM')
-        if aa[0]:
-            if aa[1].get('Current interface') == 'HTML 5':
-                webbrowser.open_new('https://{}/{}'.format(self.host,aa[1].get('URI')))
-                return True
-            else:
-                if self.Post('/redfish/v1/Managers/1/Oem/Supermicro/IKVM',json={'Current interface':'HTML 5'},mode='patch'):
-                    aa=self.Get('/Managers/1/Oem/Supermicro/IKVM')
-                    if aa[0]:
-                        if aa[1].get('Current interface') == 'HTML 5':
-                            webbrowser.open_new('https://{}/{}'.format(self.host,aa[1].get('URI')))
-                            return True
+        rf_key='/Managers/1/Oem/Supermicro/IKVM'
+        for i in range(0,2):
+            aa=self.Get(rf_key)
+            if aa[0]:
+                if aa[1].get('Current interface') == 'HTML 5':
+                    if mode == 'url':
+                        return True,'https://{}/{}'.format(self.host,aa[1].get('URI'))
+                    else:
+                        import webbrowser
+                        webbrowser.open_new('https://{}/{}'.format(self.host,aa[1].get('URI')))
+                        return True,'ok'
                 else:
-                    print('Can not set to HTML 5')
-                    return False
-        print('Can not login to the server')
-        return False
+                    if not self.Post(rf_key,json={'Current interface':'HTML 5'},mode='patch'):
+                        return False,'Can not set to HTML 5'
+            else:
+                rf_key='/Managers/1/IKVM'
+        return False,'Can not login to the server'
 
 class kBmc:
     def __init__(self,*inps,**opts):
@@ -1194,13 +1196,16 @@ class kBmc:
         # first initial condition check
         on_off=is_on_off(get_current_power,2,data['init'].get('time'),mode=['a'])
         if on_off == 'on':
-            if status_log: StdOut(self.power_on_tag)
+            #if status_log: StdOut(self.power_on_tag)
+            if status_log: printf(self.power_on_tag,log=self.log,direct=True,log_level=1)
             data['symbol']=self.power_on_tag
         elif on_off == 'off':
-            if status_log: StdOut(self.power_off_tag)
+            #if status_log: StdOut(self.power_off_tag)
+            if status_log: printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
             data['symbol']=self.power_off_tag
         else:
-            if status_log: StdOut(self.power_unknown_tag)
+            #if status_log: StdOut(self.power_unknown_tag)
+            if status_log: printf(self.power_unknown_tag,log=self.log,direct=True,log_level=1)
             data['symbol']=self.power_unknown_tag
         # if starting check then start check condition from initialization
         if data.get('start'):
@@ -1226,18 +1231,23 @@ class kBmc:
                 ms_id=len(data['monitored_status'])
                 remain_time=data.get('timeout') - (TIME().Int() - start_time)
                 data['remain_time']=remain_time
+                #Timeout condition
                 if remain_time <= 0:
                     ss=''
                     for i in data['monitored_status']:
                         ss='{}->{}'.format(ss,next(iter(i))) if ss else next(iter(i))
-                    data['done']={TIME().Int():'Timeout for {} with state {}'.format('_'.join(monitor_status),ss)}
+                    if ss: ss=' '+ss
+                    data['done']={TIME().Int():'Timeout monitoring of {}{}'.format('_'.join(monitor_status),ss)}
                     data['done_reason']='timeout'
                     return
-                if data.get('stop'):
+                #manually stop condition
+                #if data.get('stop'):
+                if self.cancel(data.get('stop')):
                     ss=''
                     for i in data['monitored_status']:
                         ss='{}->{}'.format(ss,next(iter(i))) if ss else next(iter(i))
-                    data['done']={TIME().Int():'Got STOP for {} with state {}'.format('_'.join(monitor_status),ss)}
+                    if ss: ss=' at {} state'.format(ss)
+                    data['done']={TIME().Int():'Got STOP Signal during monitor {}{}'.format('_'.join(monitor_status),ss)}
                     data['done_reason']='stop'
                     return
 
@@ -1252,13 +1262,17 @@ class kBmc:
 
                 #check on/off status
                 on_off=is_on_off(get_current_power,data['sensor_{}_monitor'.format(monitor_status[ms_id])],data['status'].get(monitor_status[ms_id],(TIME().Int(),0,0))[0],now=data['current'].get('state')[0],mode=['a'],sensor=True)
+                    
                 if on_off in ['on','off']:
                     if on_off == 'on':
-                        if status_log: StdOut(self.power_on_tag)
+                        #if status_log: StdOut(self.power_on_tag)
+                        if status_log: printf(self.power_on_tag,log=self.log,direct=True,log_level=1)
                         data['symbol']=self.power_on_tag
                     else:
-                        if status_log: StdOut(self.power_off_tag)
+                        #if status_log: StdOut(self.power_off_tag)
+                        if status_log: printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
                         data['symbol']=self.power_off_tag
+
                     #suddenly changed state then initialize monitoring value
                     if on_off != before_on_off:
                         if not resetted and ((monitor_status[ms_id] == 'on' and before_on_off == 'on') or (monitor_status[ms_id] == 'off' and before_on_off == 'off')):
@@ -1283,15 +1297,27 @@ class kBmc:
                                 data['status'][on_off][1]=data['current'].get('state')[0]
                     if data['status'].get(on_off):
                         data['status'][on_off][2]=data['current'].get('state')[0]
+
+                    # check condition-time of want monitoring
                     if data['status'].get(monitor_status[ms_id],[0,0,0])[2] > 0 and data.get('keep_{}'.format(monitor_status[ms_id]),2) <= data['status'].get(monitor_status[ms_id],[0,0,0])[2]-data['status'].get(monitor_status[ms_id],[0,0,0])[1]:
-                        #All condition accept so check next step
+                        #All condition accept so check next step (if multi condition then next step, if single condition then stop)
                         data['monitored_status'].append({monitor_status[ms_id]:{'time':data['status'].get(monitor_status[ms_id])[1],'time_keep':data['status'].get(monitor_status[ms_id])[2]}})
                         before_on_off='{}'.format(on_off)
                         time.sleep(monitor_interval)
                         break
+
+                    # Keep status on/off during keep_on/keep_off (except condition) time then breaking to return
+                    # It Only monitoring for single condition.
+                    # Off->On case, it made an error for opposit required condition time in monitoring, So ignore this condition at multi step checking
+                    if len(monitor_status) == 1 and monitor_status[ms_id] != on_off and data.get('keep_{}'.format(on_off),0) > 0 and on_off in data.get('status'):
+                        if data.get('status').get(on_off)[2] - data.get('status').get(on_off)[0] > data.get('keep_{}'.format(on_off)):
+                            data['done']={TIME().Int():'For {}. But, keep {} condition status for over {} seconds'.format('->'.join(monitor_status),on_off,data.get('keep_{}'.format(on_off)))}
+                            data['done_reason']='timeout'
+                            return 
                 elif on_off == 'up':
                     if before_on_off == 'on':
-                        if status_log: StdOut(self.power_off_tag)
+                        #if status_log: StdOut(self.power_off_tag)
+                        if status_log: printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
                         data['symbol']=self.power_off_tag
                         on_off='off'
                         if monitor_status[ms_id] == 'off':
@@ -1306,14 +1332,17 @@ class kBmc:
                             reset_condition(data,before_on_off,on_off)
                             resetted=True
                     else: 
-                        if status_log: StdOut(self.power_up_tag)
+                        #if status_log: StdOut(self.power_up_tag)
+                        if status_log: printf(self.power_up_tag,log=self.log,direct=True,log_level=1)
                         data['symbol']=self.power_up_tag
                 elif on_off == 'dn':
-                    if status_log: StdOut(self.power_down_tag)
+                    #if status_log: StdOut(self.power_down_tag)
+                    if status_log: printf(self.power_down_tag,log=self.log,direct=True,log_level=1)
                     data['symbol']=self.power_down_tag
                 else: #Unknown
                     data['status']={}
-                    if status_log: StdOut(self.power_unknown_tag)
+                    #if status_log: StdOut(self.power_unknown_tag)
+                    if status_log: printf(self.power_unknown_tag,log=self.log,direct=True,log_level=1)
                     data['symbol']=self.power_unknown_tag
                     if not isinstance(start_unknown,int): start_unknown=TIME().Int()
                     # if reset_after_unknown has a value then over keep unknown state then reset the BMC
@@ -1357,7 +1386,9 @@ class kBmc:
         # - rt['start']=True: if background monitor was False and I want start monitoring then give it to True
         # - rt['stop']=True : Stop monitoring process
         timeout=timeout if isinstance(timeout,int) else 1200
-        rt={'status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0,'start':start,'timeout':timeout}
+        stop_func=Pop(opts,'cancel_func',Pop(opts,'stop_func',False))
+        rt={'status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':stop_func,'count':0,'start':start,'timeout':timeout}
+        #rt={'status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0,'start':start,'timeout':timeout}
         if background is True:
             if rt.get('worker') and rt['worker'].isAlive():
                 print('Already running')
@@ -1379,7 +1410,7 @@ class kBmc:
                     ip=mac2ip(self.mac)
                     chk=True
                     self.checked_port=False
-            if ping(ip,count=0,timeout=self.timeout,log=self.log):
+            if ping(ip,count=0,timeout=self.timeout,log=self.log,cancel_func=cancel_func):
                 if self.checked_port is False:
                     if IpV4(ip,port=self.port):
                         self.checked_port=True
@@ -1388,7 +1419,7 @@ class kBmc:
                         printf(ip,log=self.log,log_level=1,dsp='e')
                         return False,self.ip,self.user,self.passwd
                 self.checked_ip=True
-                ok,user,passwd=self.find_user_pass(ip,trace=trace)
+                ok,user,passwd=self.find_user_pass(ip,trace=trace,cancel_func=cancel_func)
                 if ok:
                     if chk:
                         mac=self.get_mac(ip,user=user,passwd=passwd)
@@ -1519,7 +1550,9 @@ class kBmc:
                     if uu is None: continue
                     for pp in test_pass_sample:
                         if pp is None: continue
-                        if ping(ip,count=1,keep_good=0,timeout=300): # Timeout :5min, count:2, just pass when pinging
+                        if self.cancel(cancel_func=cancel_func):
+                            return False,None,None
+                        if ping(ip,count=1,keep_good=0,timeout=300,cancel_func=cancel_func): # Timeout :5min, count:2, just pass when pinging
                             tested_user_pass.append((uu,pp))
                             printf("""Try BMC User({}) and password({})""".format(uu,pp),log=self.log,log_level=7,dsp='s' if trace else 'a')
                             cmd_str=mm.cmd_str(check_cmd,passwd=pp)
@@ -1764,13 +1797,15 @@ class kBmc:
     def reset(self,retry=0,post_keep_up=20,pre_keep_up=0,retry_interval=5,cancel_func=None):
         for i in range(0,1+retry):
             for mm in self.cmd_module:
-                if ping(self.ip,timeout=1800,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func)):
+                #if ping(self.ip,timeout=1800,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func)):
+                if ping(self.ip,timeout=1800,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func):
                     printf('R',log=self.log,log_level=1,direct=True)
                     rc=self.run_cmd(mm.cmd_str('ipmi reset'))
                     if krc(rc[0],chk='error'):
                         return rc
                     if krc(rc[0],chk=True):
-                        if ping(self.ip,timeout=1800,keep_good=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func)):
+                        #if ping(self.ip,timeout=1800,keep_good=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func)):
+                        if ping(self.ip,timeout=1800,keep_good=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func):
                             return True,'Pinging to BMC after reset BMC'
                         else:
                             return False,'Can not Pinging to BMC after reset BMC'
@@ -2089,8 +2124,10 @@ class kBmc:
         print('%10s : %s'%("BootOrder",'{}'.format(self.bootorder()[1])))
 
 
-    def is_up(self,timeout=1200,keep_up=60,interval=8,sensor_on_monitor=600,reset_after_unknown=0,status_log=True,**opts):
-        rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['on'],keep_off=0,keep_on=keep_up,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=0,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown)
+    def is_up(self,timeout=1200,interval=8,sensor_on_monitor=600,reset_after_unknown=0,status_log=True,**opts):
+        keep_on=Pop(opts,'keep_up',Pop(opts,'keep_on',60))
+        keep_off=Pop(opts,'keep_down',Pop(opts,'keep_off',0))
+        rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['on'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=0,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
         out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
         if len(rt.get('monitored_status',[])) == 1:
             if rt.get('repeat',{}).get('num') > 0:
@@ -2098,8 +2135,10 @@ class kBmc:
             return True,next(iter(out.values())) if isinstance(out,dict) else out
         return False,out
 
-    def is_down_up(self,timeout=1200,keep_up=60,keep_down=0,sensor_on_monitor=600,sensor_off_monitor=0,interval=8,status_log=True,reset_after_unknown=0,**opts): # Node state
-        rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['off','on'],keep_off=keep_down,keep_on=keep_up,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown)
+    def is_down_up(self,timeout=1200,sensor_on_monitor=600,sensor_off_monitor=0,interval=8,status_log=True,reset_after_unknown=0,**opts): # Node state
+        keep_on=Pop(opts,'keep_up',Pop(opts,'keep_on',60))
+        keep_off=Pop(opts,'keep_down',Pop(opts,'keep_off',0))
+        rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['off','on'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
         out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
         if len(rt.get('monitored_status',[])) == 2:
             if rt.get('repeat',{}).get('num') > 0:
@@ -2107,8 +2146,10 @@ class kBmc:
             return True,out
         return False,out
 
-    def is_down(self,timeout=1200,keep_down=60,interval=8,sensor_off_monitor=0,status_log=True,reset_after_unknown=0,**opts): # Node state
-        rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['off'],keep_off=keep_down,keep_on=0,sensor_on_monitor=0,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown)
+    def is_down(self,timeout=1200,interval=8,sensor_off_monitor=0,status_log=True,reset_after_unknown=0,**opts): # Node state
+        keep_on=Pop(opts,'keep_up',Pop(opts,'keep_on',0))
+        keep_off=Pop(opts,'keep_down',Pop(opts,'keep_off',60))
+        rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['off'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=0,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
         out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
         if len(rt.get('monitored_status',[])) == 1:
             if rt.get('repeat',{}).get('num') > 0:
@@ -2119,11 +2160,12 @@ class kBmc:
     def get_boot_mode(self):
         return self.bootorder(mode='status')
 
-    def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,timeout=3600,lanmode=None,fail_down_time=240):
+    def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,timeout=3600,lanmode=None,fail_down_time=240,cancel_func=None):
         retry=Int(retry,default=0)
         timeout=Int(timeout,default=3600)
         pre_keep_up=Int(pre_keep_up,default=0)
         post_keep_up=Int(post_keep_up,default=20)
+        if cancel_func is None: cancel_func=self.cancel_func
         if cmd == 'status':
             return self.do_power('status',verify=verify)[1]
         if boot_mode:
@@ -2132,7 +2174,7 @@ class kBmc:
                 boot_mode='pxe'
             for ii in range(0,retry+1):
                 # Find ipmi information
-                ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
+                ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=cancel_func)
                 #Check Status
                 boot_mode_state=self.bootorder(mode='status')
                 #rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
@@ -2628,6 +2670,10 @@ class kBmc:
             return False,'Command not found'
         else:
             return _monitor_(title,find,timeout,session_out,stdout)
+
+    def ping(self,host=None,**opts):
+        if host is None: host=self.ip
+        return ping(host,**opts)
 
       
 
