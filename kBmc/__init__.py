@@ -963,7 +963,7 @@ class kBmc:
         self.err={}
         self.warning={}
         self.canceling={}
-        self.cancel_func=opts.get('cancel_func',None)
+        self.cancel_func=opts.get('cancel_func',opts.get('stop_func',None))
         self.mac2ip=opts.get('mac2ip',None)
         self.log=opts.get('log',None)
         self.org_user='{}'.format(self.user)
@@ -1241,8 +1241,7 @@ class kBmc:
                     data['done_reason']='timeout'
                     return
                 #manually stop condition
-                #if data.get('stop'):
-                if self.cancel(data.get('stop')):
+                if data.get('stop') is True:
                     ss=''
                     for i in data['monitored_status']:
                         ss='{}->{}'.format(ss,next(iter(i))) if ss else next(iter(i))
@@ -2398,17 +2397,23 @@ class kBmc:
                 if get_msg: return True,get_msg
                 return False,None
 
-    def cancel(self,cancel_func=None,msg=None,log_level=1):
+    def cancel(self,cancel_func=None,msg=None,log=None,log_level=1,parent=2,task_all_stop=True):
+        #task_all_stop : True, stop kBMc all, False, Only check current step for cancel() 
         if cancel_func is None: cancel_func=self.cancel_func
+        if log is None: log=self.log
         if self.canceling:
             return self.canceling
         else:
-            if IsCancel(cancel_func):
+            if IsCancel(cancel_func,log=log,log_level=log_level):
+                caller_name=FunctionName(parent=parent)
+                caller_name='{}() : '.format(caller_name) if isinstance(caller_name,str) else ''
                 if msg :
-                    printf(msg,log=self.log,log_level=log_level)
-                    self.canceling.update({TIME().Int():msg})
+                    msg='{}{}'.format(caller_name,msg)
                 else:
-                    self.canceling.update({TIME().Int():FunctionName()})
+                    msg='{}Got Cancel Signal'.format(caller_name)
+                printf(msg,log=log,log_level=log_level)
+                if task_all_stop:
+                    self.canceling.update({TIME().Int():msg})
                 return 'canceling'
         return False
 
@@ -2673,6 +2678,8 @@ class kBmc:
 
     def ping(self,host=None,**opts):
         if host is None: host=self.ip
+        if 'cancel_func' not in opts:
+            opts['cancel_func']=self.cancel
         return ping(host,**opts)
 
       
