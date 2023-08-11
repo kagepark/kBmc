@@ -1570,11 +1570,14 @@ class kBmc:
                             time.sleep(0.4)
                         else:
                             printf("""x""",log=self.log,direct=True,log_level=3)
-        if error:
-            printf("""Can not find working BMC User or password from POOL\n{}""".format(tested_user_pass),log=self.log,log_level=1,dsp='e')
-            self.error(_type='user_pass',msg="Can not find working BMC User or password from POOL\n{}".format(tested_user_pass))
-        else:
+        if tested_user_pass:
             printf("""WARN: Can not find working BMC User or password from POOL\n{}""".format(tested_user_pass),log=self.log,log_level=1,dsp='e')
+            if error:
+                self.error(_type='user_pass',msg="Can not find working BMC User or password from POOL\n{}".format(tested_user_pass))
+        else:
+            printf("""WARN: Can not access destination IP({})""".format(ip),log=self.log,log_level=1,dsp='e')
+            if error:
+                self.error(_type='ip',msg="Can not access destination IP({})".format(ip))
         return False,None,None
 
     def recover_user_pass(self):
