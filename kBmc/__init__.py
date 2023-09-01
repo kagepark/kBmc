@@ -10,6 +10,17 @@ import json
 import threading
 from kmport import *
 
+# cancel() : True : Cancel whole bmc process
+# stop     : True : stop the running process
+#### Return #####
+# True     : Good
+# False    : False
+# <+N>     : Good level user define : if rc: ok
+# 1        : Good level user define : if rc == True: ok
+# 0        : False level user define (like as cancel) : if rc == False : this is False
+# (True == 1, False == 0)
+# <STR>    : user define value      : if rc: ok
+
 class Ipmitool:
     def __init__(self,**opts):
         self.__name__='ipmitool'
@@ -312,103 +323,131 @@ class Redfish:
         # - bios mode is UEFI and order[0] is not PXE then, setup boot order to UEFI mode PXE
         #   if not then try again with ipmitool's boot order to iPXE
         #   until set to want mode
+        def SMC_OEM_SPECIAL_BOOTORDER(next_pxe_id=False):
+            #if it has multiplue PXE bootable mac then try next pxe boot id when next_pxe_id=# (int number)
+            #B13
+            naa={}
+            ok,aa=self.Get('Systems/1/Oem/Supermicro/FixedBootOrder')
+            if not ok or not isinstance(aa,dict):
+                return False
+            naa['mode']=aa.get('BootModeSelected')
+            pxe_boot_mac=[]
+            for i in aa.get('UEFINetwork'):
+                for x in i.split():
+                    a=MacV4(x)
+                    if a and a not in pxe_boot_mac:
+                        pxe_boot_mac.append(a)
+            naa['order']=aa.get('FixedBootOrder')
+            for i in range(0,len(naa['order'])):
+                if isinstance(next_pxe_id,int) and not isinstance(next_pxe_id,bool) and next_pxe_id >= i:
+                    continue
+
+                for x in naa['order'][i].split():
+                    a=MacV4(x)
+                    if a and a in pxe_boot_mac:
+                        naa['pxe_boot_id']=i
+                        naa['pxe_boot_mac']=a
+                        break
+            return naa
+
         def order_boot():
             #Get Bootorder information
             naa={}
             ok,aa=self.Get('Systems/1')
-            if not ok:
+            if not ok or not isinstance(aa,dict):
                 printf('Redfish ERROR: {}\n'.format(aa),log=self.log,log_level=1)
                 naa['error']=aa
                 return naa
-            if isinstance(aa,dict):
-                boot_info=aa.get('Boot',{})
-                if boot_info:
-                    naa['mode']=boot_info.get('BootSourceOverrideMode')
-                    naa['1']=boot_info.get('BootSourceOverrideTarget')
-                    naa['enable']=boot_info.get('BootSourceOverrideEnabled')
-                    naa['help']={}
-                    if 'BootSourceOverrideMode@Redfish.AllowableValues' in boot_info: naa['help']['mode']=boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues')
-                    if 'BootSourceOverrideTarget@Redfish.AllowableValues' in boot_info: naa['help']['boot']=boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues')
+            boot_info=aa.get('Boot',{})
+            if boot_info:
+                naa['mode']=boot_info.get('BootSourceOverrideMode')
+                naa['1']=boot_info.get('BootSourceOverrideTarget')
+                naa['enable']=boot_info.get('BootSourceOverrideEnabled')
+                naa['help']={}
+                if 'BootSourceOverrideMode@Redfish.AllowableValues' in boot_info: naa['help']['mode']=boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues')
+                if 'BootSourceOverrideTarget@Redfish.AllowableValues' in boot_info: naa['help']['boot']=boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues')
             return naa
 
-        def bios_boot(pxe_boot_mac=None):
+        def bios_boot(pxe_boot_mac=None,next_pxe_id=False):
+            # Try to Special OEM BOOT ORDER first
+            naa=SMC_OEM_SPECIAL_BOOTORDER(next_pxe_id=next_pxe_id)
+            if isinstance(naa,dict): return naa
             #Get BIOS Boot order information
             naa={}
             ok,bios_info=self.Get('Systems/1/Bios')
-            if not ok:
+            if not ok or not isinstance(bios_info,dict):
                 printf('Redfish ERROR: {}\n'.format(bios_info),log=self.log,log_level=1)
                 naa['error']=bios_info
                 return naa
-            if isinstance(bios_info,dict):
-                #PXE Boot Mac
-                if pxe_boot_mac is None: pxe_boot_mac=self.BaseMac().get('lan')
-                naa['pxe_boot_mac']=MacV4(pxe_boot_mac)
-                #Boot order
-                boot_attr=bios_info.get('Attributes',{})
-                if boot_attr:
-                    mode=None
-                    #Need update for H13, X13, B13, B2 information
-                    if 'BootModeSelect' in boot_attr: #X12
-                        mode=boot_attr.get('BootModeSelect')
-                    elif 'Bootmodeselect' in boot_attr: #X11
-                        mode=boot_attr.get('Bootmodeselect')
-                    elif 'BootSourceOverrideMode' in boot_attr:
-                        mode=boot_attr.get('BootSourceOverrideMode')
-                    if IsNone(mode): #X13
-                        #VideoOptionROM
-                        for ii in boot_attr:
-                            if ii.startswith('OnboardVideoOptionROM#'):
-                                naa['OnboardVideoOptionROM']=boot_attr[ii]
-                        #Boot order
-                        ok,aa=self.Get('Systems/1/BootOptions')
-                        if not ok:
-                            printf('Redfish ERROR: {}\n'.format(aa),log=self.log,log_level=1)
-                            naa['error']=aa
-                            return naa
-                        if isinstance(aa,dict):
-                            memb=aa.get('Members',[{}])
-                            if len(memb) == 1:
-                                naa['mode']='Legacy'
-                                naa['order']=['']
-                                naa['pxe_boot_id']=None
-                            else:
-                                naa['mode']='UEFI'
-                                naa['order']=[]
-                                for mem_id in memb:
-                                    redirect=mem_id.get('@odata.id')
-                                    if isinstance(redirect,str) and redirect:
-                                        ok,aa=self.Get(redirect)
-                                        if not ok:
-                                            printf('Redfish ERROR: {}\n'.format(aa),log=self.log,log_level=1)
-                                            naa['error']=aa
-                                            return naa
-                                        if isinstance(aa,dict):
-                                            if 'UEFI Network Card' in aa.get('DisplayName','') or 'UEFI PXE IP' in aa.get('DisplayName',''):
-                                                naa['order'].append('UEFI PXE Network: UEFI')
-                                                a=FIND(aa.get('DisplayName')).Find("(MAC:\w+)")
-                                                if a:
-                                                    mac=MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a)
-                                                    if naa.get('pxe_boot_id') is None and mac == naa['pxe_boot_mac']:
-                                                        naa['pxe_boot_id']=len(naa['order'])-1
-                                                        break
-                                            else:
-                                                naa['order'].append(aa.get('DisplayName',''))
-                    else: #X12
-                        #VideoOptionROM
-                        naa['OnboardVideoOptionROM']=bios_info.get('OnboardVideoOptionROM')
-                        naa['mode']=mode
-                        #Boot order
-                        naa['order']=[]
-                        bios_boot_info=list(boot_attr.items())
-                        for i in range(0,len(bios_boot_info)):
-                            if bios_boot_info[i][0].startswith('BootOption'):
-                                naa['order'].append(bios_boot_info[i][1])
-                                a=FIND(bios_boot_info[i][1]).Find("(MAC:\w+)")
-                                if a:
-                                    mac=MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a)
-                                    if naa.get('pxe_boot_id') is None and mac == naa['pxe_boot_mac']:
-                                        naa['pxe_boot_id']=len(naa['order'])-1
-                                        break
+            #PXE Boot Mac
+            if pxe_boot_mac is None: pxe_boot_mac=self.BaseMac().get('lan')
+            naa['pxe_boot_mac']=MacV4(pxe_boot_mac)
+            #Boot order
+            boot_attr=bios_info.get('Attributes',{})
+            if boot_attr:
+                mode=None
+                #Need update for H13, X13, B13, B2 information
+                if 'BootModeSelect' in boot_attr: #X12
+                    mode=boot_attr.get('BootModeSelect')
+                elif 'Bootmodeselect' in boot_attr: #X11
+                    mode=boot_attr.get('Bootmodeselect')
+                elif 'BootSourceOverrideMode' in boot_attr:
+                    mode=boot_attr.get('BootSourceOverrideMode')
+                if IsNone(mode): #X13
+                    #VideoOptionROM
+                    for ii in boot_attr:
+                        if ii.startswith('OnboardVideoOptionROM#'):
+                            naa['OnboardVideoOptionROM']=boot_attr[ii]
+                    #Boot order
+                    ok,aa=self.Get('Systems/1/BootOptions')
+                    if not ok:
+                        printf('Redfish ERROR: {}\n'.format(aa),log=self.log,log_level=1)
+                        naa['error']=aa
+                        return naa
+                    if isinstance(aa,dict):
+                        memb=aa.get('Members',[{}])
+                        if len(memb) == 1:
+                            naa['mode']='Legacy'
+                            naa['order']=['']
+                            naa['pxe_boot_id']=None
+                        else:
+                            naa['mode']='UEFI'
+                            naa['order']=[]
+                            for mem_id in memb:
+                                redirect=mem_id.get('@odata.id')
+                                if isinstance(redirect,str) and redirect:
+                                    ok,aa=self.Get(redirect)
+                                    if not ok:
+                                        printf('Redfish ERROR: {}\n'.format(aa),log=self.log,log_level=1)
+                                        naa['error']=aa
+                                        return naa
+                                    if isinstance(aa,dict):
+                                        if 'UEFI Network Card' in aa.get('DisplayName','') or 'UEFI PXE IP' in aa.get('DisplayName',''):
+                                            naa['order'].append('UEFI PXE Network: UEFI')
+                                            a=FIND(aa.get('DisplayName')).Find("(MAC:\w+)")
+                                            if a:
+                                                mac=MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a)
+                                                if naa.get('pxe_boot_id') is None and mac == naa['pxe_boot_mac']:
+                                                    naa['pxe_boot_id']=len(naa['order'])-1
+                                                    break
+                                        else:
+                                            naa['order'].append(aa.get('DisplayName',''))
+                else: #X12
+                    #VideoOptionROM
+                    naa['OnboardVideoOptionROM']=bios_info.get('OnboardVideoOptionROM')
+                    naa['mode']=mode
+                    #Boot order
+                    naa['order']=[]
+                    bios_boot_info=list(boot_attr.items())
+                    for i in range(0,len(bios_boot_info)):
+                        if bios_boot_info[i][0].startswith('BootOption'):
+                            naa['order'].append(bios_boot_info[i][1])
+                            a=FIND(bios_boot_info[i][1]).Find("(MAC:\w+)")
+                            if a:
+                                mac=MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a)
+                                if naa.get('pxe_boot_id') is None and mac == naa['pxe_boot_mac']:
+                                    naa['pxe_boot_id']=len(naa['order'])-1
+                                    break
             return naa
 
         def SetBootOrder(boot,mode='auto',keep='Once',pxe_boot_mac=None,force=False):
@@ -797,20 +836,28 @@ class Redfish:
         return naa
 
     def PXEMAC(self):
+        #if it has multiplue PXE bootable mac then try next pxe boot id when next_pxe_id=# (int number)
+        #B13
+        ok,aa=self.Get('Systems/1/Oem/Supermicro/FixedBootOrder')
+        if ok and isinstance(aa,dict):
+            for i in aa.get('UEFINetwork'):
+                for x in i.split():
+                    a=MacV4(x)
+                    return a
+        #Normal system case
         ok,aa=self.Get('Systems/1')
-        if not ok:
+        if not ok or not isinstance(aa,dict):
             printf('Redfish ERROR: {}\n'.format(aa),log=self.log,log_level=1)
             return False
-        if isinstance(aa,dict):
-            rf_key=aa.get('EthernetInterfaces',{}).get('@odata.id')
-            if rf_key:
-                ok,aa=self.Get(rf_key)
-                if ok and isinstance(aa,dict):
-                    rf_key=aa.get('Members',[{}])[0].get('@odata.id')
-                    if rf_key:
-                        ok,aa=self.Get(rf_key)
-                        if ok and isinstance(aa,dict):
-                            return MacV4(aa.get('MACAddress'))
+        rf_key=aa.get('EthernetInterfaces',{}).get('@odata.id')
+        if rf_key:
+            ok,aa=self.Get(rf_key)
+            if ok and isinstance(aa,dict):
+                rf_key=aa.get('Members',[{}])[0].get('@odata.id')
+                if rf_key:
+                    ok,aa=self.Get(rf_key)
+                    if ok and isinstance(aa,dict):
+                        return MacV4(aa.get('MACAddress'))
         
     def Memory(self):
         naa={}
@@ -1043,6 +1090,8 @@ class kBmc:
         if self.log is None:
             global printf_log_base
             printf_log_base=6
+            global printf_caller_detail
+            global printf_caller_tree
         self.timeout=opts.get('timeout',1800)
         self.checked_ip=False
         self.checked_port=False
@@ -1072,6 +1121,9 @@ class kBmc:
             if check:
                 ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
                 if ok:return Redfish(host=ip,user=user,passwd=passwd,log=self.log)
+                if isinstance(ok,int) and not isinstance(ok,bool) and ok == 0:
+                    # Canceled
+                    return 0
                 return False
             else:
                 return Redfish(host=self.ip,user=self.user,passwd=self.passwd,log=self.log)
@@ -1118,6 +1170,8 @@ class kBmc:
             if cpu_temp is False: return 'error'
             if isinstance(cpu_temp,int): return 'up'
             return 'down'
+        elif not isinstance(rf,bool) and rf == 0:
+            return 'cancel'
         return 'error'
 
     def power_get_status(self,redfish=None,sensor=None,tools=None,**opts):
@@ -1131,7 +1185,7 @@ class kBmc:
             rf=self.CallRedfish()
             if rf:
                 rt=rf.Power(cmd='status')
-                if isinstance(rt,str) and IsIn(rt,['on','off']):
+                if IsIn(rt,['on','off']):
                     out[1]=rt
         if tools:
             for mm in self.cmd_module:
@@ -1154,6 +1208,7 @@ class kBmc:
         #sensor_on/off < timeout : check sensor data during the sensor_on time after the time, it will check redfish or ipmitool data
         #sensor_on/off == 0 : not check sensor data
         #keep_on/off : keeping same condition to the defined time
+        # data['done_reason']='Reason Tag (ok/stop/cancel/error/timeout)'
         def is_on_off(data,sensor_time,start,sensor=False,now=None,mode=['a']):
             if sensor == True or sensor_time > 0:
                 if not isinstance(now,int): now=TIME().Int()
@@ -1262,6 +1317,16 @@ class kBmc:
         while len(data['monitored_status']) < len(monitor_status):
             # if not starting monitor then keep ignore
             if data.get('start') is False:
+                #manually stop condition
+                if data.get('stop') is True or IsBreak(data.get('cancel_func')):
+                    ss=''
+                    if IsBreak(data.get('cancel_func')):
+                        data['done']={TIME().Int():'Got Cancel Signal during monitor {}{}'.format('_'.join(monitor_status),ss)}
+                        data['done_reason']='cancel'
+                    else:
+                        data['done']={TIME().Int():'Got STOP Signal during monitor {}{}'.format('_'.join(monitor_status),ss)}
+                        data['done_reason']='stop'
+                    return
                 time.sleep(1)
                 continue
             else:
@@ -1283,13 +1348,17 @@ class kBmc:
                     data['done_reason']='timeout'
                     return
                 #manually stop condition
-                if data.get('stop') is True:
+                if data.get('stop') is True or IsBreak(data.get('cancel_func')):
                     ss=''
                     for i in data['monitored_status']:
                         ss='{}->{}'.format(ss,next(iter(i))) if ss else next(iter(i))
                     if ss: ss=' at {} state'.format(ss)
-                    data['done']={TIME().Int():'Got STOP Signal during monitor {}{}'.format('_'.join(monitor_status),ss)}
-                    data['done_reason']='stop'
+                    if IsBreak(data.get('cancel_func')):
+                        data['done']={TIME().Int():'Got Cancel Signal during monitor {}{}'.format('_'.join(monitor_status),ss)}
+                        data['done_reason']='cancel'
+                    else:
+                        data['done']={TIME().Int():'Got STOP Signal during monitor {}{}'.format('_'.join(monitor_status),ss)}
+                        data['done_reason']='stop'
                     return
 
                 # Get current power status
@@ -1427,8 +1496,7 @@ class kBmc:
         # - rt['start']=True: if background monitor was False and I want start monitoring then give it to True
         # - rt['stop']=True : Stop monitoring process
         timeout=timeout if isinstance(timeout,int) else 1200
-        stop_func=Pop(opts,'cancel_func',Pop(opts,'stop_func',False))
-        rt={'status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':stop_func,'count':0,'start':start,'timeout':timeout}
+        rt={'status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0,'start':start,'timeout':timeout,'cancel_func':self.cancel}
         #rt={'status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0,'start':start,'timeout':timeout}
         if background is True:
             if rt.get('worker') and rt['worker'].isAlive():
@@ -1436,10 +1504,9 @@ class kBmc:
                 return rt
             rt['worker']=threading.Thread(target=self.power_status_monitor,args=(monitor_status,rt,self.power_get_status,keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,False,monitor_interval,timeout,0))
             rt['worker'].start()
-            return rt
         else:
-            aa=self.power_status_monitor(monitor_status,rt,self.power_get_status,keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,status_log,monitor_interval,timeout,reset_after_unknown)
-            return rt
+            self.power_status_monitor(monitor_status,rt,self.power_get_status,keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,status_log,monitor_interval,timeout,reset_after_unknown)
+        return rt
 
     def check(self,mac2ip=None,cancel_func=None,trace=False):
         if cancel_func is None: cancel_func=self.cancel_func
@@ -1451,7 +1518,11 @@ class kBmc:
                     ip=mac2ip(self.mac)
                     chk=True
                     self.checked_port=False
-            if ping(ip,count=0,timeout=self.timeout,log=self.log,cancel_func=cancel_func):
+            ping_rc=ping(ip,count=0,timeout=self.timeout,log=self.log,cancel_func=cancel_func)
+            if not isinstance(ping_rc,bool) and ping_rc == 0:
+                # Canceled
+                return 0,self.ip,self.user,self.passwd
+            elif ping_rc:
                 if self.checked_port is False:
                     if IpV4(ip,port=self.port):
                         self.checked_port=True
@@ -1598,9 +1669,10 @@ class kBmc:
                     if uu is None: continue
                     for pp in test_pass_sample:
                         if pp is None: continue
-                        if self.cancel(cancel_func=cancel_func):
-                            return False,None,None
-                        if ping(ip,count=1,keep_good=0,timeout=300,cancel_func=cancel_func): # Timeout :5min, count:2, just pass when pinging
+                        ping_rc=ping(ip,count=1,keep_good=0,timeout=300,cancel_func=cancel_func) # Timeout :5min, count:2, just pass when pinging
+                        if (not isinstance(ping_rc,bool) and ping_rc==0) or self.cancel(cancel_func=cancel_func):
+                            return 0,None,None # Cancel
+                        elif ping_rc:
                             tested_user_pass.append((uu,pp))
                             printf("""Try BMC User({}) and password({})""".format(uu,pp),log=self.log,log_level=7,dsp='s' if trace else 'a')
                             cmd_str=mm.cmd_str(check_cmd,passwd=pp)
@@ -1611,7 +1683,7 @@ class kBmc:
                                 chk_user_pass=True
                             elif rc[0] == 1 and self.redfish:
                                 rf=Redfish(host=ip,user=uu,passwd=pp)
-                                if rf.Power(cmd='status',silent_status_log=True) in ['on','off']:
+                                if IsIn(rf.Power(cmd='status',silent_status_log=True),['on','off']):
                                     chk_user_pass=True
                             if chk_user_pass:
                                 if self.user != uu:
@@ -1794,13 +1866,23 @@ class kBmc:
                 printf('Connection error condition:{}, return:{}'.format(rc_err_connection,Get(rc,0)),log=self.log,log_level=7)
                 printf('Connection Error:',log=self.log,log_level=1,dsp='d',direct=True)
                 #Check connection
-                if ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func)):
+                ping_rc=ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func))
+                if not isinstance(ping_rc,bool) and ping_rc==0:
+                    printf(' !! Canceling Job',log=self.log,log_level=1,dsp='d')
+                    self.warn(_type='cancel',msg="Canceling")
+                    return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
+                elif ping_rc:
                     printf('Lost Network',log=self.log,log_level=1,dsp='d')
                     self.error(_type='net',msg="{} lost network(over 30min)".format(self.ip))
                     return False,rc,'Lost Network, Please check your server network(1)'
             elif IsIn(rc_0,rc_err_bmc_user): # retry condition1
                 #Check connection
-                if ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func)):
+                ping_rc=ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func))
+                if not isinstance(ping_rc,bool) and ping_rc==0:
+                    printf(' !! Canceling Job',log=self.log,log_level=1,dsp='d')
+                    self.warn(_type='cancel',msg="Canceling")
+                    return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
+                elif ping_rc:
                     printf('Lost Network',log=self.log,log_level=1,dsp='d')
                     self.error(_type='net',msg="{} lost network".format(self.ip))
                     return False,rc,'Lost Network, Please check your server network(2)'
@@ -1815,7 +1897,12 @@ class kBmc:
             else:
                 if 'ipmitool' in cmd_str and i < 1:
                     #Check connection
-                    if ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func)):
+                    ping_rc=ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func))
+                    if not isinstance(ping_rc,bool) and ping_rc==0:
+                        printf(' !! Canceling Job',log=self.log,log_level=1,dsp='d')
+                        self.warn(_type='cancel',msg="Canceling")
+                        return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
+                    elif ping_rc:
                         printf('Lost Network',log=self.log,log_level=1,dsp='d')
                         self.error(_type='net',msg="{} lost network".format(self.ip))
                         return False,rc,'Lost Network, Please check your server network(3)'
@@ -1851,13 +1938,19 @@ class kBmc:
     def reset(self,retry=0,post_keep_up=20,pre_keep_up=0,retry_interval=5,cancel_func=None):
         for i in range(0,1+retry):
             for mm in self.cmd_module:
-                if ping(self.ip,timeout=1800,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func):
+                ping_rc=ping(self.ip,timeout=1800,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
+                if not isinstance(ping_rc,bool) and ping_rc==0:
+                    return 0,'Canceled'
+                elif ping_rc:
                     printf('R',log=self.log,log_level=1,direct=True)
                     rc=self.run_cmd(mm.cmd_str('ipmi reset'))
                     if krc(rc[0],chk='error'):
                         return rc
                     if krc(rc[0],chk=True):
-                        if ping(self.ip,timeout=1800,keep_good=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func):
+                        ping_rc=ping(self.ip,timeout=1800,keep_good=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
+                        if not isinstance(ping_rc,bool) and ping_rc==0:
+                            return 0,'Canceled'
+                        elif ping_rc:
                             return True,'Pinging to BMC after reset BMC'
                         else:
                             return False,'Can not Pinging to BMC after reset BMC'
@@ -2199,8 +2292,8 @@ class kBmc:
                     if eth_mac != '00:00:00:00:00:00':
                         self.eth_mac=eth_mac
                         return True,self.eth_mac
-            if krc(rc[0],chk='error'):
-               return rc
+            #if krc(rc[0],chk='error'):
+            #   return rc
         #If not found then try with redfish
         rf=self.CallRedfish()
         if rf:
@@ -2225,10 +2318,6 @@ class kBmc:
         ok,ip,user,passwd=self.check(mac2ip=self.mac2ip)
         rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
         return rf.Network()
-
-#    def ping(self,ip=None,test_num=3,retry=1,wait=1,keep=0,timeout=30): # BMC is on (pinging)
-#        if ip is None: ip=self.ip
-#        return ping(ip,count=retry,interval=wait,keep_good=keep,log=self.log,timeout=timeout)
 
     def summary(self): # BMC is ready(hardware is ready)
         if self.ping() is False:
@@ -2299,7 +2388,9 @@ class kBmc:
                 return aa[1]
             elif self.redfish:
                 rf=self.CallRedfish()
-                if rf: return rf.Power('status')
+                if rf:
+                    rfp=rf.Power('status')
+                    if IsIn(rfp,['on','off']): return rfp
             return aa[1]
         if boot_mode:
             if boot_mode == 'ipxe' or ipxe:
@@ -2534,17 +2625,17 @@ class kBmc:
         if self.canceling:
             return self.canceling
         else:
-            if IsCancel(cancel_func,log=log,log_level=log_level):
+            if IsBreak(cancel_func,log=log,log_level=log_level):
                 caller_name=FunctionName(parent=parent)
                 caller_name='{}() : '.format(caller_name) if isinstance(caller_name,str) else ''
                 if msg :
-                    msg='{}{}'.format(caller_name,msg)
+                    msg='{}{}\n'.format(caller_name,msg)
                 else:
-                    msg='{}Got Cancel Signal'.format(caller_name)
+                    msg='{}Got Cancel Signal\n'.format(caller_name)
                 printf(msg,log=log,log_level=log_level)
                 if task_all_stop:
                     self.canceling.update({TIME().Int():msg})
-                return 'canceling'
+                return True
         return False
 
     def is_admin_user(self,**opts):
@@ -2739,6 +2830,10 @@ class kBmc:
                     tmp_a=tmp.split('\n')
                 tmp_n=len(tmp_a)
                 # Time Out
+                if self.cancel():
+                    if old_end_line:
+                        return 0,old_end_line
+                    return 0,tmp_a[mon_line-1]
                 if Time.Out(timeout):
                     print('Monitoring timeout({} sec)'.format(timeout))
                     _kill_(title)
