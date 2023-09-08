@@ -1039,6 +1039,7 @@ class Redfish:
 
 class kBmc:
     def __init__(self,*inps,**opts):
+        self.find_user_passwd_with_redfish=opts.get('find_user_passwd_with_redfish',False)
         self.power_on_tag='¯'
         self.power_up_tag='∸'
         self.power_off_tag='_'
@@ -1115,7 +1116,6 @@ class kBmc:
         self.power_get_redfish=opts.get('power_get_redfish',True)
         self.power_get_sensor=opts.get('power_get_sensor',True)
         self.power_get_tools=opts.get('power_get_tools',True)
-        self.find_user_passwd_with_redfish=opts.get('find_user_passwd_with_redfish',False)
 
     def CallRedfish(self,force=False,check=True):
         if self.redfish or force:
@@ -1678,7 +1678,7 @@ class kBmc:
                             return 0,None,None # Cancel
                         elif ping_rc:
                             tested_user_pass.append((uu,pp))
-                            printf("""Try BMC User({}) and password({})""".format(uu,pp),log=self.log,log_level=7,dsp='s' if trace else 'a')
+                            printf("""Try BMC User({}) and password({})""".format(uu,pp),log=self.log,log_level=7,dsp='s' if trace else 'f')
                             cmd_str=mm.cmd_str(check_cmd,passwd=pp)
                             full_str=cmd_str[1]['base'].format(ip=ip,user=uu,passwd=pp)+' '+cmd_str[1]['cmd']
                             rc=rshell(full_str)
@@ -1696,14 +1696,14 @@ class kBmc:
                                         chk_user_pass=True
                             if chk_user_pass:
                                 if self.user != uu:
-                                    printf("""[BMC]Found New User({})""".format(uu),log=self.log,log_level=3)
+                                    printf("""\n[BMC]Found New User({})""".format(uu),log=self.log,log_level=3)
                                     self.user=uu
                                 if self.passwd != pp:
-                                    printf("""[BMC]Found New Password({})""".format(pp),log=self.log,log_level=3)
+                                    printf("""\n[BMC]Found New Password({})""".format(pp),log=self.log,log_level=3)
                                     self.passwd=pp
                                 return True,uu,pp
                             if not print_msg:
-                                printf("""Check BMC USER and PASSWORD from the POOL:""",log=self.log,log_level=3)
+                                printf("""Check BMC USER and PASSWORD from the POOL:""",direct=True,log=self.log,log_level=3)
                                 print_msg=True
                             if self.log_level < 7 and not trace:
                                 printf("""p""",log=self.log,direct=True,log_level=3)
@@ -1711,7 +1711,7 @@ class kBmc:
                             #time.sleep(0.4)
                         else:
                             if not print_msg:
-                                printf("""Check BMC USER and PASSWORD from the POOL:""",log=self.log,log_level=3)
+                                printf("""Check BMC USER and PASSWORD from the POOL:""",direct=True,log=self.log,log_level=3)
                                 print_msg=True
                             printf("""x""",log=self.log,direct=True,log_level=3)
         if tested_user_pass:
