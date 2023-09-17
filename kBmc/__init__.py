@@ -1670,15 +1670,17 @@ class kBmc:
                 test_pass_sample=MoveData(test_pass_sample,self.passwd,to='first')
                 if self.default_passwd not in test_pass_sample: test_pass_sample.append(self.default_passwd)
                 for uu in test_user:
-                    if uu is None: continue
+                    #If user is None then skip
+                    if IsNone(uu): continue
                     for pp in test_pass_sample:
-                        if pp is None: continue
-                        ping_rc=ping(ip,count=1,keep_good=0,timeout=300,cancel_func=cancel_func) # Timeout :5min, count:2, just pass when pinging
+                        #If password is None then skip
+                        if IsNone(pp): continue
+                        #Check ping first before try password
+                        ping_rc=ping(ip,count=1,keep_good=0,timeout=self.timeout,cancel_func=cancel_func) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
                         if ping_rc is 0 or self.cancel(cancel_func=cancel_func):
                             return 0,None,None # Cancel
                         elif ping_rc:
                             tested_user_pass.append((uu,pp))
-                            printf("""Try BMC User({}) and password({})""".format(uu,pp),log=self.log,log_level=7,dsp='s' if trace else 'f')
                             cmd_str=mm.cmd_str(check_cmd,passwd=pp)
                             full_str=cmd_str[1]['base'].format(ip=ip,user=uu,passwd=pp)+' '+cmd_str[1]['cmd']
                             rc=rshell(full_str)
@@ -1695,33 +1697,35 @@ class kBmc:
                                     if IsIn(rf.Power(cmd='status',silent_status_log=True),['on','off']):
                                         chk_user_pass=True
                             if chk_user_pass:
-                                if self.user != uu:
+                                #Found Password. 
+                                if self.user != uu: #If changed user
                                     printf("""\n[BMC]Found New User({})""".format(uu),log=self.log,log_level=3)
                                     self.user=uu
-                                if self.passwd != pp:
+                                if self.passwd != pp: #If changed password
                                     printf("""\n[BMC]Found New Password({})""".format(pp),log=self.log,log_level=3)
                                     self.passwd=pp
                                 return True,uu,pp
-                            if not print_msg:
-                                printf("""Check BMC USER and PASSWORD from the POOL:""",direct=True,log=self.log,log_level=3)
-                                print_msg=True
-                            if self.log_level < 7 and not trace:
-                                printf("""p""",log=self.log,direct=True,log_level=3)
-                            time.sleep(1) # make to some slow check for BMC locking
-                            #time.sleep(0.4)
+                            else:
+                                #If not found current password then try next
+                                if not print_msg:
+                                    printf("""Check BMC USER and PASSWORD from the POOL:""",direct=True,log=self.log,log_level=3)
+                                    print_msg=True
+                                if self.log_level < 7 and not trace:
+                                    printf("""p""",log=self.log,direct=True,log_level=3)
+                                else:
+                                    printf("""Try BMC User({}) and password({}), But failed. test next one""".format(uu,pp),log=self.log,log_level=3)
+                                time.sleep(1) # make to some slow check for BMC locking
+                                #time.sleep(0.4)
                         else:
-                            if not print_msg:
-                                printf("""Check BMC USER and PASSWORD from the POOL:""",direct=True,log=self.log,log_level=3)
-                                print_msg=True
-                            printf("""x""",log=self.log,direct=True,log_level=3)
-        if tested_user_pass:
-            printf("""WARN: Can not find working BMC User or password from POOL\n{}""".format(tested_user_pass),log=self.log,log_level=1,dsp='e')
-            if error:
-                self.error(_type='user_pass',msg="Can not find working BMC User or password from POOL\n{}".format(tested_user_pass))
-        else:
-            printf("""WARN: Can not access destination IP({})""".format(ip),log=self.log,log_level=1,dsp='e')
-            if error:
-                self.error(_type='ip',msg="Can not access destination IP({})".format(ip))
+                            # Ping error or timeout
+                            printf("""WARN: Can not access destination IP({})""".format(ip),log=self.log,log_level=1,dsp='e')
+                            if error:
+                                self.error(_type='ip',msg="Can not access destination IP({})".format(ip))
+                            return False,None,None
+        #Whole tested but can not find
+        printf("""WARN: Can not find working BMC User or password from POOL\n{}""".format(tested_user_pass),log=self.log,log_level=1,dsp='e')
+        if error:
+            self.error(_type='user_pass',msg="Can not find working BMC User or password from POOL\n{}".format(tested_user_pass))
         return False,None,None
 
     def recover_user_pass(self):
@@ -1753,7 +1757,7 @@ class kBmc:
                 recover_cmd=mm.cmd_str("""user add 2 {} '{}' 4""".format(self.org_user,self.org_passwd))
         printf("""Recover command: {}""".format(recover_cmd),log_level=7)
         rc=self.run_cmd(recover_cmd)
-        
+
         if krc(rc[0],chk='error'):
             printf("""BMC Password: Recover fail""",log=self.log,log_level=1)
             self.warn(_type='ipmi_user',msg="BMC Password: Recover fail")
@@ -1799,7 +1803,7 @@ class kBmc:
                 self.warn(_type='ipmi_user',msg="Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.")
                 printf("""BMC Password: Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.""",log=self.log,log_level=1)
                 return False,self.user,self.passwd
-                
+
     def run_cmd(self,cmd,append=None,path=None,retry=0,timeout=None,return_code={'ok':[0,True],'fail':[]},show_str=False,dbg=False,mode='app',cancel_func=None,peeling=False,progress=False,ip=None,user=None,passwd=None,cd=False,check_password_rc=[],trace_passwd=False):
         if cancel_func is None: cancel_func=self.cancel_func
         error=self.error()
@@ -1986,15 +1990,15 @@ class kBmc:
             full_str=cmd_str[1]['base'].format(ip=ip,user=user,passwd=passwd)+' '+cmd_str[1]['cmd']
             rc=rshell(full_str,log=self.log,progress_pre_new_line=True,progress_post_new_line=True)
             if krc(rc[0],chk=True):
-              if name == 'smc':
-                  self.mac=rc[1].lower()
-                  return True,self.mac
-              elif name == 'ipmitool':
-                  for ii in rc[1].split('\n'):
-                      ii_a=ii.split()
-                      if IsIn('MAC',ii_a,idx=0) and IsIn('Address',ii_a,idx=1) and IsIn(':',ii_a,idx=2):
-                          self.mac=ii_a[-1].lower()
-                          return True,self.mac
+                if name == 'smc':
+                    self.mac=rc[1].lower()
+                    return True,self.mac
+                elif name == 'ipmitool':
+                    for ii in rc[1].split('\n'):
+                        ii_a=ii.split()
+                        if IsIn('MAC',ii_a,idx=0) and IsIn('Address',ii_a,idx=1) and IsIn(':',ii_a,idx=2):
+                            self.mac=ii_a[-1].lower()
+                            return True,self.mac
         return False,None
 
     def dhcp(self):
@@ -2070,24 +2074,24 @@ class kBmc:
                 br_rc=self.bootorder(mode='pxe',ipxe=ipxe,force=True,persistent=persistent,set_bios_uefi=set_bios_uefi)
                 if br_rc[0]:
                     if self.power('on',verify=False):
-                       time.sleep(10)
-                       frc_msg=''
-                       for i in range(0,200):
-                           frc=self.bootorder(mode='status')
-                           if frc[0] == 'pxe':
-                               if ipxe:
-                                   if frc[1]: 
-                                       printf('Set to PXE Config with UEFI mode',log=self.log,log_level=6)
-                                       return True,'Set to PXE Config with UEFI mode',frc[2]
-                               else:
-                                   if not frc[1]:
-                                       printf('Set to PXE Config',log=self.log,log_level=6)
-                                       return True,'Set to PXE Config',frc[2]
-                           printf('.',direct=True,log=self.log,log_level=1)
-                           frc_msg='got {} Config{}'.format(frc[0],' with UEFI mode' if crc[1] else '')
-                           time.sleep(6)
-                       printf('Can not find {}PXE Config, Currently it {}'.format('i' if ipxe else '',frc_msg),log=self.log,log_level=6)
-                       return False,'Can not find {}PXE Config, Currently it {}'.format('i' if ipxe else '',frc_msg),False
+                        time.sleep(10)
+                        frc_msg=''
+                        for i in range(0,200):
+                            frc=self.bootorder(mode='status')
+                            if frc[0] == 'pxe':
+                                if ipxe:
+                                    if frc[1]: 
+                                        printf('Set to PXE Config with UEFI mode',log=self.log,log_level=6)
+                                        return True,'Set to PXE Config with UEFI mode',frc[2]
+                                else:
+                                    if not frc[1]:
+                                        printf('Set to PXE Config',log=self.log,log_level=6)
+                                        return True,'Set to PXE Config',frc[2]
+                            printf('.',direct=True,log=self.log,log_level=1)
+                            frc_msg='got {} Config{}'.format(frc[0],' with UEFI mode' if crc[1] else '')
+                            time.sleep(6)
+                        printf('Can not find {}PXE Config, Currently it {}'.format('i' if ipxe else '',frc_msg),log=self.log,log_level=6)
+                        return False,'Can not find {}PXE Config, Currently it {}'.format('i' if ipxe else '',frc_msg),False
                     else:
                         printf('Can not power on the server',log=self.log,log_level=6)
                         return False,'Can not power on the server',False
@@ -2100,7 +2104,7 @@ class kBmc:
         else:
             printf('Can not power off the server',log=self.log,log_level=6)
             return False,'Can not power off the server',False
-                        
+
     def bootorder(self,mode=None,ipxe=False,persistent=False,force=False,boot_mode={'smc':['pxe','bios','hdd','cd','usb'],'ipmitool':['pxe','ipxe','bios','hdd']},bios_cfg=None,set_bios_uefi=True):
         rc=False,"Unknown boot mode({})".format(mode)
         ipmi_ip=self.ip
