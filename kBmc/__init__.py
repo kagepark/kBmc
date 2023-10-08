@@ -1905,16 +1905,13 @@ class kBmc:
                 printf('''** Do CMD   : %s
  - Path     : %s
  - Timeout  : %-15s  - Progress : %s
- - CHK_CODE : %s'''%(cmd_str,path,time,progress,return_code),log=self.log,log_level=1,dsp='d')
-#                printf(' - Progress : {}'.format(progress),log=self.log,log_level=1,dsp='d')
-#                printf(' - Timeout  : %-15s  - PATH     : %s'%(timeout,path),log=self.log,log_level=1,dsp='d')
-#                printf(' - CHK_CODE : {}'.format(return_code),log=self.log,log_level=1,dsp='d')
+ - CHK_CODE : %s'''%(cmd_str,path,timeout,progress,return_code),log=self.log,log_level=1,dsp='d' if dbg else 's')
             if self.cancel(cancel_func=cancel_func):
                 printf(' !! Canceling Job',log=self.log,log_level=1,dsp='d')
                 self.warn(_type='cancel',msg="Canceling")
                 return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
             try:
-                rc=rshell(cmd_str,path=path,timeout=timeout,progress=progress,log=self.log,progress_pre_new_line=True,progress_post_new_line=True,cd=cd)
+                rc=rshell(cmd_str,path=path,timeout=timeout,progress=progress,log=self.log,cd=cd)
                 if Get(rc,0) == -2 : return False,rc,'Timeout({})'.format(timeout)
                 if (not check_password_rc and rc[0] != 0) or (rc[0] !=0 and rc[0] in check_password_rc):
                     ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=cancel_func,trace=trace_passwd)
@@ -2044,7 +2041,7 @@ class kBmc:
             name=mm.__name__
             cmd_str=mm.cmd_str('ipmi lan mac',passwd=self.passwd)
             full_str=cmd_str[1]['base'].format(ip=ip,user=user,passwd=passwd)+' '+cmd_str[1]['cmd']
-            rc=rshell(full_str,log=self.log,progress_pre_new_line=True,progress_post_new_line=True)
+            rc=rshell(full_str,log=self.log)
             if krc(rc[0],chk=True):
                 if name == 'smc':
                     self.mac=rc[1].lower()
@@ -2451,9 +2448,9 @@ class kBmc:
     def get_boot_mode(self):
         return self.bootorder(mode='status')
 
-    def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,timeout=3600,lanmode=None,fail_down_time=240,cancel_func=None,set_bios_uefi_mode=False):
+    def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,timeout=1800,lanmode=None,fail_down_time=240,cancel_func=None,set_bios_uefi_mode=False):
         retry=Int(retry,default=0)
-        timeout=Int(timeout,default=3600)
+        timeout=Int(timeout,default=1800)
         pre_keep_up=Int(pre_keep_up,default=0)
         post_keep_up=Int(post_keep_up,default=20)
         if cancel_func is None: cancel_func=self.cancel_func
