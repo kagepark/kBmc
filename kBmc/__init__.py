@@ -699,7 +699,7 @@ class Redfish:
             stat=self.power_unknown_tag
             cpu_temp=self.SystemReadySensor()
             if cpu_temp is False: return False
-            if isinstance(cpu_temp):
+            if cpu_temp in ['up']:
                 if keep_up > 0:
                     if up_init is None: up_init=TIME()
                     if up_init.Out(keep_up): return True
@@ -721,7 +721,7 @@ class Redfish:
             stat=self.power_unknown_tag
             cpu_temp=self.SystemReadySensor()
             if cpu_temp is False: return False
-            if isinstance(cpu_temp):
+            if cpu_temp in ['up']:
                 stat=self.power_on_tag
             else:
                 if keep_down > 0:
@@ -1855,7 +1855,7 @@ class kBmc:
                 printf("""BMC Password: Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.""",log=self.log,log_level=1)
                 return False,self.user,self.passwd
 
-    def run_cmd(self,cmd,append=None,path=None,retry=0,timeout=None,return_code={'ok':[0,True],'fail':[]},show_str=False,dbg=False,mode='app',cancel_func=None,peeling=False,progress=False,ip=None,user=None,passwd=None,cd=False,check_password_rc=[],trace_passwd=False):
+    def run_cmd(self,cmd,append=None,path=None,retry=0,timeout=None,return_code={'ok':[0,True],'fail':[]},show_str=False,dbg=False,mode='app',cancel_func=None,peeling=False,progress=False,ip=None,user=None,passwd=None,cd=False,keep_cwd=False,check_password_rc=[],trace_passwd=False):
         if cancel_func is None: cancel_func=self.cancel_func
         error=self.error()
         if error[0]:
@@ -1911,7 +1911,7 @@ class kBmc:
                 self.warn(_type='cancel',msg="Canceling")
                 return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
             try:
-                rc=rshell(cmd_str,path=path,timeout=timeout,progress=progress,log=self.log,cd=cd)
+                rc=rshell(cmd_str,path=path,timeout=timeout,progress=progress,log=self.log,cd=cd,keep_cwd=keep_cwd)
                 if Get(rc,0) == -2 : return False,rc,'Timeout({})'.format(timeout)
                 if (not check_password_rc and rc[0] != 0) or (rc[0] !=0 and rc[0] in check_password_rc):
                     ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=cancel_func,trace=trace_passwd)
