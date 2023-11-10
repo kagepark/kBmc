@@ -1049,6 +1049,9 @@ class Redfish:
                 out[gpc.get('ConnectTypesSupported')[0]]={'Port':gpc.get('Port'),'ServiceEnabled':gpc.get('ServiceEnabled')}
         return out
 
+    def McResetCold(self):
+        return self.Post('/Managers/1/Actions/Manager.Reset')
+
 class kBmc:
     def __init__(self,*inps,**opts):
         self.find_user_passwd_with_redfish=opts.get('find_user_passwd_with_redfish',False)
@@ -1076,6 +1079,7 @@ class kBmc:
         self.warning={}
         self.canceling={}
         self.cancel_func=opts.get('cancel_func',opts.get('stop_func',None))
+        self.bgpm={'status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0,'start':False,'timeout':1800,'cancel_func':self.cancel_func}
         self.mac2ip=opts.get('mac2ip',None)
         self.log=opts.get('log',None)
         self.org_user='{}'.format(self.user)
@@ -1083,11 +1087,8 @@ class kBmc:
         self.org_passwd='{}'.format(self.passwd)
         self.test_user=opts.get('test_user')
         if not self.test_user: self.test_user=['ADMIN','Admin','admin','root','Administrator']
-        self.test_passwd=opts.get('test_pass')
-        if not self.test_passwd: self.test_passwd=opts.get('test_passwd')
-        if not self.test_passwd: self.test_passwd=['ADMIN','Admin','admin','root','Administrator']
-        for ii in ['ADMIN','Admin','admin','root','Administrator']:
-            if ii not in self.test_passwd: self.test_passwd.append(ii)
+        self.base_passwd=['ADMIN','Admin','admin','root','Administrator']
+        self.test_passwd=opts.get('test_pass',opts.get('test_passwd',self.base_passwd))
         if self.user in self.test_user: self.test_user.remove(self.user)
         if self.passwd in self.test_passwd: self.test_passwd.remove(self.passwd)
         self.cmd_module=[Ipmitool()]
@@ -1352,6 +1353,7 @@ class kBmc:
                     else:
                         data['done']={TIME().Int():'Got STOP Signal during monitor {}{}'.format('_'.join(monitor_status),ss)}
                         data['done_reason']='stop'
+                    data.pop('worker')
                     return
                 time.sleep(1)
                 continue
@@ -1536,17 +1538,17 @@ class kBmc:
         # - rt['start']=True: if background monitor was False and I want start monitoring then give it to True
         # - rt['stop']=True : Stop monitoring process
         timeout=timeout if isinstance(timeout,int) else 1200
-        rt={'status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0,'start':start,'timeout':timeout,'cancel_func':self.cancel}
-        #rt={'status':{},'repeat':{'num':0,'time':[],'status':[]},'stop':False,'count':0,'start':start,'timeout':timeout}
+        self.bgpm['timeout']=timeout
+        self.bgpm['start']=start
         if background is True:
-            if rt.get('worker') and rt['worker'].isAlive():
+            if self.bgpm.get('worker') and self.bgpm['worker'].isAlive():
                 print('Already running')
-                return rt
-            rt['worker']=threading.Thread(target=self.power_status_monitor,args=(monitor_status,rt,self.power_get_status,keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,False,monitor_interval,timeout,0))
-            rt['worker'].start()
+                return self.bgpm
+            self.bgpm['worker']=threading.Thread(target=self.power_status_monitor,args=(monitor_status,self.bgpm,self.power_get_status,keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,False,monitor_interval,timeout,0))
+            self.bgpm['worker'].start()
         else:
-            self.power_status_monitor(monitor_status,rt,self.power_get_status,keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,status_log,monitor_interval,timeout,reset_after_unknown)
-        return rt
+            self.power_status_monitor(monitor_status,self.bgpm,self.power_get_status,keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,status_log,monitor_interval,timeout,reset_after_unknown)
+        return self.bgpm
 
     def check(self,mac2ip=None,cancel_func=None,trace=False,timeout=None):
         if cancel_func is None: cancel_func=self.cancel_func
@@ -1559,11 +1561,11 @@ class kBmc:
                     ip=mac2ip(self.mac)
                     chk=True
                     self.checked_port=False
-            ping_rc=self.ping(ip,count=0,timeout=timeout,log=self.log,cancel_func=cancel_func)
+            ping_rc=self.ping(ip,keep_good=0,timeout=timeout,log=self.log,cancel_func=cancel_func)
             if ping_rc is 0:
                 # Canceled
                 return 0,self.ip,self.user,self.passwd
-            elif ping_rc:
+            elif ping_rc is True:
                 if self.checked_port is False:
                     if IpV4(ip,port=self.port):
                         self.checked_port=True
@@ -1591,6 +1593,9 @@ class kBmc:
                         printf('Update Password from {} to {}'.format(passwd,self.passwd),log=self.log,log_level=1,dsp='e')
                         self.passwd=passwd
                     return True,ip,user,passwd
+                else:
+                    printf('Can not check password with ipmitool, So return global infomation',log=self.log,dsp='d')
+                    return True,ip,self.user,self.passwd
             self.checked_ip=False
         self.checked_ip=True
         self.error(_type='net',msg='Destination Host({}) Unreachable/Network problem'.format(ip))
@@ -1687,27 +1692,39 @@ class kBmc:
                 return True,found
         return False,('','','','')
 
-    def find_user_pass(self,ip=None,default_range=4,check_cmd='ipmi power status',cancel_func=None,error=True,trace=False):
+    def find_user_pass(self,ip=None,default_range=9,check_cmd='ipmi power status',cancel_func=None,error=True,trace=False):
         if cancel_func is None: cancel_func=self.cancel_func
         if ip is None: ip=self.ip
         if not IpV4(ip): return False,None,None
         test_user=MoveData(self.test_user[:],self.user,to='first')
+        if not test_user: test_user=['ADMIN']
+        test_passwd=self.test_passwd[:]
+        test_passwd=MoveData(test_passwd,test_passwd[-1],to='first') # move last one
+        if self.upasswd: test_passwd=MoveData(test_passwd,self.upasswd,to='first') # move uniq passwd
+        if self.org_passwd: test_passwd=MoveData(test_passwd,self.org_passwd,to='first') # move original passwd
+        if self.default_passwd and self.default_passwd not in test_passwd: test_passwd=[self.default_passwd]+test_passwd
+        test_passwd=MoveData(test_passwd,self.passwd,to='first') # move current passwd
+#        for i in self.base_passwd: # Append base password
+#            if i not in test_passwd: test_passwd.append(i)
         tt=1
         #if len(self.test_passwd) > default_range: tt=2
-        tt=(len(self.test_passwd) // default_range) + 1
+        tt=(len(test_passwd) // default_range) + 1
         tested_user_pass=[]
         print_msg=False
+
         for mm in self.cmd_module:
             for t in range(0,tt):
                 if t == 0:
-                    test_pass_sample=self.test_passwd[:default_range]
+                    #test_pass_sample=self.test_passwd[:default_range]
+                    test_pass_sample=test_passwd[:default_range]
                 else:
-                    test_pass_sample=self.test_passwd[default_range:]
+                    #test_pass_sample=self.test_passwd[default_range:]
+                    test_pass_sample=test_passwd[default_range*t:default_range*(t+1)]
                 # Two times check for uniq,current,temporary password
-                if self.upasswd: test_pass_sample=MoveData(test_pass_sample[:],self.upasswd,to='first')
-                if self.org_passwd: test_pass_sample=MoveData(test_pass_sample[:],self.org_passwd,to='first')
-                test_pass_sample=MoveData(test_pass_sample,self.passwd,to='first')
-                if self.default_passwd not in test_pass_sample: test_pass_sample.append(self.default_passwd)
+                #if self.upasswd: test_pass_sample=MoveData(test_pass_sample[:],self.upasswd,to='first')
+                #if self.org_passwd: test_pass_sample=MoveData(test_pass_sample[:],self.org_passwd,to='first')
+                #test_pass_sample=MoveData(test_pass_sample,self.passwd,to='first')
+                #if self.default_passwd not in test_pass_sample: test_pass_sample.append(self.default_passwd)
                 printed=False
                 for uu in test_user:
                     #If user is None then skip
@@ -1716,10 +1733,11 @@ class kBmc:
                         #If password is None then skip
                         if IsNone(pp): continue
                         #Check ping first before try password
-                        ping_rc=ping(ip,count=1,keep_good=0,timeout=self.timeout,cancel_func=cancel_func) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
+                        ping_rc=ping(ip,keep_good=0,timeout=self.timeout,cancel_func=cancel_func) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
                         if ping_rc is 0 or self.cancel(cancel_func=cancel_func):
+                            if printed: printf("""\n""",log=self.log,direct=True,log_level=3)
                             return 0,None,None # Cancel
-                        elif ping_rc:
+                        elif ping_rc is True:
                             tested_user_pass.append((uu,pp))
                             cmd_str=mm.cmd_str(check_cmd,passwd=pp)
                             full_str=cmd_str[1]['base'].format(ip=ip,user=uu,passwd=pp)+' '+cmd_str[1]['cmd']
@@ -1760,12 +1778,13 @@ class kBmc:
                                     printed=True
                                 else:
                                     if printed: printf('\n',log=self.log,direct=True,log_level=3)
-                                    printf("""Try BMC User({}) and password({}), But failed. test next one""".format(uu,pp),log=self.log,log_level=3)
+                                    printf("""Try BMC User({}) and password({}), But failed. test next one\n""".format(uu,pp),direct=True,log=self.log,log_level=3)
                                     printed=False
                                 time.sleep(1) # make to some slow check for BMC locking
                                 #time.sleep(0.4)
                         else:
                             # Ping error or timeout
+                            if printed: printf("""\n""",log=self.log,direct=True,log_level=3)
                             printf("""WARN: Can not access destination IP({})""".format(ip),log=self.log,log_level=1,dsp='e')
                             if error:
                                 self.error(_type='ip',msg="Can not access destination IP({})".format(ip))
@@ -1774,6 +1793,14 @@ class kBmc:
                         printf("""u""",log=self.log,direct=True,log_level=3)
                         printed=True
         #Whole tested but can not find
+        # Reset BMC and try again
+        rf=self.CallRedfish()
+        if rf:
+            rf.McResetCold()
+            rc=ping(ip,keep_good=0,timeout=self.timeout,cancel_func=cancel_func)
+            if rc is True:
+                return self.find_user_pass(ip=ip,default_range=default_range,check_cmd=check_cmd,cancel_func=cancel_func,error=error,trace=trace)
+        if printed: printf("""\n""",log=self.log,direct=True,log_level=3)
         printf("""WARN: Can not find working BMC User or password from POOL\n{}""".format(tested_user_pass),log=self.log,log_level=1,dsp='e')
         if error:
             self.error(_type='user_pass',msg="Can not find working BMC User or password from POOL\n{}".format(tested_user_pass))
@@ -1796,16 +1823,10 @@ class kBmc:
                 return True,user,passwd
             else:
                 #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
-                if "'" in self.org_passwd:
-                    recover_cmd=mm.cmd_str('''user setpwd 2 "{}"'''.format(self.org_passwd))
-                else:
-                    recover_cmd=mm.cmd_str("""user setpwd 2 '{}'""".format(self.org_passwd))
+                recover_cmd=mm.cmd_str("""user setpwd 2 {}""".format(FixApostrophe(self.org_passwd)))
         else:
             #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
-            if "'" in self.org_passwd:
-                recover_cmd=mm.cmd_str('''user add 2 {} "{}" 4'''.format(self.org_user,self.org_passwd))
-            else:
-                recover_cmd=mm.cmd_str("""user add 2 {} '{}' 4""".format(self.org_user,self.org_passwd))
+            recover_cmd=mm.cmd_str("""user add 2 {} {} 4""".format(self.org_user,FixApostrophe(self.org_passwd)))
         printf("""Recover command: {}""".format(recover_cmd),log_level=7)
         rc=self.run_cmd(recover_cmd)
 
@@ -1827,16 +1848,10 @@ class kBmc:
             printf("""Not support {}. Looks need more length. So Try again with {}""".format(self.org_passwd,self.default_passwd),log=self.log,log_level=4)
             if self.user == self.org_user:
                 #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
-                if "'" in self.default_passwd:
-                    recover_cmd=mm.cmd_str('''user setpwd 2 "{}"'''.format(self.default_passwd))
-                else:
-                    recover_cmd=mm.cmd_str("""user setpwd 2 '{}'""".format(self.default_passwd))
+                recover_cmd=mm.cmd_str("""user setpwd 2 {}""".format(FixApostrophe(self.default_passwd)))
             else:
                 #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
-                if "'" in self.default_passwd:
-                    recover_cmd=mm.cmd_str('''user add 2 {} "{}" 4'''.format(self.org_user,self.default_passwd))
-                else:
-                    recover_cmd=mm.cmd_str("""user add 2 {} '{}' 4""".format(self.org_user,self.default_passwd))
+                recover_cmd=mm.cmd_str("""user add 2 {} {} 4""".format(self.org_user,FixApostrophe(self.default_passwd)))
         #    print('\n*kBMC2: {}'.format(recover_cmd))
             printf("""Recover command: {}""".format(recover_cmd),log_level=7)
             rrc=self.run_cmd(recover_cmd)
@@ -1913,7 +1928,8 @@ class kBmc:
             try:
                 rc=rshell(cmd_str,path=path,timeout=timeout,progress=progress,log=self.log,cd=cd,keep_cwd=keep_cwd)
                 if Get(rc,0) == -2 : return False,rc,'Timeout({})'.format(timeout)
-                if (not check_password_rc and rc[0] != 0) or (rc[0] !=0 and rc[0] in check_password_rc):
+                if rc[0] !=0 and rc[0] in check_password_rc:
+                    printf('Password issue, try again after check BMC user/password',log=self.log,log_level=4,dsp='d')
                     ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=cancel_func,trace=trace_passwd)
                     time.sleep(2)
                     continue
@@ -1922,12 +1938,9 @@ class kBmc:
                 printf('[ERR] Your command({}) got error\n{}'.format(cmd_str,e),log=self.log,log_level=4,dsp='f')
                 self.warn(_type='cmd',msg="Your command({}) got error\n{}".format(cmd_str,e))
                 return 'error',(-1,'Your command({}) got error\n{}'.format(cmd_str,e),'unknown',0,0,cmd_str,path),'Your command got error'
-            if show_str:
-                printf(' - RT_CODE : {}'.format(Get(rc,0)),log=self.log,log_level=1,dsp='d')
-                if rc[0] !=0 :
-                    printf(' - Output  : {}'.format(Get(rc,1)),log=self.log,log_level=1,dsp='d')
-            if dbg:
-                printf(' -DBGOutput: {}'.format(rc),log=self.log,log_level=1,dsp='d')
+
+            printf(' - RT_CODE : {}\n - Output  : {}'.format(Get(rc,0),Get(rc,1)),log=self.log,log_level=1, mode='s' if show_str else 'i' if Get(rc,0) == 0 else 'd')
+
             rc_0=Get(rc,0)
             if rc_0 == 1:
                 return False,rc,'Command file not found'
@@ -1938,23 +1951,23 @@ class kBmc:
                 printf('Connection error condition:{}, return:{}'.format(rc_err_connection,Get(rc,0)),log=self.log,log_level=7)
                 printf('Connection Error:',log=self.log,log_level=1,dsp='d',direct=True)
                 #Check connection
-                ping_rc=ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func))
+                ping_rc=ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
                 if ping_rc is 0:
                     printf(' !! Canceling Job',log=self.log,log_level=1,dsp='d')
                     self.warn(_type='cancel',msg="Canceling")
                     return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
-                elif ping_rc:
+                elif ping_rc is False:
                     printf('Lost Network',log=self.log,log_level=1,dsp='d')
                     self.error(_type='net',msg="{} lost network(over 30min)".format(self.ip))
                     return False,rc,'Lost Network, Please check your server network(1)'
             elif IsIn(rc_0,rc_err_bmc_user): # retry condition1
                 #Check connection
-                ping_rc=ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func))
+                ping_rc=ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
                 if ping_rc is 0:
                     printf(' !! Canceling Job',log=self.log,log_level=1,dsp='d')
                     self.warn(_type='cancel',msg="Canceling")
                     return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
-                elif ping_rc:
+                elif ping_rc is False:
                     printf('Lost Network',log=self.log,log_level=1,dsp='d')
                     self.error(_type='net',msg="{} lost network".format(self.ip))
                     return False,rc,'Lost Network, Please check your server network(2)'
@@ -1963,18 +1976,17 @@ class kBmc:
                 if not ok:
                     self.error(_type='ipmi_user',msg="Can not find working IPMI USER and PASSWORD")
                     return False,'Can not find working IPMI USER and PASSWORD','user error'
-                if dbg:
-                    printf('Check IPMI User and Password: Found ({}/{})'.format(ipmi_user,ipmi_pass),log=self.log,log_level=1,dsp='d')
+                printf('Check IPMI User and Password: Found ({}/{})'.format(ipmi_user,ipmi_pass),log=self.log,log_level=1,dsp='d')
                 time.sleep(1)
             else:
                 if 'ipmitool' in cmd_str and i < 1:
                     #Check connection
-                    ping_rc=ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func))
+                    ping_rc=ping(self.ip,keep_bad=600,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
                     if ping_rc is 0:
                         printf(' !! Canceling Job',log=self.log,log_level=1,dsp='d')
                         self.warn(_type='cancel',msg="Canceling")
                         return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
-                    elif ping_rc:
+                    elif ping_rc is False:
                         printf('Lost Network',log=self.log,log_level=1,dsp='d')
                         self.error(_type='net',msg="{} lost network".format(self.ip))
                         return False,rc,'Lost Network, Please check your server network(3)'
@@ -2013,7 +2025,7 @@ class kBmc:
                 ping_rc=ping(self.ip,timeout=1800,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
                 if ping_rc is 0:
                     return 0,'Canceled'
-                elif ping_rc:
+                elif ping_rc is False:
                     printf('R',log=self.log,log_level=1,direct=True)
                     rc=self.run_cmd(mm.cmd_str('ipmi reset'))
                     if krc(rc[0],chk='error'):
@@ -2022,7 +2034,7 @@ class kBmc:
                         ping_rc=ping(self.ip,timeout=1800,keep_good=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
                         if ping_rc is 0:
                             return 0,'Canceled'
-                        elif ping_rc:
+                        elif ping_rc is True:
                             return True,'Pinging to BMC after reset BMC'
                         else:
                             return False,'Can not Pinging to BMC after reset BMC'
@@ -2818,10 +2830,7 @@ class kBmc:
                         return False,'IPMI User or Password not found'
                     base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':self.ip,'user':ipmi_user,'passwd':ipmi_pass})
                     cmd_str='''{} {}'''.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
-                if "'" in title:
-                    rc=rshell('''screen -c {} -dmSL "{}" {}'''.format(screen_tmp_file,title,cmd_str))
-                else:
-                    rc=rshell('''screen -c {} -dmSL '{}' {}'''.format(screen_tmp_file,title,cmd_str))
+                rc=rshell('''screen -c {} -dmSL {} {}'''.format(screen_tmp_file,FixApostrophe(title),cmd_str))
                 if rc[0] == 0:
                     for ii in range(0,50):
                         if os.path.isfile(screen_log_file):
