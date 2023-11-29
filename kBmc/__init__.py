@@ -1992,10 +1992,15 @@ class kBmc:
                     return False,(-1,'Wrong commnd format','Wrong command format',0,0,cmd_str,path),'Command format is wrong'
                 if dbg or show_str:
                     if show_str: progress=True
+                    if cd is True:
+                         cmd_str_a=cmd_str.split()
+                         if cmd_str_a[0][0] == '/':
+                             cmd_str_a[0]=os.path.basename(cmd_str_a[0])
+                             cmd_str=' '.join(cmd_str_a)
                     printf('''** Do CMD   : %s
  - Path         : %s
- - Time     ut  : %-15s  - Progress : %s
- - CHK_     ODE : %s'''%(cmd_str,path,timeout,progress,return_code),log=self.log,log_level=1,dsp='d' if dbg else 's')
+ - Timeout      : %-15s  - Progress : %s
+ - Check_RC     : %s'''%(cmd_str,path,timeout,progress,return_code),log=self.log,log_level=1,dsp='d' if dbg else 's')
                 if self.cancel(cancel_func=cancel_func):
                     printf(' !! Canceling Job',log=self.log,log_level=1,dsp='d')
                     self.warn(_type='cancel',msg="Canceling")
