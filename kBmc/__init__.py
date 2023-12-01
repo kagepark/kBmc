@@ -1159,13 +1159,14 @@ class kBmc:
                         if self.default_passwd : test_passwd=MoveData(test_passwd,self.default_passwd,to='first') # move default  passwd
                         if self.org_passwd: test_passwd=MoveData(test_passwd,self.org_passwd,to='first') # move original passwd
                         test_passwd=MoveData(test_passwd,self.passwd,to='first') # move current passwd
+                        printf("Search User and Password in Redfish",log=self.log,mode='d')
                         for i_user in test_user:
                             for i in range(0,len(test_passwd)):
                                 rf=Redfish(host=ip,user=i_user,passwd=test_passwd[i],log=self.log)
                                 aa=rf.Get('/Systems')
                                 if krc(aa,chk=True):
                                     printf("\n",direct=True,log=self.log)
-                                    printf("Found Redfish Login Password: {},{}".format(i_user,test_passwd[i]),log=self.log,log_level=1,mode='d')
+                                    printf("Found Redfish Login User&Password: {},{}".format(i_user,test_passwd[i]),log=self.log,log_level=1,mode='d')
                                     return rf
                                 printf(".",direct=True,log=self.log)
                                 if i > 1 and i+1 % 2 == 0:
@@ -1763,6 +1764,7 @@ class kBmc:
         tt=(len(test_passwd) // default_range) + 1
         tested_user_pass=[]
         print_msg=False
+        printed=False
 
         for mm in self.cmd_module:
             for t in range(0,tt):
@@ -1777,7 +1779,6 @@ class kBmc:
                 #if self.org_passwd: test_pass_sample=MoveData(test_pass_sample[:],self.org_passwd,to='first')
                 #test_pass_sample=MoveData(test_pass_sample,self.passwd,to='first')
                 #if self.default_passwd not in test_pass_sample: test_pass_sample.append(self.default_passwd)
-                printed=False
                 for uu in test_user:
                     #If user is None then skip
                     if IsNone(uu): continue
@@ -1787,7 +1788,7 @@ class kBmc:
                         #Check ping first before try password
                         ping_rc=ping(ip,keep_good=0,timeout=self.timeout,cancel_func=cancel_func) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
                         if ping_rc is 0 or self.cancel(cancel_func=cancel_func):
-                            if printed: printf("""\n""",log=self.log,direct=True,log_level=3)
+                            if printed: printf("""\n""",log=self.log,direct=True)
                             return 0,None,None # Cancel
                         elif ping_rc is True:
                             tested_user_pass.append((uu,pp))
@@ -1818,16 +1819,17 @@ class kBmc:
                                     printf("""[BMC]Found New Password({})""".format(pp),log=self.log,log_level=3)
                                     printed=False
                                     self.passwd=pp
-                                if printed: printf('\n',log=self.log,log_level=3,direct=True)
+                                if printed: printf('\n',log=self.log,direct=True)
                                 return True,uu,pp
                             else:
                                 #If not found current password then try next
                                 if not print_msg:
+                                    if printed: printf("\n",direct=True,log=self.log,log_level=3)
                                     printf("""Check BMC USER and PASSWORD from the POOL:""",direct=True,log=self.log,log_level=3)
                                     print_msg=True
                                     printed=True
                                 if self.log_level < 7 and not trace:
-                                    printf("""p""",log=self.log,direct=True,log_level=3)
+                                    #printf("""p""",log=self.log,direct=True,log_level=3)
                                     printed=True
                                 else:
                                     if printed: printf('\n',log=self.log,direct=True,log_level=3)
@@ -1837,7 +1839,7 @@ class kBmc:
                                 #time.sleep(0.4)
                         else:
                             # Ping error or timeout
-                            if printed: printf("""\n""",log=self.log,direct=True,log_level=3)
+                            if printed: printf("""\n""",log=self.log,direct=True)
                             printf("""WARN: Can not access destination IP({})""".format(ip),log=self.log,log_level=1,dsp='e')
                             if error:
                                 self.error(_type='ip',msg="Can not access destination IP({})".format(ip))
@@ -1849,10 +1851,12 @@ class kBmc:
                     time.sleep(1)
         #Whole tested but can not find
         # Reset BMC and try again
+        if printed: printf("""\n""",log=self.log,direct=True)
+        printf("""no_redfish:{}""".format(no_redfish),log=self.log,dsp='d')
         if not no_redfish:
+            printf("""Try McResetCold and try again""",log=self.log,dsp='d')
             if self.McResetCold(ip,no_ipmitool=True): # Block Loop
-                return self.find_user_pass(ip=ip,default_range=default_range,check_cmd=check_cmd,cancel_func=cancel_func,error=error,trace=trace)
-        if printed: printf("""\n""",log=self.log,direct=True,log_level=3)
+                return self.find_user_pass(ip=ip,default_range=default_range,check_cmd=check_cmd,cancel_func=cancel_func,error=error,trace=trace,no_redfish=True)
         printf("""WARN: Can not find working BMC User or password from POOL\n{}""".format(tested_user_pass),log=self.log,log_level=1,dsp='e')
         if error:
             self.error(_type='user_pass',msg="Can not find working BMC User or password from POOL\n{}".format(tested_user_pass))
