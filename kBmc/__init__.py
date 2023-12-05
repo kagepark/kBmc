@@ -1052,6 +1052,44 @@ class Redfish:
     def McResetCold(self):
         return self.Post('/Managers/1/Actions/Manager.Reset')
 
+    def GetLog(self,EntryType=None,raw=False,items=[]):
+        def LogPrint(src,items,raw=False):
+            if raw is True:
+                pprint.pprint(src)
+            else:
+                print('%20s %7s %4s '%(src.get('Created'),src.get('EntryCode'),src.get('EntryType')),end='')
+                for i in items:
+                    print('\t{}'.format(src.get(i,'')),end='')
+                print('\n',end='')
+        cmd_str="Systems/system/LogServices"
+        rc=self.Get(cmd_str)
+        if rc[0] and isinstance(rc[1],dict):
+            member=rc[1].get('Members',[])
+            if member:
+                 data_id=member[0].get('@odata.id')
+                 id_rc=self.Get(data_id)
+                 if id_rc[0] and isinstance(id_rc[1],dict):
+                     entry=id_rc[1].get('Entries',[])
+                     if entry:
+                         entry_id=entry.get('@odata.id')
+                         entry_rc=self.Get(entry_id)
+                         if entry_rc[0] and isinstance(entry_rc[1],dict):
+                             entry_list=entry_rc[1].get('Members',[])
+                             if entry_list:
+                                 if not raw:
+                                     print('%20s %7s %4s '%('Created','Code','Type'),end='')
+                                     if not isinstance(items,list) or not items:
+                                         items=['Name','Message']
+                                     for i in items:
+                                         print('\t{}'.format(i),end='')
+                                     print('\n',end='')
+                                 for i in entry_list:
+                                     if EntryType:
+                                         if i.get('EntryType') == EntryType:
+                                             LogPrint(i,items,raw=raw)
+                                     else:
+                                         LogPrint(i,items,raw=raw)
+
 class kBmc:
     def __init__(self,*inps,**opts):
         self.find_user_passwd_with_redfish=opts.get('find_user_passwd_with_redfish',False)
