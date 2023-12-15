@@ -193,7 +193,7 @@ class Redfish:
         return ndata
 
 
-    def Power(self,cmd='status',pxe=False,pxe_keep=False,uefi=False,sensor_up=0,sensor_down=0,timeout=600,silent_status_log=False):
+    def Power(self,cmd='status',pxe=False,pxe_keep=False,uefi=False,sensor_up=0,sensor_down=0,timeout=600,silent_status_log=True):
         def get_current_power_state():
             ok,aa=self.Get('Systems/1')
             if not ok:
@@ -272,7 +272,7 @@ class Redfish:
                 naa={}
                 ok,aa=self.Get('Managers/1/Oem/Supermicro/SmartPower')
                 if not ok:
-                    printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+                    silent_status_log: printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
                     return naa
                 if isinstance(aa,dict):
                     naa['status']=aa.get('PowerStatus')
@@ -1039,93 +1039,18 @@ class Redfish:
         aa=self.Get('Systems/1')
         out={}
         if aa[0]:
-            console=aa[1].get('SerialConsole')
-            if console:
-                for ii in console:
-                    if ii not in out: out[ii]={}
-                    for jj in aa[1]['SerialConsole'][ii]:
-                        if jj in ['Port','ServiceEnabled']:
-                            out[ii][jj]=aa[1]['SerialConsole'][ii][jj]
-                gpc=aa[1].get('GraphicalConsole')
-                if gpc:
-                    out[gpc.get('ConnectTypesSupported')[0]]={'Port':gpc.get('Port'),'ServiceEnabled':gpc.get('ServiceEnabled')}
-            else:
-                aa=self.Get('Managers/1/SerialInterfaces')
-                if aa[0]:
-                    for ii in aa[1].get('Members',[]):
-                        bb=self.Get(ii.get('@odata.id'))
-                        if bb[0]:
-                            if bb[1].get('Id') not in out:
-                                out[bb[1].get('Id')]={}
-                            out[bb[1].get('Id')]['ServiceEnabled']=bb[1].get('InterfaceEnabled')
-                            out[bb[1].get('Id')]['BitRate']=bb[1].get('BitRate')
-                            out[bb[1].get('Id')]['DataBits']=bb[1].get('DataBits')
-                            out[bb[1].get('Id')]['Type']=bb[1].get('SignalType')
-                            out[bb[1].get('Id')]['StopBits']=bb[1].get('StopBits')
-                            out[bb[1].get('Id')]['Description']=bb[1].get('Description')
+            for ii in aa[1].get('SerialConsole'):
+                if ii not in out: out[ii]={}
+                for jj in aa[1]['SerialConsole'][ii]:
+                    if jj in ['Port','ServiceEnabled']:
+                        out[ii][jj]=aa[1]['SerialConsole'][ii][jj]
+            gpc=aa[1].get('GraphicalConsole')
+            if gpc:
+                out[gpc.get('ConnectTypesSupported')[0]]={'Port':gpc.get('Port'),'ServiceEnabled':gpc.get('ServiceEnabled')}
         return out
 
     def McResetCold(self):
         return self.Post('/Managers/1/Actions/Manager.Reset')
-
-    def GetLog(self,EntryType=None,raw=False,items=[]):
-        def LogPrint(src,items,raw=False,code='EntryCode'):
-            if raw is True:
-                pprint.pprint(src)
-            else:
-                print('%20s %7s %4s '%(src.get('Created'),src.get(code),src.get('EntryType')),end='')
-                for i in items:
-                    print('\t{}'.format(src.get(i,'')),end='')
-                print('\n',end='')
-        if IsIn(EntryType,['SEL']):
-            # IPMI SEL Log
-            cmd_str="Systems/system/LogServices"
-            rc=self.Get(cmd_str)
-            if rc[0] and isinstance(rc[1],dict):
-                member=rc[1].get('Members',[])
-                if member:
-                     data_id=member[0].get('@odata.id')
-                     id_rc=self.Get(data_id)
-                     if id_rc[0] and isinstance(id_rc[1],dict):
-                         entry=id_rc[1].get('Entries',[])
-                         if entry:
-                             entry_id=entry.get('@odata.id')
-                             entry_rc=self.Get(entry_id)
-                             if entry_rc[0] and isinstance(entry_rc[1],dict):
-                                 entry_list=entry_rc[1].get('Members',[])
-                                 if entry_list:
-                                     if not raw:
-                                         print('%20s %7s %4s '%('Created','Code','Type'),end='')
-                                         if not isinstance(items,list) or not items:
-                                             items=['Name','Message']
-                                         for i in items:
-                                             print('\t{}'.format(i),end='')
-                                         print('\n',end='')
-                                     for i in entry_list:
-                                         LogPrint(i,items,raw=raw)
-        else:
-            # Service Log
-            cmd_str="Managers/1/LogServices"
-            rc=self.Get(cmd_str)
-            if rc[0] and isinstance(rc[1],dict):
-                member=rc[1].get('Members',[])
-                if member:
-                     data_id=member[0].get('@odata.id')
-                     id_rc=self.Get(data_id)
-                     if id_rc[0] and isinstance(id_rc[1],dict):
-                         entry_id=id_rc[1].get('Entries').get('@odata.id')
-                         entry_rc=self.Get(entry_id)
-                         if entry_rc[0] and isinstance(entry_rc[1],dict):
-                             if not raw:
-                                 print('%20s %7s %4s '%('Created','Id','Type'),end='')
-                                 if not isinstance(items,list) or not items:
-                                     items=['Name','Message']
-                                 for i in items:
-                                     print('\t{}'.format(i),end='')
-                                 print('\n',end='')
-                             for i in entry_rc[1].get('Members',[]):
-                                 LogPrint(i,items,raw=raw,code='Id')
-
 
 class kBmc:
     def __init__(self,*inps,**opts):
@@ -1216,7 +1141,18 @@ class kBmc:
                     return False
                 elif ping_rc is True:
                     self.checked_ip=True
-                    if not IpV4(ip,port=self.port):
+                    cc=False
+                    printed=False
+                    for i in range(0,5):
+                        if IpV4(ip,port=self.port):
+                            cc=True
+                            break
+                        printf(".",log=self.log,direct=True)
+                        printed=True
+                        time.sleep(2)
+                    if printed: printf("\n",log=self.log,direct=True)
+                    if cc is False:
+                    #if not IpV4(ip,port=self.port):
                         self.error(_type='ip',msg="{} is not IPMI IP".format(ip))
                         printf("{} is not IPMI IP".format(ip),log=self.log,log_level=1,dsp='e')
                         return False
@@ -1696,10 +1632,21 @@ class kBmc:
                     if IpV4(ip,port=self.port):
                         self.checked_port=True
                     else:
-                        self.error(_type='ip',msg="{} is not IPMI IP".format(ip))
-                        printf(ip,log=self.log,log_level=1,dsp='e')
-                        return False,self.ip,self.user,self.passwd
-                          
+                        cc=False
+                        printed=False
+                        for i in range(0,5):
+                            if IpV4(ip,port=self.port):
+                                self.checked_port=True
+                                cc=True
+                                break
+                            printf(".",log=self.log,direct=True)
+                            printed=True
+                            time.sleep(2)
+                        if printed: printf("\n",log=self.log,direct=True)
+                        if cc is False:
+                            self.error(_type='ip',msg="{} is not IPMI IP".format(ip))
+                            printf(ip,log=self.log,log_level=1,dsp='e')
+                            return False,self.ip,self.user,self.passwd
                 self.checked_ip=True
                 ok,user,passwd=self.find_user_pass(ip,trace=trace,cancel_func=cancel_func)
                 if ok:
