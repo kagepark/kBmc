@@ -10,6 +10,8 @@ import json
 import threading
 from kmport import *
 
+#printf_ignore_empty=True
+
 # cancel() : True : Cancel whole bmc process
 # stop     : True : stop the running process
 #### Return #####
@@ -1760,30 +1762,30 @@ class kBmc:
                                 #Found Password. 
                                 if self.user != uu: #If changed user
                                     printf('.',log=self.log,no_intro=True)
-                                    printf("""[BMC]Found New User({})""".format(uu),log=self.log,log_level=3,start_newline=True)
+                                    printf("""[BMC]Found New User({})""".format(uu),log=self.log,log_level=3)
                                     self.user=uu
                                 if self.passwd != pp: #If changed password
                                     printf('.',log=self.log,no_intro=True)
-                                    printf("""[BMC]Found New Password({})""".format(pp),log=self.log,log_level=3,start_newline=True)
+                                    printf("""[BMC]Found New Password({})""".format(pp),log=self.log,log_level=3)
                                     self.passwd=pp
                                 return True,uu,pp
                             else:
                                 #If not found current password then try next
                                 if not print_msg:
                                     printf('.',log=self.log,no_intro=True)
-                                    printf("""Check BMC USER and PASSWORD from the POOL:""",direct=True,log=self.log,log_level=3,start_newline=True)
+                                    printf("""Check BMC USER and PASSWORD from the POOL:""",direct=True,log=self.log,log_level=3)
                                     print_msg=True
                                 if self.log_level < 7 and not trace:
                                     printf("""p""",log=self.log,direct=True,log_level=3)
                                 else:
                                     printf('.',log=self.log,no_intro=True)
-                                    printf("""Try BMC User({}) and password({}), But failed. test next one\n""".format(uu,pp),direct=True,log=self.log,log_level=3,start_newline=True)
+                                    printf("""Try BMC User({}) and password({}), But failed. test next one\n""".format(uu,pp),direct=True,log=self.log,log_level=3)
                                 time.sleep(1) # make to some slow check for BMC locking
                                 #time.sleep(0.4)
                         else:
                             # Ping error or timeout
                             printf('.',log=self.log,no_intro=True)
-                            printf("""WARN: Can not ping to the destination IP({})""".format(ip),log=self.log,log_level=1,dsp='e',start_newline=True)
+                            printf("""WARN: Can not ping to the destination IP({})""".format(ip),log=self.log,log_level=1,dsp='e')
                             if error:
                                 self.error(_type='ip',msg="Can not ping to the destination IP({})".format(ip))
                             return False,None,None
@@ -1794,7 +1796,7 @@ class kBmc:
         #Whole tested but can not find
         # Reset BMC and try again
         printf(""".""",log=self.log,no_intro=True)
-        printf("""no_redfish:{}""".format(no_redfish),log=self.log,dsp='d',start_newline=True)
+        printf("""no_redfish:{}""".format(no_redfish),log=self.log,dsp='d')
         if not no_redfish:
             printf("""Try McResetCold and try again""",log=self.log,dsp='d')
             if self.McResetCold(ip,no_ipmitool=True): # Block Loop
@@ -2034,7 +2036,7 @@ class kBmc:
                     passwd='''{}'''.format(ipmi_pass)
                 else:
                     if 'ipmitool' in cmd_str and retry_passwd > 1 and i < 1:
-                        printf('Issue of ipmitool command',start_newline=True,log=self.log,log_level=1,dsp='d')
+                        printf('Issue of ipmitool command',log=self.log,log_level=1,dsp='d')
                         #Check connection
                         ping_start=datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                         ping_rc=ping(self.ip,keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
@@ -2492,10 +2494,11 @@ class kBmc:
         opts['mode']=opts.get('mode','s')
         rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['on'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=0,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
         out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
-        if rt.get('monitored_order')[-1] == 'on':
-            if rt.get('repeat',0) > 0:
-                return True,'{} but repeated down and up to {}'.format(out,rt.get('repeat',0))
-            return True,next(iter(out.values())) if isinstance(out,dict) else out
+        if isinstance(rt.get('monitored_order'),list):
+            if rt.get('monitored_order')[-1] == 'on':
+                if rt.get('repeat',0) > 0:
+                    return True,'{} but repeated down and up to {}'.format(out,rt.get('repeat',0))
+                return True,next(iter(out.values())) if isinstance(out,dict) else out
         return False,out
 
     def is_down_up(self,timeout=1200,sensor_on_monitor=600,sensor_off_monitor=0,interval=8,status_log=True,reset_after_unknown=0,**opts): # Node state
@@ -2504,10 +2507,11 @@ class kBmc:
         opts['mode']=opts.get('mode','s')
         rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['off','on'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
         out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
-        if rt.get('monitored_order')[-1] == 'on' and 'off' in rt.get('monitored_order'):
-            if rt.get('repeat',0) > 0:
-                return True,'{} but repeated down and up to {}'.format(out,rt.get('repeat',0))
-            return True,out
+        if isinstance(rt.get('monitored_order'),list):
+            if rt.get('monitored_order')[-1] == 'on' and 'off' in rt.get('monitored_order'):
+                if rt.get('repeat',0) > 0:
+                    return True,'{} but repeated down and up to {}'.format(out,rt.get('repeat',0))
+                return True,out
         return False,out
 
     def is_down(self,timeout=1200,interval=8,sensor_off_monitor=0,status_log=True,reset_after_unknown=0,**opts): # Node state
@@ -2516,10 +2520,11 @@ class kBmc:
         opts['mode']=opts.get('mode','s')
         rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['off'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=0,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
         out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
-        if rt.get('monitored_order')[-1] == 'off':
-            if rt.get('repeat',0) > 0:
-                return True,'{} but repeated up and down to {}'.format(out,rt.get('repeat',0))
-            return True,out
+        if isinstance(rt.get('monitored_order'),list):
+            if rt.get('monitored_order')[-1] == 'off':
+                if rt.get('repeat',0) > 0:
+                    return True,'{} but repeated up and down to {}'.format(out,rt.get('repeat',0))
+                return True,out
         return False,out
 
     def get_boot_mode(self):
@@ -2636,7 +2641,8 @@ class kBmc:
                     if verify:
                         if chk == 1 and init_rc[0] and init_status == verify_status:
                             if chk == verify_num:
-                                printf(self.power_on_tag if verify_status == 'on' else self.power_off_tag ,no_intro=True,log=self.log,log_level=1)
+                                #printf(self.power_on_tag if verify_status == 'on' else self.power_off_tag ,no_intro=True,log=self.log,log_level=1)
+                                printf('* Already turned {}'.format(verify_status),no_intro=True,log=self.log,log_level=1)
                                 return True,verify_status,ii
                             chk+=1
                             continue
@@ -2672,6 +2678,9 @@ class kBmc:
                                 if chk == len(mm.power_mode[cmd]):
                                     printf(self.power_on_tag,no_intro=True,log=self.log,log_level=1)
                                     return True,'on',ii
+                                elif chk < len(mm.power_mode[cmd]):
+                                    # It need new line for the next command
+                                    printf(self.power_on_tag,no_intro=True,log=self.log,log_level=1)
                             elif is_up[1].split()[0] == 'down' and not chkd:
                                 chkd=True
                                 self.warn(_type='power',msg="Something weird. Looks BMC issue")
@@ -2686,6 +2695,9 @@ class kBmc:
                                 if chk == len(mm.power_mode[cmd]):
                                     printf(self.power_off_tag,no_intro=True,log=self.log,log_level=1)
                                     return True,'off',ii
+                                elif chk < len(mm.power_mode[cmd]):
+                                    # It need new line for the next command
+                                    printf(self.power_off_tag,no_intro=True,log=self.log,log_level=1)
                             elif is_down[1].split()[0] == 'up' and not chkd:
                                 chkd=True
                                 self.warn(_type='power',msg="Something weird. Looks BMC issue")
