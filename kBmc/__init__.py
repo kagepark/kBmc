@@ -1696,13 +1696,14 @@ class kBmc:
                 return True,found
         return False,('','','','')
 
-    def find_user_pass(self,ip=None,default_range=12,check_cmd='ipmi power status',cancel_func=None,error=True,trace=False,extra_test_user=[],extra_test_pass=[],no_redfish=False):
+    def find_user_pass(self,ip=None,default_range=12,check_cmd='ipmi power status',cancel_func=None,error=True,trace=False,extra_test_user=[],extra_test_pass=[],no_redfish=False,first_user=None,first_passwd=None):
         if cancel_func is None: cancel_func=self.cancel_func
         if ip is None: ip=self.ip
         if not IpV4(ip): return False,None,None
         test_user=MoveData(self.test_user[:],self.user,to='first')
         if not test_user: test_user=['ADMIN']
         if 'ADMIN' not in test_user: test_user=['ADMIN']+test_user
+        if isinstance(first_user,str) and first_user: test_user=MoveData(test_user[:],first_user,to='first')
         if extra_test_user and isinstance(extra_test_user,list): test_user=test_user+extra_test_user
         test_passwd=self.test_passwd[:]
         if 'ADMIN' not in test_passwd: test_passwd=['ADMIN']+test_passwd
@@ -1712,6 +1713,8 @@ class kBmc:
         if self.org_passwd: test_passwd=MoveData(test_passwd,self.org_passwd,to='first') # move original passwd
         if self.default_passwd and self.default_passwd not in test_passwd: test_passwd=[self.default_passwd]+test_passwd
         test_passwd=MoveData(test_passwd,self.passwd,to='first') # move current passwd
+        if isinstance(first_passwd,str) and first_passwd:
+            test_passwd=MoveData(test_passwd,first_passwd,to='first') # move current passwd
 #        for i in self.base_passwd: # Append base password
 #            if i not in test_passwd: test_passwd.append(i)
         tt=1
@@ -1995,9 +1998,9 @@ class kBmc:
                     printf('Connection error condition:{}, return:{}'.format(rc_err_connection,Get(rc,0)),start_newline=True,log=self.log,log_level=7)
                     printf('Connection Error:',log=self.log,log_level=1,dsp='d',direct=True)
                     #Check connection
-                    ping_start=datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+                    ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                     ping_rc=ping(self.ip,keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
-                    ping_end=datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+                    ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                     if ping_rc is 0:
                         printf(' !! Canceling Job',start_newline=True,log=self.log,log_level=1,dsp='d')
                         self.warn(_type='cancel',msg="Canceling")
@@ -2009,9 +2012,9 @@ class kBmc:
                 elif IsIn(rc_0,rc_err_bmc_user) and retry_passwd > 1 and i < 1: # retry condition1
                     printf('Issue in BMC Login issue({})'.format(rc_err_bmc_user),log=self.log,log_level=1,dsp='d')
                     #Check connection
-                    ping_start=datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+                    ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                     ping_rc=ping(self.ip,keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
-                    ping_end=datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+                    ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                     if ping_rc is 0:
                         printf(' !! Canceling Job',start_newline=True,log=self.log,log_level=1,dsp='d')
                         self.warn(_type='cancel',msg="Canceling")
@@ -2038,9 +2041,9 @@ class kBmc:
                     if 'ipmitool' in cmd_str and retry_passwd > 1 and i < 1:
                         printf('Issue of ipmitool command',log=self.log,log_level=1,dsp='d')
                         #Check connection
-                        ping_start=datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+                        ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                         ping_rc=ping(self.ip,keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
-                        ping_end=datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+                        ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                         if ping_rc is 0:
                             printf(' !! Canceling Job',log=self.log,log_level=1,dsp='d')
                             self.warn(_type='cancel',msg="Canceling")
