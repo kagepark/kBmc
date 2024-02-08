@@ -1132,7 +1132,9 @@ class kBmc:
     def CallRedfish(self,force=False,check=True,no_ipmitool=False):
         if self.redfish or force:
             if check:
+                printf("Check IP Address",log=self.log,log_level=1,dsp='d')
                 ip=self.mac2ip(self.mac) if self.mac2ip and self.checked_ip is False and MacV4(self.mac) else '{}'.format(self.ip)
+                printf("Check Ping to the IP({}):".format(ip),log=self.log,log_level=1,dsp='d',end='')
                 ping_rc=ping(ip,keep_good=0,timeout=self.timeout,log=self.log,cancel_func=self.cancel_func)
                 if ping_rc is True:
                     self.checked_ip=True
@@ -1177,12 +1179,13 @@ class kBmc:
                                     time.sleep(50)
                                 else:
                                     time.sleep(1)
-                        printf("Can not find Redfish working user/password",log=self.log,log_level=1,dsp='w')
+                        printf("Can not find Redfish working user/password",log=self.log,log_level=1,dsp='e')
+                        self.error(_type='user_pass',msg="Can not find Redfish working User/password")
+                        return False
                 else:
                     printf("Can not ping to {}".format(ip),log=self.log,log_level=1,dsp='e')
-                    self.error(_type='ip',msg="Can not ping to {}".format(ip))
-                printf(".",log=self.log,log_level=1,no_intro=True,scr_dbg=False)
-                return False
+                    self.error(_type='net',msg="Can not ping to {}".format(ip))
+                    return False
             else:
                 return Redfish(host=self.ip,user=self.user,passwd=self.passwd,log=self.log)
         printf(".",log=self.log,log_level=1,no_intro=True,scr_dbg=False)
@@ -1697,6 +1700,9 @@ class kBmc:
         return False,('','','','')
 
     def find_user_pass(self,ip=None,default_range=12,check_cmd='ipmi power status',cancel_func=None,error=True,trace=False,extra_test_user=[],extra_test_pass=[],no_redfish=False,first_user=None,first_passwd=None):
+        # Check Network
+        chk_err=self.error(_type='net')
+        if chk_err[0]: return False,None,None
         if cancel_func is None: cancel_func=self.cancel_func
         if ip is None: ip=self.ip
         if not IpV4(ip): return False,None,None
@@ -1704,10 +1710,14 @@ class kBmc:
         if not test_user: test_user=['ADMIN']
         if 'ADMIN' not in test_user: test_user=['ADMIN']+test_user
         if isinstance(first_user,str) and first_user: test_user=MoveData(test_user[:],first_user,to='first')
-        if extra_test_user and isinstance(extra_test_user,list): test_user=test_user+extra_test_user
+        if extra_test_user and isinstance(extra_test_user,list):
+            for i in extra_test_user:
+                if i not in test_user: test_user.append(i)
         test_passwd=self.test_passwd[:]
         if 'ADMIN' not in test_passwd: test_passwd=['ADMIN']+test_passwd
-        if extra_test_pass and isinstance(extra_test_pass,list): test_passwd=test_passwd+extra_test_pass
+        if extra_test_pass and isinstance(extra_test_pass,list):
+            for i in extra_test_pass:
+                if i not in test_passwd: test_passwd.append(i)
         test_passwd=MoveData(test_passwd,test_passwd[-1],to='first') # move last one
         if self.upasswd: test_passwd=MoveData(test_passwd,self.upasswd,to='first') # move uniq passwd
         if self.org_passwd: test_passwd=MoveData(test_passwd,self.org_passwd,to='first') # move original passwd
@@ -1725,6 +1735,7 @@ class kBmc:
 
         for mm in self.cmd_module:
             for t in range(0,tt):
+                printf("""Try with {} (section:{})""".format(mm.__name__,t),log=self.log,mode='d')
                 if t == 0:
                     #test_pass_sample=self.test_passwd[:default_range]
                     test_pass_sample=test_passwd[:default_range]
@@ -1775,22 +1786,21 @@ class kBmc:
                             else:
                                 #If not found current password then try next
                                 if not print_msg:
-                                    printf('.',log=self.log,no_intro=True)
-                                    printf("""Check BMC USER and PASSWORD from the POOL:""",direct=True,log=self.log,log_level=3)
+                                    printf("""Check BMC USER and PASSWORD from the POOL:""",end='',log=self.log,log_level=3)
                                     print_msg=True
                                 if self.log_level < 7 and not trace:
                                     printf("""p""",log=self.log,direct=True,log_level=3)
+                                    printf("""({}/{})""".format(uu,pp),no_intro=True,log=self.log,mode='d')
                                 else:
                                     printf('.',log=self.log,no_intro=True)
-                                    printf("""Try BMC User({}) and password({}), But failed. test next one\n""".format(uu,pp),direct=True,log=self.log,log_level=3)
+                                    printf("""Try BMC User({}) and password({}), But failed. test next one""".format(uu,pp),no_intro=True,log=self.log,log_level=3)
                                 time.sleep(1) # make to some slow check for BMC locking
                                 #time.sleep(0.4)
                         else:
                             # Ping error or timeout
-                            printf('.',log=self.log,no_intro=True)
-                            printf("""WARN: Can not ping to the destination IP({})""".format(ip),log=self.log,log_level=1,dsp='e')
+                            printf("""WARN: Can not ping to the destination IP({})""".format(ip),log=self.log,log_level=1,dsp='w')
                             if error:
-                                self.error(_type='ip',msg="Can not ping to the destination IP({})".format(ip))
+                                self.error(_type='net',msg="Can not ping to the destination IP({})".format(ip))
                             return False,None,None
                     if self.log_level < 7 and not trace:
                         printf("""u""",log=self.log,direct=True,log_level=3)
@@ -1801,36 +1811,30 @@ class kBmc:
         printf(""".""",log=self.log,no_intro=True)
         printf("""no_redfish:{}""".format(no_redfish),log=self.log,dsp='d')
         if not no_redfish:
-            printf("""Try McResetCold and try again""",log=self.log,dsp='d')
+            printf("""Try McResetCold and try again, Looks BMC issue""",log=self.log)
             if self.McResetCold(ip,no_ipmitool=True): # Block Loop
                 return self.find_user_pass(ip=ip,default_range=default_range,check_cmd=check_cmd,cancel_func=cancel_func,error=error,trace=trace,no_redfish=True)
-        printf("""WARN: Can not find working BMC User or password from POOL\n{}""".format(tested_user_pass),log=self.log,log_level=1,dsp='e')
+        printf("""WARN: Can not find working BMC User or password from POOL\n{}""".format(tested_user_pass),log=self.log,log_level=1,dsp='w')
         if error:
             self.error(_type='user_pass',msg="Can not find working BMC User or password from POOL\n{}".format(tested_user_pass))
         return False,None,None
 
     def McResetCold(self,ip=None,no_ipmitool=False):
-        printf("""Reboot BMC""",log=self.log,log_level=1,dsp='d')
+        printf("""Call Redfish""",log=self.log,log_level=1,dsp='d')
         rf=self.CallRedfish(no_ipmitool=no_ipmitool)
         if rf:
+            printf("""Mc Reset Cold with Redfish""",log=self.log,log_level=1,dsp='d')
             if rf.McResetCold():
                 printf("""Wait until response from BMC""",log=self.log,log_level=1,dsp='d')
                 if not ip : ip=self.ip
                 return ping(ip,keep_good=10,timeout=self.timeout,cancel_func=self.cancel_func,log=self.log)
-            else:
-                printf("""Try with ipmitool(1)""",log=self.log,log_level=1,dsp='d')
-                if self.reset(cancel_func=self.cancel_func):
-                    if not ip : ip=self.ip
-                    return ping(ip,keep_good=10,timeout=self.timeout,cancel_func=self.cancel_func,log=self.log)
-                else:
-                    printf("""E: Can not reset the BMC""",log=self.log,log_level=1,dsp='d')
-        else:
-            printf("""Try with ipmitool(2)""",log=self.log,log_level=1,dsp='d')
+        if not no_ipmitool:
+            if self.error(_type='net')[0]: return False # if error then error
+            printf("""Mc Reset Cold with ipmitool""",log=self.log,log_level=1,dsp='d')
             if self.reset(cancel_func=self.cancel_func):
                 if not ip : ip=self.ip
                 return ping(ip,keep_good=10,timeout=self.timeout,cancel_func=self.cancel_func,log=self.log)
-            else:
-                printf("""E: Can not initialize Redfish""",log=self.log,log_level=1,dsp='d')
+        printf("""E: Can not Reset BMC""",log=self.log,log_level=1,dsp='d')
         return False
 
     def recover_user_pass(self):
@@ -1843,7 +1847,10 @@ class kBmc:
         if ok:
             printf("""Previous User({}), Password({}). Found available current User({}), Password({})\n****** Start recovering user/password from current available user/password......\n""".format(was_user,was_passwd,user,passwd),log=self.log,log_level=3)
         else:
-            return False,'Can not find current available user and password',None
+            if self.error(_type='net')[0]: 
+                return False,'Network issue',None
+            else:
+                return False,'Can not find current available user and password',None
         if user == self.org_user:
             if passwd == self.org_passwd:
                 printf("""Same user and passwrd. Do not need recover""",log=self.log,log_level=4)
@@ -1918,6 +1925,7 @@ class kBmc:
             return False,(-1,'command format error(3)','command format error',0,0,cmd,path),'command({}) format error'.format(cmd)
         if not isinstance(return_code,dict):
             return_code={}
+        timeout=Int(timeout,0)
         rc_ok=return_code.get('ok',[0,True])
         rc_ignore=return_code.get('ignore',[])
         rc_fail=return_code.get('fail',[])
@@ -1967,6 +1975,10 @@ class kBmc:
                     printf(' !! Canceling Job',start_newline=True,log=self.log,log_level=1,dsp='d')
                     self.warn(_type='cancel',msg="Canceling")
                     return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
+                #BMC Remote shell need network
+                chk_err=self.error(_type='net')
+                if chk_err[0]:
+                    return False,(-1,'error:{}'.format(chk_err[1]),'error:{}'.format(chk_err[1]),0,0,cmd_str,path),'error'
                 try:
                     rc=rshell(cmd_str,path=path,timeout=timeout,progress=progress,log=self.log,cd=cd,keep_cwd=keep_cwd)
                     if Get(rc,0) == -2 : return False,rc,'Timeout({})'.format(timeout)
@@ -2028,7 +2040,7 @@ class kBmc:
                     cur_pass=self.__dict__.get('passwd')
                     ok,ipmi_user,ipmi_pass=self.find_user_pass()
                     if not ok:
-                        self.error(_type='ipmi_user',msg="Can not find working IPMI USER and PASSWORD")
+                        self.error(_type='user_pass',msg="Can not find working IPMI USER and PASSWORD")
                         return False,'Can not find working IPMI USER and PASSWORD','user error'
                     printf('Check IPMI User and Password by {}: Found ({}/{})'.format(rc_err_bmc_user,ipmi_user,ipmi_pass),log=self.log,log_level=1,dsp='d')
                     if cur_user == ipmi_user and cur_pass == ipmi_pass:
@@ -2055,7 +2067,7 @@ class kBmc:
                         # Find Password
                         ok,ipmi_user,ipmi_pass=self.find_user_pass()
                         if not ok:
-                            self.error(_type='ipmi_user',msg="Can not find working IPMI USER and PASSWORD")
+                            self.error(_type='user_pass',msg="Can not find working IPMI USER and PASSWORD")
                             return False,'Can not find working IPMI USER and PASSWORD','user error'
                         printf('Check IPMI User and Password by ipmitool command: Found ({}/{})'.format(ipmi_user,ipmi_pass),log=self.log,log_level=1,dsp='d')
                         user='{}'.format(ipmi_user)
@@ -2084,6 +2096,9 @@ class kBmc:
             return False,rc,'Out of testing'
 
     def reset(self,retry=0,post_keep_up=20,pre_keep_up=0,retry_interval=5,cancel_func=None):
+        # Check Network
+        chk_err=self.error(_type='net')
+        if chk_err[0]: return False,chk_err[1]
         for i in range(0,1+retry):
             for mm in self.cmd_module:
                 ping_rc=ping(self.ip,timeout=1800,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
@@ -2112,6 +2127,9 @@ class kBmc:
             return True,self.mac
         if ip is None: ip=self.ip
         ok,user,passwd=self.find_user_pass()
+        # Check Network
+        chk_err=self.error(_type='net')
+        if chk_err[0]: return False,None
         if not ok: return False,None
         for mm in self.cmd_module:
             name=mm.__name__
@@ -2132,6 +2150,10 @@ class kBmc:
 
     def dhcp(self):
         for mm in self.cmd_module:
+            # Check Network
+            chk_err=self.error(_type='net')
+            if chk_err[0]: return False,None
+
             name=mm.__name__
             rc=self.run_cmd(mm.cmd_str('ipmi lan dhcp',passwd=self.passwd))
             if krc(rc[0],chk='error'):
@@ -2148,6 +2170,10 @@ class kBmc:
 
     def gateway(self):
         for mm in self.cmd_module:
+            # Check Network
+            chk_err=self.error(_type='net')
+            if chk_err[0]: return False,None
+
             name=mm.__name__
             rc=self.run_cmd(mm.cmd_str('ipmi lan gateway',passwd=self.passwd))
             if krc(rc[0],chk='error'):
@@ -2164,6 +2190,9 @@ class kBmc:
 
     def netmask(self):
         for mm in self.cmd_module:
+            # Check Network
+            chk_err=self.error(_type='net')
+            if chk_err[0]: return False,None
             name=mm.__name__
             rc=self.run_cmd(mm.cmd_str('ipmi lan netmask',passwd=self.passwd))
             if krc(rc[0],chk='error'):
@@ -2185,6 +2214,10 @@ class kBmc:
         # 3. turn on system
         # 4. Check correctly setup or not
         # 5. Return
+        # Check Network
+        chk_err=self.error(_type='net')
+        if chk_err[0]: return False,chk_err[1],chk_err[1]
+
         if not force:
             crc=self.bootorder(mode='status')
             printf('Current Boot order is {}{}'.format(crc[0],' with UEFI mode' if crc[1] else ''),log=self.log,log_level=6)
@@ -2249,6 +2282,10 @@ class kBmc:
                 printf("[RF] {2} Boot mode set to {0} at {1}".format('ipxe' if (ipxe and mode == 'pxe') or (mode == 'ipxe') else mode,ipmi_ip,'Persistently' if persistent else 'Temporarily'),log=self.log,log_level=7)
                 rc=ok,(ok,'Persistently set to {}'.format('ipxe' if (ipxe and mode == 'pxe') or (mode == 'ipxe') else mode) if ok else rf_boot)
             else:
+                # Check Network
+                chk_err=self.error(_type='net')
+                if chk_err[0]: return False,chk_err[1]
+
                 if mode == 'pxe' and IsIn(ipxe,['on',True,'True']):
                     # ipmitool -I lanplus -H 172.16.105.74 -U ADMIN -P 'ADMIN' raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00
                     if persistent:
@@ -2266,6 +2303,10 @@ class kBmc:
             return rc
 
         def smcipmitool_bootorder_setup(mm,mode,persistent,ipxe):
+            # Check Network
+            chk_err=self.error(_type='net')
+            if chk_err[0]: return False,chk_err[1]
+
             #SMCIPMITool command : Setup
             if mode == 'pxe':
                 rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 1',passwd=self.passwd))
@@ -2282,6 +2323,10 @@ class kBmc:
             return rc
 
         def ipmitool_bootorder_status(mm,mode,bios_cfg):
+            # Check Network
+            chk_err=self.error(_type='net')
+            if chk_err[0]: return False,None
+
             #IPMITOOL command
             if IsIn(mode,['order',None]): # Show Boot Order
                 #If exist redfish then try redfish first
@@ -2548,7 +2593,9 @@ class kBmc:
         if cancel_func is None: cancel_func=self.cancel_func
         if cmd == 'status':
             aa=self.do_power('status',verify=verify)
-            if aa[0]:
+            if krc(aa[0],chk='error'):
+                return 'error'
+            elif aa[0]:
                 return aa[1]
             elif self.redfish:
                 rf=self.CallRedfish()
@@ -2610,19 +2657,21 @@ class kBmc:
                 if verify or cmd == 'status':
                     init_rc=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
                     if krc(init_rc[0],chk='error'):
-                        printf('Power status got some error ({})'.format(init_rc[-1]),log=self.log,log_level=3)
+                        printf('Power status got some error1 ({})'.format(init_rc[-1]),log=self.log,log_level=3)
                         return init_rc[0],init_rc[1],ii
                     if init_rc[0] is False:
                         if init_rc[-1] == 'canceling':
                             printf(' Canceling',no_intro=True,log=self.log,log_level=1)
                             return True,'canceling',ii
                         else:
-                            printf('Power status got some error ({})'.format(init_rc[-1]),slog=self.log,log_level=3)
+                            printf('Power status got some error2 ({})'.format(init_rc[-1]),slog=self.log,log_level=3)
                             self.warn(_type='power',msg="Power status got some error ({})".format(init_rc[-1]))
                             time.sleep(3)
                             continue
                     if cmd == 'status':
-                        if init_rc[0]:
+                        if krc(init_rc[0],chk='error'):
+                            return init_rc[0],init_rc[1],ii
+                        elif init_rc[0]:
                             if cmd == 'status':
                                 # No need new line
                                 return True,init_rc[1][1],ii
@@ -2772,9 +2821,19 @@ class kBmc:
                         return True,a[0]
             return False,None
 
-    def error(self,_type=None,msg=None):
-        if _type and msg:
-            self.err.update({_type:{TIME().Int():msg}})
+    def error(self,_type=None,msg=None,clear=False):
+        # _type:
+        #  ip : ip address issue (format, port issue)
+        #  net : network issue (can't ping, can not access, ...)
+        #  user_pass : BMC user/password issue
+        #  power : Power control issue
+        #  break : make break to whole BMC process or not
+        #  None  : Any Error then error
+        if _type and (msg or clear):
+            if clear:
+                if _type in self.err: self.err.pop(_type)
+            else:
+                self.err.update({_type:{TIME().Int():msg}})
         else:
             if not _type:
                 if self.err: return True,self.err
