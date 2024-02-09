@@ -1179,7 +1179,7 @@ class kBmc:
                                     time.sleep(50)
                                 else:
                                     time.sleep(1)
-                        printf("Can not find Redfish working user/password",log=self.log,log_level=1,dsp='e')
+                        printf("Can not find Redfish working user/password",log=self.log,log_level=1,dsp='w')
                         self.error(_type='user_pass',msg="Can not find Redfish working User/password")
                         return False
                 else:
@@ -1735,7 +1735,7 @@ class kBmc:
 
         for mm in self.cmd_module:
             for t in range(0,tt):
-                printf("""Try with {} (section:{})""".format(mm.__name__,t),log=self.log,mode='d')
+                #printf("""Try with module {} (password section:{})""".format(mm.__name__,t),log=self.log,mode='d',no_intro=True)
                 if t == 0:
                     #test_pass_sample=self.test_passwd[:default_range]
                     test_pass_sample=test_passwd[:default_range]
@@ -1743,10 +1743,6 @@ class kBmc:
                     #test_pass_sample=self.test_passwd[default_range:]
                     test_pass_sample=test_passwd[default_range*t:default_range*(t+1)]
                 # Two times check for uniq,current,temporary password
-                #if self.upasswd: test_pass_sample=MoveData(test_pass_sample[:],self.upasswd,to='first')
-                #if self.org_passwd: test_pass_sample=MoveData(test_pass_sample[:],self.org_passwd,to='first')
-                #test_pass_sample=MoveData(test_pass_sample,self.passwd,to='first')
-                #if self.default_passwd not in test_pass_sample: test_pass_sample.append(self.default_passwd)
                 for uu in test_user:
                     #If user is None then skip
                     if IsNone(uu): continue
@@ -1806,6 +1802,7 @@ class kBmc:
                         printf("""u""",log=self.log,direct=True,log_level=3)
                     #maybe reduce affect to BMC
                     time.sleep(1)
+                printf("""-Tried with module {} in password section {}/{}""".format(mm.__name__,t,tt),log=self.log,mode='d',no_intro=True)
         #Whole tested but can not find
         # Reset BMC and try again
         printf(""".""",log=self.log,no_intro=True)
@@ -1814,7 +1811,9 @@ class kBmc:
             printf("""Try McResetCold and try again, Looks BMC issue""",log=self.log)
             if self.McResetCold(ip,no_ipmitool=True): # Block Loop
                 return self.find_user_pass(ip=ip,default_range=default_range,check_cmd=check_cmd,cancel_func=cancel_func,error=error,trace=trace,no_redfish=True)
-        printf("""WARN: Can not find working BMC User or password from POOL\n{}""".format(tested_user_pass),log=self.log,log_level=1,dsp='w')
+        printf("""WARN: Can not find working BMC User or password from Password POOL""",log=self.log,log_level=1,dsp='w')
+        printf(""" - Password POOL  : {}""".format(test_passwd),log=self.log,dsp='d',no_intro=True)
+        printf(""" - Tested Password: {}""".format(tested_user_pass),log=self.log,dsp='d',no_intro=True)
         if error:
             self.error(_type='user_pass',msg="Can not find working BMC User or password from POOL\n{}".format(tested_user_pass))
         return False,None,None
@@ -2657,14 +2656,16 @@ class kBmc:
                 if verify or cmd == 'status':
                     init_rc=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
                     if krc(init_rc[0],chk='error'):
-                        printf('Power status got some error1 ({})'.format(init_rc[-1]),log=self.log,log_level=3)
+                        printf('Power status got some error',log=self.log,log_level=3)
+                        printf(' - reason : {}'.format(init_rc[-1]),log=self.log,no_intro=True,mode='d')
                         return init_rc[0],init_rc[1],ii
                     if init_rc[0] is False:
                         if init_rc[-1] == 'canceling':
                             printf(' Canceling',no_intro=True,log=self.log,log_level=1)
                             return True,'canceling',ii
                         else:
-                            printf('Power status got some error2 ({})'.format(init_rc[-1]),slog=self.log,log_level=3)
+                            printf('Power status got some error',slog=self.log,log_level=3)
+                            printf(' - reason : {}'.format(init_rc[-1]),slog=self.log,no_intro=True,mode='d')
                             self.warn(_type='power',msg="Power status got some error ({})".format(init_rc[-1]))
                             time.sleep(3)
                             continue
@@ -2821,7 +2822,7 @@ class kBmc:
                         return True,a[0]
             return False,None
 
-    def error(self,_type=None,msg=None,clear=False):
+    def error(self,_type=None,msg=None,clear=False,_type_output=None):
         # _type:
         #  ip : ip address issue (format, port issue)
         #  net : network issue (can't ping, can not access, ...)
@@ -2831,21 +2832,37 @@ class kBmc:
         #  None  : Any Error then error
         if _type and (msg or clear):
             if clear:
-                if _type in self.err: self.err.pop(_type)
+                if _type in self.err:
+                    self.err.pop(_type)
             else:
-                self.err.update({_type:{TIME().Int():msg}})
+                caller_name=FunctionName(parent=2)
+                caller_name='{}() : '.format(caller_name) if isinstance(caller_name,str) else ''
+                msg='{}{}'.format(caller_name,msg)
+                if _type in self.err:
+                    self.err[_type][TIME().Int()]=msg
+                else:
+                    self.err[_type]={TIME().Int():msg}
         else:
             if not _type:
                 if self.err: return True,self.err
                 return False,'OK'
             else:
                 get_msg=self.err.get(_type,None)
-                if get_msg: return True,get_msg
+                if get_msg:
+                    if _type_output in [str,'str','value']:
+                        return True,list(get_msg.values())[-1]
+                    return True,get_msg
                 return False,None
 
     def warn(self,_type=None,msg=None):
         if _type and msg:
-            self.warning.update({_type:{TIME().Int():msg}})
+            caller_name=FunctionName(parent=2)
+            caller_name='{}() : '.format(caller_name) if isinstance(caller_name,str) else ''
+            msg='{}{}'.format(caller_name,msg)
+            if _type in self.warning:
+                self.warning[_type][TIME().Int()]=msg
+            else:
+                self.warning[_type]={TIME().Int():msg}
         else:
             if not _type:
                 if self.warning: return True,self.warning
@@ -2871,7 +2888,7 @@ class kBmc:
                     msg='{}Got Cancel Signal'.format(caller_name)
                 printf(msg,log=log,log_level=log_level)
                 if task_all_stop:
-                    self.canceling.update({TIME().Int():msg})
+                    self.canceling[TIME().Int()]=msg
                 return True
         return False
 
