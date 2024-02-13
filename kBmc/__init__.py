@@ -1082,14 +1082,18 @@ class kBmc:
         self.mac2ip=opts.get('mac2ip',None)
         self.log=opts.get('log',None)
         self.org_user=opts.get('org_user',self.user)
-        self.default_passwd=opts.get('default_passwd')
+        self.default_passwd=Get(opts,['ipmi_dpass','dpasswd','default_password'],default='ADMIN',err=True,peel='force')
         self.org_passwd=opts.get('org_passwd',self.passwd)
         self.test_user=opts.get('test_user')
         if not self.test_user: self.test_user=['ADMIN','Admin','admin','root','Administrator']
         self.base_passwd=['ADMIN','Admin','admin','root','Administrator']
         self.test_passwd=opts.get('test_pass',opts.get('test_passwd',self.base_passwd))
+        if not isinstance(self.test_passwd,list):
+            self.test_passwd=self.base_passwd
         if self.user in self.test_user: self.test_user.remove(self.user)
         if self.passwd in self.test_passwd: self.test_passwd.remove(self.passwd)
+        #Hard coding for ADMIN1234. So do not remove it
+        if 'ADMIN1234' not in self.test_passwd: self.test_passwd.append('ADMIN1234')
         self.cmd_module=[Ipmitool()]
         if opts.get('cmd_module') and isinstance(opts.get('cmd_module'),list):
             self.cmd_module=opts.get('cmd_module')
@@ -1129,12 +1133,13 @@ class kBmc:
         self.power_get_sensor=opts.get('power_get_sensor',True)
         self.power_get_tools=opts.get('power_get_tools',True)
 
-    def CallRedfish(self,force=False,check=True,no_ipmitool=False):
+    def CallRedfish(self,force=False,check=True,no_ipmitool=False,detail_log=False):
         if self.redfish or force:
             if check:
-                printf("Check IP Address",log=self.log,log_level=1,dsp='d')
+                # when it called from here and there. So too much logging
+                if detail_log: printf("Check IP Address",log=self.log,log_level=1,dsp='d')
                 ip=self.mac2ip(self.mac) if self.mac2ip and self.checked_ip is False and MacV4(self.mac) else '{}'.format(self.ip)
-                printf("Check Ping to the IP({}):".format(ip),log=self.log,log_level=1,dsp='d',end='')
+                if detail_log: printf("Check Ping to the IP({}):".format(ip),log=self.log,log_level=1,dsp='d',end='')
                 ping_rc=ping(ip,keep_good=0,timeout=self.timeout,log=self.log,cancel_func=self.cancel_func)
                 if ping_rc is True:
                     self.checked_ip=True
@@ -1243,11 +1248,14 @@ class kBmc:
         if sensor is None: sensor=self.power_get_sensor
         if tools is None: tools=self.power_get_tools
 
+        checked_redfish=opts.get('checked_redfish',False)
         # _: Down, ¯: Up, ·: Unknown sensor data, !: ipmi sensor command error
         out=['none','none','none'] # [Sensor(ipmitool/SMCIPMITool), Redfish, ipmitool/SMCIPMITool]
         if redfish:
-            rf=self.CallRedfish()
+            #Reduce checking redfish stuff when already verifyed
+            rf=self.CallRedfish(check=False if checked_redfish else True)
             if rf:
+                checked_redfish=True
                 rt=rf.Power(cmd='status')
                 if IsIn(rt,['on','off']):
                     out[1]=rt
@@ -1264,7 +1272,7 @@ class kBmc:
                 rt=self.SystemReadySensor(mm.cmd_str('ipmi sensor',passwd=self.passwd),mm.__name__)
                 out[0]='on' if rt == 'up' else 'off' if rt == 'down' else rt
                 break 
-        return out
+        return out,checked_redfish
 
     # Map for threading function
     def power_status_monitor_t(self,monitor_status,data={},keep_off=0,keep_on=0,sensor_on=600,sensor_off=0,monitor_interval=5,timeout=1200,reset_after_unknown=0,mode='s'):
@@ -1365,7 +1373,9 @@ class kBmc:
         if 'mode' not in data: data['mode']=mode if mode in ['s','a','r','t'] else 'a'
         #data monitoring initialize data (time, status)
         if 'init' not in data: data['init']={}
-        if 'config' not in data['init']: data['init']['config']={'time':TIME().Int(),'status':get_current_power_status()}
+        curr_power_status,checked_redfish=get_current_power_status()
+        #if 'config' not in data['init']: data['init']['config']={'time':TIME().Int(),'status':get_current_power_status()}
+        if 'config' not in data['init']: data['init']['config']={'time':TIME().Int(),'status':curr_power_status}
         data['monitoring']=monitoring_state # want monitoring state
         data['monitored_status']={}
         before=None
@@ -1383,7 +1393,9 @@ class kBmc:
             if not 'start' in data.get('init',{}) and data.get('start') is True:
                 #Start monitoring initialize data (time, status)
                 #we can check time and status condition between defined bpm time and start monitoring
-                data['init']['start']={'time':TIME().Int(),'status':get_current_power_status()}
+                curr_power_status,checked_redfish=get_current_power_status(checked_redfish=checked_redfish)
+                #data['init']['start']={'time':TIME().Int(),'status':get_current_power_status()}
+                data['init']['start']={'time':TIME().Int(),'status':curr_power_status}
             # Timeout
             if Time.Out(data['timeout']):
                 data['done']={TIME().Int():'Monitoring timeout({}sec)'.format(data['timeout'])}
@@ -1411,7 +1423,9 @@ class kBmc:
             # Monitoring condition
             ############################################
             ## monitoring current condition (convert to defined mode(on/off/unknown) only)
-            on_off,is_on_off_time=is_on_off(get_current_power_status(),mode=data['mode'],sensor_time=is_on_off_time,sensor_off_time=data['sensor_off_time'])
+            curr_power_status,checked_redfish=get_current_power_status(checked_redfish=checked_redfish)
+            #on_off,is_on_off_time=is_on_off(get_current_power_status(),mode=data['mode'],sensor_time=is_on_off_time,sensor_off_time=data['sensor_off_time'])
+            on_off,is_on_off_time=is_on_off(curr_power_status,mode=data['mode'],sensor_time=is_on_off_time,sensor_off_time=data['sensor_off_time'])
             if on_off not in data['monitored_status']: data['monitored_status'][on_off]=[]
             if monitoring_state == on_off:
                 data['monitored_status'][on_off][-1]['keep_time']=TIME().Int()
@@ -1725,13 +1739,14 @@ class kBmc:
         test_passwd=MoveData(test_passwd,self.passwd,to='first') # move current passwd
         if isinstance(first_passwd,str) and first_passwd:
             test_passwd=MoveData(test_passwd,first_passwd,to='first') # move current passwd
-#        for i in self.base_passwd: # Append base password
-#            if i not in test_passwd: test_passwd.append(i)
+        for i in self.base_passwd: # Append base password
+            if i not in test_passwd: test_passwd.append(i)
         tt=1
         #if len(self.test_passwd) > default_range: tt=2
         tt=(len(test_passwd) // default_range) + 1
         tested_user_pass=[]
         print_msg=False
+        dbg_mode=0
 
         for mm in self.cmd_module:
             for t in range(0,tt):
@@ -1786,12 +1801,13 @@ class kBmc:
                                     print_msg=True
                                 if self.log_level < 7 and not trace:
                                     printf("""p""",log=self.log,direct=True,log_level=3)
-                                    printf("""({}/{})""".format(uu,pp),no_intro=True,log=self.log,mode='d')
+                                    printf("""({}/{})""".format(uu,pp),no_intro=False if dbg_mode > 1 else True,start_newline=True if dbg_mode > 1 else False,log=self.log,mode='d')
                                 else:
                                     printf('.',log=self.log,no_intro=True)
                                     printf("""Try BMC User({}) and password({}), But failed. test next one""".format(uu,pp),no_intro=True,log=self.log,log_level=3)
                                 time.sleep(1) # make to some slow check for BMC locking
                                 #time.sleep(0.4)
+                                dbg_mode+=1
                         else:
                             # Ping error or timeout
                             printf("""WARN: Can not ping to the destination IP({})""".format(ip),log=self.log,log_level=1,dsp='w')
@@ -1868,7 +1884,7 @@ class kBmc:
             self.warn(_type='ipmi_user',msg="BMC Password: Recover fail")
             return 'error',user,passwd
         if krc(rc[0],chk=True):
-            printf("""Recovered BMC: from User({}) and Password({}) to User({}) and Password({})""".format(user,passwd,self.org_user,self.org_passwd),log=self.log,log_level=4)
+            printf("""Recovered BMC: from User({}) and Password({}) to User({}) and Input Password({})""".format(user,passwd,self.org_user,self.org_passwd),log=self.log,log_level=4)
             ok2,user2,passwd2=self.find_user_pass()
             if ok2:
                 printf("""Confirmed changed user password to {}:{}""".format(user2,passwd2),log=self.log,log_level=4)
@@ -1878,30 +1894,44 @@ class kBmc:
             self.passwd='{}'.format(passwd2)
             return True,self.user,self.passwd
         else:
-            printf("""Not support {}. Looks need more length. So Try again with {}""".format(self.org_passwd,self.default_passwd),log=self.log,log_level=4)
+            if self.default_passwd:
+                printf("""Not support {}. Try again with default password({})""".format(self.org_passwd,self.default_passwd),log=self.log,log_level=4)
+                if self.user == self.org_user:
+                    #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
+                    recover_cmd=mm.cmd_str("""user setpwd 2 {}""".format(FixApostrophe(self.default_passwd)))
+                else:
+                    #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
+                    recover_cmd=mm.cmd_str("""user add 2 {} {} 4""".format(self.org_user,FixApostrophe(self.default_passwd)))
+                printf("""Recover command: {}""".format(recover_cmd),log_level=7)
+                rrc=self.run_cmd(recover_cmd)
+                if krc(rrc[0],chk=True):
+                    printf("""Recovered BMC: from User({}) and Password({}) to User({}) and Default Password({})""".format(self.user,self.passwd,self.org_user,self.default_passwd),log=self.log,log_level=4)
+                    ok2,user2,passwd2=self.find_user_pass()
+                    if ok2:
+                        printf("""Confirmed changed user password to {}:{}""".format(user2,passwd2),log=self.log,log_level=4)
+                        self.user='''{}'''.format(user2)
+                        self.passwd='''{}'''.format(passwd2)
+                        return True,self.user,self.passwd
+            printf("""Not support original/default password. Looks need more length. So Try again with ADMIN1234""",log=self.log,log_level=4)
             if self.user == self.org_user:
                 #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
-                recover_cmd=mm.cmd_str("""user setpwd 2 {}""".format(FixApostrophe(self.default_passwd)))
+                recover_cmd=mm.cmd_str("""user setpwd 2 ADMIN1234""")
             else:
                 #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
-                recover_cmd=mm.cmd_str("""user add 2 {} {} 4""".format(self.org_user,FixApostrophe(self.default_passwd)))
-        #    print('\n*kBMC2: {}'.format(recover_cmd))
-            printf("""Recover command: {}""".format(recover_cmd),log_level=7)
+                recover_cmd=mm.cmd_str("""user add 2 {} ADMIN1234 4""".format(self.org_user))
+            printf("""Recover command: {}""".format(recover_cmd),mode='d')
             rrc=self.run_cmd(recover_cmd)
             if krc(rrc[0],chk=True):
-                printf("""Recovered BMC: from User({}) and Password({}) to User({}) and Password({})""".format(self.user,self.passwd,self.org_user,self.default_passwd),log=self.log,log_level=4)
+                printf("""Recovered BMC: from User({}) and Password(original/default) to User({}) and Password(ADMIN1234)""".format(self.user,self.org_user),log=self.log,log_level=4)
                 ok2,user2,passwd2=self.find_user_pass()
                 if ok2:
                     printf("""Confirmed changed user password to {}:{}""".format(user2,passwd2),log=self.log,log_level=4)
-                else:
-                    return False,"Looks changed command was ok. but can not found acceptable user or password",None
-                self.user='''{}'''.format(user2)
-                self.passwd='''{}'''.format(passwd2)
-                return True,self.user,self.passwd
-            else:
-                self.warn(_type='ipmi_user',msg="Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.")
-                printf("""BMC Password: Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.""",log=self.log,log_level=1)
-                return False,self.user,self.passwd
+                    self.user='''{}'''.format(user2)
+                    self.passwd='''{}'''.format(passwd2)
+                    return True,self.user,self.passwd
+        self.warn(_type='ipmi_user',msg="Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.")
+        printf("""BMC Password: Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.""",log=self.log,log_level=1)
+        return False,self.user,self.passwd
 
     def run_cmd(self,cmd,append=None,path=None,retry=0,timeout=None,return_code={'ok':[0,True],'fail':[]},show_str=False,dbg=False,mode='app',cancel_func=None,peeling=False,progress=False,ip=None,user=None,passwd=None,cd=False,keep_cwd=False,check_password_rc=[],trace_passwd=False):
         if cancel_func is None: cancel_func=self.cancel_func
