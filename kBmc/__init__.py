@@ -1558,70 +1558,66 @@ class kBmc:
             self.power_status_monitor(monitor_status,fgpm,keep_off=keep_off,keep_on=keep_on,sensor_monitor=sensor_on_monitor,sensor_off_monitor=sensor_off_monitor,status_log=status_log,monitor_interval=monitor_interval,timeout=timeout,reset_after_unknown=reset_after_unknown,mode=opts.get('mode','a'))
             return fgpm
 
+    def is_started_power_monitor(self,bpm=None):
+        if isinstance(bpm,dict) and bpm.get('start') is True:
+             if bpm.get('stop') is False and not bpm.get('done'): return True
+        return False
+
     def check(self,mac2ip=None,cancel_func=None,trace=False,timeout=None):
         if cancel_func is None: cancel_func=self.cancel_func
         if timeout is None: timeout=self.timeout
-        chk=False
+        rc=False
         ip='{}'.format(self.ip)
-        for i in range(0,2):
-            if self.checked_ip is False:
-                if mac2ip and self.mac:
-                    ip=mac2ip(self.mac)
-                    chk=True
-                    self.checked_port=False
-            ping_rc=ping(ip,keep_good=0,timeout=timeout,log=self.log,cancel_func=cancel_func)
-            if ping_rc is True:
-                if self.checked_port is False:
-                    if IpV4(ip,port=self.port):
-                        self.checked_port=True
+        if self.checked_ip is False:
+            if mac2ip:
+                if not MacV4(self.mac):
+                    mac_ok,mac_addr=self.get_mac(ip,user=self.user,passwd=self.passwd)
+                    if mac_ok:
+                        self.mac=mac_addr
+                        #Already checked IP,user,passwd in get_mac()
+                        return True,self.ip,self.user,self.passwd
                     else:
-                        cc=False
-                        for i in range(0,10):
-                            if IpV4(ip,port=self.port):
-                                self.checked_port=True
-                                cc=True
-                                break
-                            printf(".",log=self.log,direct=True)
-                            time.sleep(3)
-                        if cc is False:
-                            printf(".",no_intro=True,log=self.log,log_level=1)
-                            printf("{} is not IPMI IP(2)".format(ip),log=self.log,log_level=1,dsp='e')
-                            self.error(_type='ip',msg="{} is not IPMI IP(2)".format(ip))
-                            return False,self.ip,self.user,self.passwd
-                self.checked_ip=True
-                ok,user,passwd=self.find_user_pass(ip,trace=trace,cancel_func=cancel_func)
-                if ok:
-                    if chk:
-                        mac=self.get_mac(ip,user=user,passwd=passwd)
-                        if mac != self.mac:
-                            printf(".",no_intro=True,log=self.log,log_level=1,scr_dbg=False)
-                            self.error(_type='ip',msg='Can not find correct IPMI IP')
-                            printf("Can not find correct IPMI IP",log=self.log,log_level=1,mode='e')
-                            return False,self.ip,self.user,self.passwd
-                    #Update IP,User,Password
-                    if self.ip != ip:
-                        printf(".",no_intro=True,log=self.log,log_level=1,scr_dbg=False)
-                        printf('Update IP from {} to {}'.format(ip,self.ip),log=self.log,log_level=1,dsp='e')
-                        self.ip=ip
-                    if self.user != user:
-                        printf(".",no_intro=True,log=self.log,log_level=1,scr_dbg=False)
-                        printf('Update User from {} to {}'.format(user,self.user),log=self.log,log_level=1,dsp='e')
-                        self.user=user
-                    if self.passwd!= passwd:
-                        printf(".",no_intro=True,log=self.log,log_level=1,scr_dbg=False)
-                        printf('Update Password from {} to {}'.format(passwd,self.passwd),log=self.log,log_level=1,dsp='e')
-                        self.passwd=passwd
-                    return True,ip,user,passwd
-                else:
-                    printf(".",no_intro=True,log=self.log,log_level=1)
-                    printf('Can not check password with ipmitool, So return global infomation',log=self.log,dsp='d')
-                    return True,ip,self.user,self.passwd
-            self.checked_ip=False
-        printf(".",no_intro=True,log=self.log,log_level=1)
-        self.checked_ip=True
-        self.error(_type='net',msg='Destination Host({}) Unreachable/Network problem'.format(ip))
-        printf(ip,log=self.log,log_level=1,dsp='e')
-        return False,self.ip,self.user,self.passwd
+                        self.error(_type='mac',msg='Can not find BMC Mac address')
+                        printf("Can not find BMC Mac address",log=self.log,log_level=1,mode='e')
+                        return False,self.ip,self.user,self.passwd
+                ip=mac2ip(self.mac)
+                self.checked_port=False
+        ping_rc=ping(ip,keep_good=0,timeout=timeout,log=self.log,cancel_func=cancel_func)
+        if ping_rc is True:
+            if self.checked_port is False:
+                cc=False
+                direct_print=False
+                for i in range(0,10):
+                    if IpV4(ip,port=self.port):
+                        self.checked_ip=True
+                        self.checked_port=True
+                        cc=True
+                        break
+                    printf(".",log=self.log,direct=True)
+                    direct_print=True
+                    time.sleep(3)
+                if direct_print: printf(".",no_intro=True,log=self.log,log_level=1)
+                if cc is False:
+                    printf("{} is not IPMI IP(2)".format(ip),log=self.log,log_level=1,dsp='e')
+                    self.error(_type='ip',msg="{} is not IPMI IP(2)".format(ip))
+                    return False,self.ip,self.user,self.passwd
+            ok,user,passwd=self.find_user_pass(ip,trace=trace,cancel_func=cancel_func)
+            if ok:
+                #Update IP,User,Password
+                if self.ip != ip:
+                    printf('Update IP from {} to {}'.format(ip,self.ip),log=self.log,log_level=1,dsp='e')
+                    self.ip=ip
+                if self.user != user:
+                    printf('Update User from {} to {}'.format(user,self.user),log=self.log,log_level=1,dsp='e')
+                    self.user=user
+                if self.passwd!= passwd:
+                    printf('Update Password from {} to {}'.format(passwd,self.passwd),log=self.log,log_level=1,dsp='e')
+                    self.passwd=passwd
+                rc=True
+        else:
+            printf('Destination Host({}) Unreachable/Network problem'.format(self.ip),log=self.log,log_level=1,dsp='e')
+            self.error(_type='net',msg='Destination Host({}) Unreachable/Network problem'.format(self.ip))
+        return rc,self.ip,self.user,self.passwd
 
     def get_cmd_module_name(self,name):
         if isinstance(self.cmd_module,list):
@@ -2154,27 +2150,45 @@ class kBmc:
     def get_mac(self,ip=None,user=None,passwd=None):
         if self.mac:
             return True,self.mac
-        if ip is None: ip=self.ip
-        ok,user,passwd=self.find_user_pass()
+        if not IpV4(ip): ip=self.ip
+        if not user: user=self.user
+        if not passwd: passwd=self.passwd
         # Check Network
         chk_err=self.error(_type='net')
         if chk_err[0]: return False,None
-        if not ok: return False,None
+        if not self.checked_ip:
+            if IpV4(ip,port=self.port):
+                self.checked_ip=True
+                self.checked_port=True
         for mm in self.cmd_module:
-            name=mm.__name__
-            cmd_str=mm.cmd_str('ipmi lan mac',passwd=self.passwd)
-            full_str=cmd_str[1]['base'].format(ip=ip,user=user,passwd=passwd)+' '+cmd_str[1]['cmd']
-            rc=rshell(full_str,log=self.log)
-            if krc(rc[0],chk=True):
-                if name == 'smc':
-                    self.mac=rc[1].lower()
-                    return True,self.mac
-                elif name == 'ipmitool':
-                    for ii in rc[1].split('\n'):
-                        ii_a=ii.split()
-                        if IsIn('MAC',ii_a,idx=0) and IsIn('Address',ii_a,idx=1) and IsIn(':',ii_a,idx=2):
-                            self.mac=ii_a[-1].lower()
+            for i in range(0,2):
+                ping_rc=ping(ip,keep_good=0,timeout=self.timeout,log=self.log,cancel_func=self.cancel_func)
+                if ping_rc is False: return False,None
+                
+                name=mm.__name__
+                cmd_str=mm.cmd_str('ipmi lan mac',passwd=passwd)
+                full_str=cmd_str[1]['base'].format(ip=ip,user=user,passwd=passwd)+' '+cmd_str[1]['cmd']
+                rc=rshell(full_str,log=self.log)
+                if krc(rc[0],chk=True):
+                    if name == 'smc':
+                        mac=MacV4(rc[1])
+                        if mac:
+                            self.mac=mac
                             return True,self.mac
+                    elif name == 'ipmitool':
+                        for ii in rc[1].split('\n'):
+                            ii_a=ii.split()
+                            if IsIn('MAC',ii_a,idx=0) and IsIn('Address',ii_a,idx=1) and IsIn(':',ii_a,idx=2):
+                                mac=MacV4(ii_a[-1])
+                                if mac:
+                                    self.mac=mac
+                                    return True,self.mac
+                else:
+                    if (name == 'smc' and rc[0] == 146) or (name=='ipmitool' and rc[0] == 1):
+                        #If password fail or something wrong then try again after checkup password
+                        ok,user,passwd=self.find_user_pass()
+                        if not ok:
+                            break
         return False,None
 
     def dhcp(self):
@@ -2985,23 +2999,28 @@ class kBmc:
                 if not mm:
                     if os.path.isfile(screen_tmp_file): os.unlink(screen_tmp_file)
                     return False,msg
-                cmd_str_dict=mm.cmd_str(cmd,passwd=self.passwd)
-                if cmd_str_dict[0]:
-                    ok,ipmi_user,ipmi_pass=self.find_user_pass()
-                    if not ok:
-                        if os.path.isfile(screen_tmp_file): os.unlink(screen_tmp_file)
-                        return False,'IPMI User or Password not found'
-                    base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':self.ip,'user':ipmi_user,'passwd':ipmi_pass})
-                    cmd_str='''{} {}'''.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
-                rc=rshell('''screen -c {} -dmSL {} {}'''.format(screen_tmp_file,FixApostrophe(title),cmd_str))
-                if rc[0] == 0:
-                    for ii in range(0,50):
-                        if os.path.isfile(screen_log_file):
-                            os.unlink(screen_tmp_file)
-                            return True,'log file found'
-                        time.sleep(0.2)
-                elif rc[0] == 127:
-                    omsg=rc[2]
+                for i in range(0,2):
+                    cmd_str_dict=mm.cmd_str(cmd,passwd=self.passwd)
+                    if cmd_str_dict[0]:
+                        base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':self.ip,'user':self.user,'passwd':self.passwd})
+                        cmd_str='''{} {}'''.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
+                    rc=rshell('''screen -c {} -dmSL {} {}'''.format(screen_tmp_file,FixApostrophe(title),cmd_str))
+                    if rc[0] == 0:
+                        for ii in range(0,50):
+                            if os.path.isfile(screen_log_file):
+                                os.unlink(screen_tmp_file)
+                                return True,'log file found'
+                            time.sleep(0.2)
+                    elif rc[0] == 127:
+                        omsg=rc[2]
+                        break
+                    elif rc[0] == 1:
+                        ok,ipmi_user,ipmi_pass=self.find_user_pass()
+                        if not ok:
+                            if os.path.isfile(screen_tmp_file): os.unlink(screen_tmp_file)
+                            return False,'IPMI User or Password not found'
+                        continue
+                    break
             else:
                 omsg='can not create {} file'.format(screen_tmp_file)
             if os.path.isfile(screen_tmp_file): os.unlink(screen_tmp_file)
@@ -3201,15 +3220,20 @@ class kBmc:
             mm,msg=self.get_cmd_module_name('ipmitool')
             if not mm:
                 return False,msg
-            cmd_str_dict=mm.cmd_str('sol activate',passwd=self.passwd)
-            if cmd_str_dict[0]:
-                ok,ipmi_user,ipmi_pass=self.find_user_pass()
-                if not ok:
-                    return False,'IPMI User or Password not found'
-                base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':self.ip,'user':ipmi_user,'passwd':ipmi_pass})
-                cmd_str='{} {}'.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
-                rc=rshell(cmd_str,interactive=True)
-                return True if Get(rc,0)==0 else False,Get(rc,1)
+            for i in range(0,2):
+                cmd_str_dict=mm.cmd_str('sol activate',passwd=self.passwd)
+                if cmd_str_dict[0]:
+                    base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':self.ip,'user':self.user,'passwd':self.passwd})
+                    cmd_str='{} {}'.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
+                    rc=rshell(cmd_str,interactive=True)
+                    if krc(rc,chk=True):
+                        return True,Get(rc,1)
+                    elif i < 1:
+                        ok,user,passwd=self.find_user_pass()
+                        if not ok:
+                            return False,'IPMI User or Password not found'
+                        continue
+                    return False,Get(rc,1)
             return False,'Command not found'
         else:
             return _monitor_(title,find,timeout,session_out,stdout)
