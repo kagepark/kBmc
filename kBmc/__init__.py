@@ -2667,6 +2667,7 @@ class kBmc:
                 if 'Not licensed to perform' in rc[1]:
                     printf('Product KEY ISSUE. Set ProdKey and try again.....',log=self.log,log_level=3)
                     return False,rc[1],-1
+                printf('Set BootOrder output: {}'.format(rc),log=self.log,mode='d')
                 time.sleep(10)
         return self.do_power(cmd,retry=retry,verify=verify,timeout=timeout,post_keep_up=post_keep_up,post_keep_down=post_keep_down,lanmode=lanmode,fail_down_time=fail_down_time,mode=monitor_mode)
 
