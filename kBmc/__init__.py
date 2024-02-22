@@ -1709,7 +1709,7 @@ class kBmc:
                 return True,found
         return False,('','','','')
 
-    def find_user_pass(self,ip=None,default_range=12,check_cmd='ipmi power status',cancel_func=None,error=True,trace=False,extra_test_user=[],extra_test_pass=[],no_redfish=False,first_user=None,first_passwd=None):
+    def find_user_pass(self,ip=None,default_range=12,check_cmd='ipmi power status',cancel_func=None,error=True,trace=False,extra_test_user=[],extra_test_pass=[],no_redfish=False,first_user=None,first_passwd=None,failed_passwd=None):
         # Check Network
         chk_err=self.error(_type='net')
         if chk_err[0]: return False,None,None
@@ -1737,6 +1737,8 @@ class kBmc:
             test_passwd=MoveData(test_passwd,first_passwd,to='first') # move current passwd
         for i in self.base_passwd: # Append base password
             if i not in test_passwd: test_passwd.append(i)
+        if failed_passwd:
+            test_passwd=MoveData(test_passwd,failed_passwd,to='last') # move failed passwd to last
         tt=1
         #if len(self.test_passwd) > default_range: tt=2
         tt=(len(test_passwd) // default_range) + 1
@@ -2063,7 +2065,7 @@ class kBmc:
                     # Find Password
                     cur_user=self.__dict__.get('user')
                     cur_pass=self.__dict__.get('passwd')
-                    ok,ipmi_user,ipmi_pass=self.find_user_pass()
+                    ok,ipmi_user,ipmi_pass=self.find_user_pass(failed_passwd=cur_pass)
                     if not ok:
                         self.error(_type='user_pass',msg="Can not find working IPMI USER and PASSWORD")
                         return False,'Can not find working IPMI USER and PASSWORD','user error'
