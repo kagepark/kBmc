@@ -115,7 +115,9 @@ class Redfish:
             }
         self.user=opts.get('user','ADMIN')
         self.passwd=opts.get('passwd','ADMIN')
-        self.host=opts.get('host')
+        self.host=opts.get('host',opts.get('ip'))
+        self.timeout=opts.get('timeout',1800)
+        self.cancel_func=opts.get('cancel_func',opts.get('stop_func',None))
 
     def Cmd(self,cmd,host=None):
         if not host: host=self.host
@@ -1048,8 +1050,14 @@ class Redfish:
                 out[gpc.get('ConnectTypesSupported')[0]]={'Port':gpc.get('Port'),'ServiceEnabled':gpc.get('ServiceEnabled')}
         return out
 
-    def McResetCold(self):
-        return self.Post('/Managers/1/Actions/Manager.Reset')
+    def McResetCold(self,keep_on=20):
+        rc=self.Post('/Managers/1/Actions/Manager.Reset')
+        if rc:
+             time.sleep(5)
+             printf("""Wait until response from BMC""",log=self.log,log_level=1,dsp='d')
+             return ping(self.host,keep_good=keep_on,timeout=self.timeout,cancel_func=self.cancel_func,log=self.log)
+        return rc
+
 
 class kBmc:
     def __init__(self,*inps,**opts):
@@ -1362,11 +1370,11 @@ class kBmc:
 
         ##########
         if 'keep_on' in opts and monitoring_state[-1] == 'on':
-            keep_last_state_time=Int(opts.get('keep_on'),0)
-            keep_error_state_time=Int(opts.get('keep_off'),0)
+            keep_last_state_time=Int(opts.get('keep_on'),Int(opts.get('keep_last_state_time'),0))
+            keep_error_state_time=Int(opts.get('keep_off'),Int(opts.get('keep_error_state_time'),0))
         elif 'keep_off' in opts and monitoring_state[-1] == 'off':
-            keep_last_state_time=Int(opts.get('keep_off'),0)
-            keep_error_state_time=Int(opts.get('keep_on'),0)
+            keep_last_state_time=Int(opts.get('keep_off'),Int(opts.get('keep_last_state_time'),0))
+            keep_error_state_time=Int(opts.get('keep_on'),Int(opts.get('keep_error_state_time'),0))
         else:
             keep_last_state_time=Int(opts.get('keep_last_state_time'),0)
             keep_error_state_time=Int(opts.get('keep_error_state_time'),0)
@@ -1380,8 +1388,8 @@ class kBmc:
         if 'timeout' not in data: data['timeout']=timeout # default 1800(30min)
         if 'sensor_off_time' not in data: data['sensor_off_time']=Int(sensor_off_time,450) # Sensor monitoring timeout 
         if 'monitor_interval' not in data: data['monitor_interval']=Int(monitor_interval,5) # default 5
-        if 'keep_last_state_time' not in data: data['keep_last_state_time']=Int(keep_last_state_time,0)
-        if 'keep_error_state_time' not in data: data['keep_error_state_time']=Int(keep_error_state_time,0)
+        if 'keep_last_state_time' not in data: data['keep_last_state_time']=keep_last_state_time
+        if 'keep_error_state_time' not in data: data['keep_error_state_time']=keep_error_state_time
         if 'mode' not in data: data['mode']=mode if mode in ['s','a','r','t'] else 'a'
         #data monitoring initialize data (time, status)
         if 'init' not in data: data['init']={}
@@ -1448,7 +1456,6 @@ class kBmc:
             ############################################
             ## monitoring current condition (convert to defined mode(on/off/unknown) only)
             curr_power_status,checked_redfish=get_current_power_status(checked_redfish=checked_redfish)
-            #on_off,is_on_off_time=is_on_off(get_current_power_status(),mode=data['mode'],sensor_time=is_on_off_time,sensor_off_time=data['sensor_off_time'])
             on_off,is_on_off_time=is_on_off(curr_power_status,mode=data['mode'],sensor_time=is_on_off_time,sensor_off_time=data['sensor_off_time'])
             if on_off not in data['monitored_status']: data['monitored_status'][on_off]=[]
             if monitoring_state == on_off: #same condition : update time
@@ -1495,7 +1502,7 @@ class kBmc:
             ############################################
             # Suddenly wrong condition
             if data['keep_error_state_time']>0:
-                 if data['monitoring'][monitor_id]  != on_off and on_off in data['monitored_status'] and len(data['monitored_status']) > 1: #two more monitored state, but studdenly keep wrong(off/on) state then....
+                 if data['monitoring'][monitor_id]  != on_off and on_off in data['monitored_status'] and (len(data['monitored_status']) > 1 if len(data['monitoring']) > 1 else True): #two more monitored state, but studdenly keep wrong(off/on) state then....
                      if on_off in ['on','off']:
                          #Is it end of state?
                          esst=True
@@ -1867,7 +1874,7 @@ class kBmc:
         printf("""no_redfish:{}""".format(no_redfish),log=self.log,dsp='d')
         if not no_redfish:
             printf("""Try McResetCold and try again, Looks BMC issue""",log=self.log)
-            if self.McResetCold(ip,no_ipmitool=True): # Block Loop
+            if self.McResetCold(no_ipmitool=True): # Block Loop
                 return self.find_user_pass(ip=ip,default_range=default_range,check_cmd=check_cmd,cancel_func=cancel_func,error=error,trace=trace,no_redfish=True)
         printf("""WARN: Can not find working BMC User or password from Password POOL""",log=self.log,log_level=1,dsp='w')
         printf(""" - Password POOL  : {}""".format(test_passwd),log=self.log,dsp='d',no_intro=True)
@@ -1876,21 +1883,16 @@ class kBmc:
             self.error(_type='user_pass',msg="Can not find working BMC User or password from POOL\n{}".format(tested_user_pass))
         return False,None,None
 
-    def McResetCold(self,ip=None,no_ipmitool=False):
+    def McResetCold(self,keep_on=20,no_ipmitool=False,**opts):
         printf("""Call Redfish""",log=self.log,log_level=1,dsp='d')
         rf=self.CallRedfish(no_ipmitool=no_ipmitool)
         if rf:
             printf("""Mc Reset Cold with Redfish""",log=self.log,log_level=1,dsp='d')
-            if rf.McResetCold():
-                printf("""Wait until response from BMC""",log=self.log,log_level=1,dsp='d')
-                if not ip : ip=self.ip
-                return ping(ip,keep_good=10,timeout=self.timeout,cancel_func=self.cancel_func,log=self.log)
+            return rf.McResetCold(keep_on=keep_on)
         if not no_ipmitool:
             if self.error(_type='net')[0]: return False # if error then error
             printf("""Mc Reset Cold with ipmitool""",log=self.log,log_level=1,dsp='d')
-            if self.reset(cancel_func=self.cancel_func):
-                if not ip : ip=self.ip
-                return ping(ip,keep_good=10,timeout=self.timeout,cancel_func=self.cancel_func,log=self.log)
+            return self.reset(cancel_func=self.cancel_func,post_keep_up=keep_on)
         printf("""E: Can not Reset BMC""",log=self.log,log_level=1,dsp='d')
         return False
 
@@ -2074,7 +2076,7 @@ class kBmc:
                 elif (not rc_ok and rc_0 == 0) or IsIn(rc_0,rc_ok):
                     return True,rc,'ok'
                 elif IsIn(rc_0,rc_err_bmc_redfish): # retry after reset the BMC
-                    if not self.McResetCold(self.ip):
+                    if not self.McResetCold():
                         return False,(-1,'Looks Stuck at BMC and Can not reset the BMC','Looks Stuck at BMC and Can not reset the BMC',0,0,cmd_str,path),'reset bmc'
                 elif IsIn(rc_0,rc_err_connection): # retry condition1
                     msg='err_connection'
@@ -2116,7 +2118,7 @@ class kBmc:
                     printf('Check IPMI User and Password by {}: Found ({}/{})'.format(rc_err_bmc_user,ipmi_user,ipmi_pass),log=self.log,log_level=1,dsp='d')
                     if cur_user == ipmi_user and cur_pass == ipmi_pass:
                         printf('Looks Stuck at BMC, So reset the BMC and try again',start_newline=True,log=self.log,log_level=1,dsp='d')
-                        if not self.McResetCold(self.ip):
+                        if not self.McResetCold():
                             return False,(-1,'Looks Stuck at BMC and Can not reset the BMC','Looks Stuck at BMC and Can not reset the BMC',0,0,cmd_str,path),'reset bmc'
                     user='{}'.format(ipmi_user)
                     passwd='''{}'''.format(ipmi_pass)
@@ -2166,32 +2168,35 @@ class kBmc:
         else:
             return False,rc,'Out of testing'
 
-    def reset(self,retry=0,post_keep_up=20,pre_keep_up=0,retry_interval=5,cancel_func=None):
+    def reset(self,retry=0,post_keep_up=20,pre_keep_up=0,retry_interval=5,cancel_func=None,timeout=1800):
         # Check Network
         chk_err=self.error(_type='net')
         if chk_err[0]: return False,chk_err[1]
         for i in range(0,1+retry):
+            rc=None
             for mm in self.cmd_module:
-                ping_rc=ping(self.ip,timeout=1800,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
+                ping_rc=ping(self.ip,timeout=timeout,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
                 if ping_rc is 0:
                     return 0,'Canceled'
                 elif ping_rc is False:
                     printf('R',log=self.log,log_level=1,direct=True)
+                else:
                     rc=self.run_cmd(mm.cmd_str('ipmi reset'))
                     if krc(rc,chk='error'):
-                        return rc
-                    if krc(rc,chk=True):
-                        ping_rc=ping(self.ip,timeout=1800,keep_good=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
+                        continue # try with next module
+                    elif krc(rc,chk=True):
+                        time.sleep(5)
+                        ping_rc=ping(self.ip,timeout=timeout,keep_good=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
                         if ping_rc is 0:
                             return 0,'Canceled'
                         elif ping_rc is True:
                             return True,'Pinging to BMC after reset BMC'
                         else:
                             return False,'Can not Pinging to BMC after reset BMC'
-                elif i >= retry:
-                    return False,'Can not Pinging to BMC. I am not reset the BMC. please check the network first!'
                 time.sleep(retry_interval)
-        return False,'Something issue'
+            if krc(rc,chk='error'): #one time tested with whole modules then return error
+                return rc
+        return False,'Can not Pinging to BMC. I am not reset the BMC. please check the network first!'
 
     def get_mac(self,ip=None,user=None,passwd=None):
         if self.mac:
@@ -2685,7 +2690,7 @@ class kBmc:
     def get_boot_mode(self):
         return self.bootorder(mode='status')
 
-    def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,post_keep_down=0,timeout=1800,lanmode=None,fail_down_time=240,cancel_func=None,set_bios_uefi_mode=False,monitor_mode='a',command_gap=5,error=False):
+    def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,post_keep_down=0,timeout=1800,lanmode=None,fail_down_time=240,cancel_func=None,set_bios_uefi_mode=False,monitor_mode='a',command_gap=5,error=False,mc_reset=False):
         # verify=False
         #  - just send a command 
         #  - if off_on command then check off mode without sensor monitor
@@ -2733,11 +2738,14 @@ class kBmc:
                     return False,rc[1],-1
                 printf('Set BootOrder output: {}'.format(rc),log=self.log,mode='d')
                 time.sleep(10)
-        return self.do_power(cmd,retry=retry,verify=verify,timeout=timeout,post_keep_up=post_keep_up,post_keep_down=post_keep_down,lanmode=lanmode,fail_down_time=fail_down_time,mode=monitor_mode,command_gap=command_gap,error=error)
+        return self.do_power(cmd,retry=retry,verify=verify,timeout=timeout,post_keep_up=post_keep_up,post_keep_down=post_keep_down,lanmode=lanmode,fail_down_time=fail_down_time,mode=monitor_mode,command_gap=command_gap,error=error,mc_reset=mc_reset)
 
-    def do_power(self,cmd,retry=0,verify=False,timeout=1200,post_keep_up=40,post_keep_down=0,pre_keep_up=0,lanmode=None,cancel_func=None,fail_down_time=300,mode='a',command_gap=5,error=False):
+    def do_power(self,cmd,retry=0,verify=False,timeout=1200,post_keep_up=40,post_keep_down=0,pre_keep_up=0,lanmode=None,cancel_func=None,fail_down_time=300,fail_up_time=300,mode='a',command_gap=5,error=False,mc_reset=False):
         timeout=Int(timeout,default=1200)
         command_gap=Int(command_gap,default=5)
+        kfdt=TIME().Int() # keep fail down time
+        kfut=TIME().Int() # keep fail up time
+        total_time=TIME().Int() # total time
         def lanmode_check(mode):
             # BMC Lan mode Checkup
             cur_lan_mode=self.lanmode()
@@ -2845,6 +2853,7 @@ class kBmc:
                         cc=TIME().Int()
                         is_up=self.is_up(timeout=timeout,keep_up=post_keep_up,cancel_func=cancel_func,keep_down=60,mode=mode)
                         if is_up[0]:
+                            kfdt=TIME().Int() # keep fail down time
                             if chk < verify_num:
                                 # It need new line for the next command
                                 printf(self.power_on_tag,no_intro=True,log=self.log,log_level=1)
@@ -2865,27 +2874,40 @@ class kBmc:
                                         if cur_temp > 0 and ncr > 0 and cur_temp > ncr:
                                             high_temp='{} is too high({}) (over threshold {})'.format(ssi_a[0],cur_temp,ucr)
                             
+                            pre_msg=' - Suddenly off' if IsIn(Get(Split(is_up[1],'-'),-2),['up','on']) else ' - Keep off(never on)'
                             if high_temp:
-                                msg='Suddenly off the power over 1min.\n - {}.'.format(high_temp)
-                                msg_ext='(cool down)'
+                                msg='{} the power over 1min after power {} command.\n - {}.'.format(pre_msg,verify_status,high_temp)
+                                msg_ext='(cool down over 5min)'
                                 retry_sleep=300
                             else:
-                                msg="Suddenly off the power over 1min"
+                                msg="{} the power over 1min".format(pre_msg)
                                 retry_sleep=20
                                 msg_ext=''
                             if fail_down > retry:
-                                if error:
-                                    self.error(_type='power',msg=msg)
-                                return False,'Can not make to power UP'
+                                if fail_down_time > 0 and not high_temp:
+                                    if  TIME().Int() - kfdt  > fail_down_time or (TIME().Int() - total_time / fail_down_time) > 1:
+                                        if error:
+                                            self.error(_type='power',msg='Defined keep down(off) time({}sec) over. Maybe Stuck BMC (Try reset power for BMC)'.format(fail_down_time))
+                                        return False,'Defined keep down(off) time({}sec) over. Maybe Stuck BMC (Try reset power for BMC)'.format(fail_down_time)
+                                else: 
+                                    if error:
+                                        self.error(_type='power',msg=msg)
+                                    return False,'Can not make to power UP'
                             self.warn(_type='power',msg=msg)
                             printf('{}\n - try again power {} after {}sec{}.'.format(msg,verify_status,retry_sleep,msg_ext),start_newline=True,log=self.log,log_level=1)
-                            time.sleep(retry_sleep)
+                            if not high_temp and mc_reset:
+                                if fail_down > 1 and fail_down%2==0 and fail_down < retry:
+                                    printf(' - Mc Reset Cold',no_intro=True,log=self.log,log_level=1)
+                                    self.McResetCold(keep_on=retry_sleep)
+                            else:
+                                time.sleep(retry_sleep)
                             fail_down+=1
                             continue
                     elif verify_status in ['off','down']:
                         cc=TIME().Int()
                         is_down=self.is_down(timeout=timeout,keep_down=post_keep_down,keep_on=40,cancel_func=cancel_func,mode=mode)
                         if is_down[0]:
+                            kfut=TIME().Int() # keep fail up time
                             if chk == len(mm.power_mode[cmd]):
                                 printf(self.power_off_tag,no_intro=True,log=self.log,log_level=1)
                                 return True,'off'
@@ -2896,13 +2918,25 @@ class kBmc:
                                 printf(self.power_off_tag,no_intro=True,log=self.log,log_level=1)
                                 return True,'off'
                         elif IsIn(Get(Split(is_down[1],'-'),-1),['up','on']) and not chkd:
+                            pre_msg=' - Suddenly on' if IsIn(Get(Split(is_up[1],'-'),-2),['off','down']) else ' - Keep on(never off)'
                             if fail_down > retry:
-                                if error:
-                                    self.error(_type='power',msg='Can not make to power DOWN')
-                                return False,'Can not make to power DOWN'
-                            self.warn(_type='power',msg="Something weird. Looks BMC issue, can't power down")
-                            printf('Something weird. Try again power {}'.format(verify_status),start_newline=True,log=self.log,log_level=1)
-                            time.sleep(20)
+                                if fail_up_time > 0:
+                                    if  TIME().Int() - kfut  > fail_up_time or (TIME().Int() - total_time / fail_up_time) > 1:
+                                        if error:
+                                             self.error(_type='power',msg='Defined keep up(on) time({}sec) over. Maybe Stuck BMC (Try reset power for BMC)'.format(fail_up_time))
+                                        return False,'Defined keep up(on) time({}sec) over. Maybe Stuck BMC (Try reset power for BMC)'.format(fail_up_time)
+                                else:
+                                    if error:
+                                        self.error(_type='power',msg='{} and Can not make to power DOWN'.format(pre_msg))
+                                    return False,'{} and Can not make to power DOWN'.format(pre_msg)
+                            self.warn(_type='power',msg="Something weird. Looks BMC issue, {} and can't power down".format(pre_msg))
+                            printf(" - Something weird. Looks BMC issue, {} and can't power down after power {} command.\n - Try again power {}".format(pre_msg,verify_status,verify_status),start_newline=True,log=self.log,log_level=1)
+                            if mc_reset:
+                                if fail_down > 1 and fail_down%2==0 and fail_down < retry:
+                                    printf(' - Mc Reset Cold',no_intro=True,log=self.log,log_level=1)
+                                    self.McResetCold(keep_on=20)
+                            else:
+                                time.sleep(20)
                             fail_down+=1
                             continue
                     chk+=1
@@ -2933,7 +2967,7 @@ class kBmc:
             #can not verify then try with next command
             time.sleep(3)
         if chkd:
-            printf(' It looks BMC issue. (Need reset the physical power)',log=self.log,log_level=1)
+            printf(' - It looks BMC issue. (Need reset the physical power)',log=self.log,log_level=1)
             self.error(_type='power',msg="It looks BMC issue. (Need reset the physical power)")
             return False,'It looks BMC issue. (Need reset the physical power)'
         return False,'time out'
