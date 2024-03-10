@@ -15,8 +15,9 @@ from kmport import *
 # cancel() : True : Cancel whole bmc process
 # stop     : True : stop the running process
 #### Return #####
-# True     : Good
-# False    : False
+# True     : Good, Doing result is good
+# False    : False, Doing result is fail
+# None     : Not bad, Nothing do
 # <+N>     : Good level user define : if rc: ok
 # 1        : Good level user define : if rc == True: ok
 # 0        : False level user define (like as cancel) : if rc == False : this is False
@@ -93,6 +94,9 @@ class Smcipmitool:
             return True,{'base':'''%s {ip} {user} %s{passwd}%s '''%(self.smc_file,sym,sym),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
 
 class Redfish:
+    #ref: https://www.supermicro.com/manuals/other/redfish-ref-guide-html/Content/general-content/available-apis.htm
+    #/redfish/v1/Managers/1/EthernetInterfaces/ToHost : RedfishHI
+    #/redfish/v1/Managers/1/EthernetInterfaces/1      : BMC
     def __init__(self,**opts):
         self.power_on_tag='¯'
         self.power_up_tag='∸'
@@ -100,7 +104,6 @@ class Redfish:
         self.power_down_tag='⨪'
         self.power_unknown_tag='·'
         self.__name__='redfish'
-        self.log=opts.get('log',None)
         if isinstance(opts.get('path'),dict):
             self.path=opts['path']
         else:
@@ -113,11 +116,21 @@ class Redfish:
                 'PsuCount':'Chassis/1/Power',
                 'BootOption':'Systems/1/BootOptions',
             }
-        self.user=opts.get('user','ADMIN')
-        self.passwd=opts.get('passwd','ADMIN')
-        self.host=opts.get('host',opts.get('ip'))
         self.timeout=opts.get('timeout',1800)
         self.cancel_func=opts.get('cancel_func',opts.get('stop_func',None))
+        self.bmc=opts.get('bmc')
+        if self.bmc:
+            self.user=self.bmc.__dict__['user'] 
+            self.passwd=self.bmc.__dict__['passwd']
+            self.host=self.bmc.__dict__['ip']
+            self.pxe_boot_mac=self.bmc.__dict__['eth_mac']
+            self.log=opts.get('log',self.bmc.__dict__['log'])
+        else:
+            self.user=opts.get('user','ADMIN')
+            self.passwd=opts.get('passwd','ADMIN')
+            self.host=opts.get('host',opts.get('ip'))
+            self.pxe_boot_mac=opts.get('pxe_boot_mac')
+            self.log=opts.get('log',None)
 
     def Cmd(self,cmd,host=None):
         if not host: host=self.host
@@ -135,42 +148,93 @@ class Redfish:
     def Get(self,cmd,host=None):
         if not host: host=self.host
         if not isinstance(cmd,str): return False
-        data = WEB().Request(self.Cmd(cmd,host=host),auth=(self.user, self.passwd))
-        if data[0]:
-            if data[1].status_code == 200:
+        for i in range(0,2):
+            data = WEB().Request(self.Cmd(cmd,host=host),auth=(self.user, self.passwd))
+            if data[0]:
+                if data[1].status_code == 200:
+                    try:
+                        return True,json.loads(data[1].text)
+                    except:
+                        if isinstance(data[1].text,str) and 'unauthorized' in data[1].text:
+                            if self.bmc:
+                                if self.bmc.find_user_pass()[0] is True:
+                                    continue
+                        return False,data[1].text
                 try:
-                    return True,json.loads(data[1].text)
+                    data_dic=json.loads(data[1].text)
+                    if 'error' in data_dic:
+                        err_dic=data_dic.get('error',{})
+                        if '@Message.ExtendedInfo' in err_dic:
+                            err_msg=err_dic.get('@Message.ExtendedInfo',{})[0].get('Message')
+                        elif 'Message' in err_dic:
+                            err_msg=err_dic.get('Message')
+                        else:
+                            err_msg=err_dic
+                        if isinstance(err_msg,str) and 'unauthorized' in err_msg:
+                            if self.bmc:
+                                if self.bmc.find_user_pass()[0] is True:
+                                    continue
+                        return False, err_msg
                 except:
+                    if isinstance(data[1].text,str) and 'unauthorized' in data[1].text:
+                        if self.bmc:
+                            if self.bmc.find_user_pass()[0] is True:
+                                continue
                     return False,data[1].text
-            try:
-                data_dic=json.loads(data[1].text)
-                if 'error' in data_dic:
-                    err_dic=data_dic.get('error',{})
-                    if '@Message.ExtendedInfo' in err_dic:
-                        err_msg=err_dic.get('@Message.ExtendedInfo',{})[0].get('Message')
-                    elif 'Message' in err_dic:
-                        err_msg=err_dic.get('Message')
-                    else:
-                        err_msg=err_dic
-                    return False, err_msg
-            except:
-                return False,data[1].text
         return False,'Request Error'
 
-    def Post(self,cmd,host=None,json=None,data=None,files=None,mode='post'):
+    def Post(self,cmd,host=None,json=None,data=None,files=None,mode='post',retry=3):
         if not host: host=self.host
+        if not ping(host,timeout=1800):
+            printf("ERROR: Can not access the ip({}) over 30min.".format(host),log=self.log)
+            return False
         if not isinstance(cmd,str): return False
-        data = WEB().Request(self.Cmd(cmd,host=host),auth=(self.user, self.passwd),mode=mode,json=json,data=data,files=files)
-        if data[0]:
-            if data[1].status_code == 200:
-                return True
-            else:
-                try: # sometimes, success with 202 code or maybe others(??)
+        url=self.Cmd(cmd,host=host)
+        #patch then need the power on
+        if mode == 'patch':
+            if not json and not data:
+                return None #No data. So return None
+            if self.Power() == 'off':
+                if not self.Power('on',up=30,sensor=True):
+                    printf("ERROR: Required power ON for the command, but can't power ON the system. Please look at the BMC or Redfish for power",log=self.log)
+                    return False
+        printf('Post: url:{}\n - mode:{}\n - data:{}\n - json:{}\n - file:{}'.format(url,mode,data,json,files),no_intro=True,log=self.log,mode='d')
+        for i in range(0,retry):
+            data = WEB().Request(url,auth=(self.user, self.passwd),mode=mode,json=json,data=data,files=files)
+            #Password Error then....
+            if isinstance(data[1].text,str) and 'unauthorized' in data[1].text:
+                if self.bmc:
+                    if self.bmc.find_user_pass()[0] is True:
+                        continue
+            printf(' - code:{}\n - msg:{}'.format(data[1].status_code,data[1].text),no_intro=True,log=self.log,mode='d')
+            if data[0]:
+                try:
                     tmp=FormData(data[1].text)
-                    if next(iter(tmp)) == 'Success':
-                        return True
                 except:
                     pass
+                if isinstance(tmp,dict):
+                    # sometimes, success with 202 code or maybe others(??)
+                    if IsIn(next(iter(tmp)),['Success','Accepted']): #OK
+                        if mode == 'patch':# if patch command then reset the power to apply
+                            time.sleep(5)
+                            return self.Power('reset',up=30,sensor=True)
+                        return True #OK
+                    if IsIn(next(iter(tmp)),['error']): #Error
+                        mm= tmp.get('error',{}).get('@Message.ExtendedInfo')[-1].get('Message')
+                        if isinstance(mm,str) and ('temporarily unavailable' in mm and 'Retry in  seconds' in mm) or ('Bios setting file already exists' in mm):
+                            #Retry
+                            # This error message required reset the power to flushing the redfish's garbage configuration
+                            self.Power('reset',up=30,sensor=True)
+                            printf('.',end='',log=self.log)
+                            continue
+                if data[1].status_code == 200: #OK
+                    if mode == 'patch': # if patch command then reset the power to apply
+                        time.sleep(5)
+                        return self.Power('reset',up=30,sensor=True)
+                    return True
+                #Fail
+                printf('ERROR({}:{}):{}'.format(mode,data[1].status_code,data[1].text),log=self.log)
+                break
         return False
 
     def Data(self,data):
@@ -196,97 +260,213 @@ class Redfish:
                         ndata[xx]=data[xx].get('@odata.id')
         return ndata
 
-
-    def Power(self,cmd='status',pxe=False,pxe_keep=False,uefi=False,sensor_up=0,sensor_down=0,timeout=600,silent_status_log=True):
-        def get_current_power_state():
+    def SystemReadyState(self,thermal=False):
+        #it can read the Redfish's Thermal data when OS is running
+        #ipmitool's sensor data can read when the system's CPU is ready
+        if thermal:
+            ok,aa=self.Get('Chassis/1/Thermal')
+            if not ok:
+                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+                return False #Error
+            if isinstance(aa,dict):
+                for ii in aa.get('Temperatures',[]):
+                    if ii.get('PhysicalContext') == 'CPU':
+                        try:
+                            return int(ii.get('ReadingCelsius')) #ON
+                        except:
+                            pass
+        else:
             ok,aa=self.Get('Systems/1')
             if not ok:
-                if not silent_status_log: printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
-                return 'unknown'
-            current_power=aa.get('PowerState') if isinstance(aa,dict) and aa.get('PowerState') else 'unknown'
-            if current_power == 'unknown':
-                ok,aa=self.Get('Managers/1/Oem/Supermicro/SmartPower')
-                if ok:
-                    if isinstance(aa,dict):
-                        current_power=aa.get('PowerStatus')
-            if isinstance(current_power,str):
-                return current_power
+                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+                return False #Error
+            if isinstance(aa,dict):
+                #The hardware initialization finish / ready state
+                #Same as ipmitool's sensor data readable step
+                if IsIn(aa.get('BootProgress',{}).get('LastState'),['SystemHardwareInitializationComplete']):
+                    return 'on' #ON
+        return None # power off state
+
+    def onoff_state(self,cmd):
+        if IsIn(cmd,['on','up']):
+            return 'on'
+        elif IsIn(cmd,['off','ForceOff','shutdown','GracefulShutdown']):
+            return 'off'
+
+    def get_current_power_state(self):
+        #return : on/off/unknown
+        ok,aa=self.Get('Systems/1')
+        if not ok:
+            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+            return False
+        current_power=self.onoff_state(Get(aa,'PowerState'))
+        if current_power is None:
+            ok,aa=self.Get('Managers/1/Oem/Supermicro/SmartPower')
+            current_power=self.onoff_state(Get(aa,'PowerState'))
+        if current_power is None:
             return 'unknown'
-        current_power=get_current_power_state().lower()
-        if cmd == 'status':
-            return current_power
-        if cmd in ['on','off','shutdown','reboot','reset','off_on']:
-            def cmd_state(cmd,on_s=['on'],off_s=['off','shutdown']):
-                if cmd in on_s:
-                    return 'on'
-                elif cmd in off_s:
-                    return 'off'
-                return None
-            if cmd_state(cmd) == current_power: return True
-            #Set PXE Boot
-            if pxe and cmd in ['on','reset','reboot','off_on']:
-                pxe_str='ipxe' if uefi is True else 'pxe'
-                if pxe_keep:
-                    self.Boot(boot=pxe_str,keep='keep')
-                else:
-                    self.Boot(boot=pxe_str)
-            #Do Power command
-            if cmd == 'off_on':
-                #Not off then turn off
-                if current_power != 'off':
-                    aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': 'ForceOff'})
-                    for i in range(0,600):
-                        current_power=get_current_power_state().lower()
-                        if current_power == 'off':
-                            time.sleep(2)
-                            break
-                        #StdOut('.')
-                        printf('.',log=self.log,direct=True,log_level=1)
-                        time.sleep(1)
-                #Turn on 
-                cmd='on'
-            if cmd == 'on':
-                json_cmd='On'
-            elif cmd == 'off':
-                json_cmd='ForceOff'
-            elif cmd == 'shutdown':
-                json_cmd='GracefulShutdown'
-            elif cmd == 'reset':
-                json_cmd='ForceRestart'
-            elif cmd == 'reboot':
-                json_cmd='GracefulRestart'
-            rt=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': json_cmd})
-            if cmd in ['on','reset','reboot'] and sensor_up > 0:
-                return self.IsUp(timeout=timeout,keep_up=sensor_up)
-            elif cmd in ['off','shutdown'] and sensor_down > 0:
-                return self.IsDown(timeout=timeout,keep_down=sensor_down)
+        return current_power
+
+    def IsUp(self,timeout=600,keep_up=0,sensor=False,sensor_temp=False):
+        up_init=None
+        Time=TIME()
+        UTime=TIME()
+        while not Time.Out(timeout):
+            stat=self.power_unknown_tag
+            if sensor:
+                mon=self.SystemReadyState(thermal=sensor_temp)
             else:
-                Time=TIME()
-                while True:
-                    if Time.Out(timeout): return False
-                    if cmd_state(cmd,on_s=['reset','on','reboot','off_on']) == get_current_power_state().lower():
-                        time.sleep(1)
-                        return True
-                    #StdOut(self.power_unknown_tag)
-                    printf(self.power_unknown_tag,log=self.log,direct=True,log_level=1)
-                    time.sleep(3)
-                return False
+                mon=self.get_current_power_state()
+            if mon is False:
+                break
+            elif mon in [None,'off','unknown']:
+                UTime.Reset()
+                if mon == 'unknown':
+                    stat=self.power_unknown_tag
+                else:
+                    stat=self.power_off_tag
+            else:
+                if keep_up > 0:
+                    if UTime.Out(keep_up): return True
+                    stat=self.power_on_tag
+                else:
+                    return True
+            printf(stat,direct=True,log=self.log,log_level=1)
+            time.sleep(3)
+        return False
+
+    def IsDown(self,timeout=300,keep_down=0,sensor=False,sensor_temp=False):
+        Time=TIME()
+        DTime=TIME()
+        while not Time.Out(timeout):
+            stat=self.power_unknown_tag
+            if sensor:
+                mon=self.SystemReadyState(thermal=sensor_temp)
+            else:
+                mon=self.get_current_power_state()
+            if mon is False:
+                break
+            elif mon in [None,'off']:
+                if keep_down > 0:
+                    if DTime.Out(keep_down): return True
+                    stat=self.power_off_tag
+                else:
+                    return True
+            else:
+                if mon == 'unknown':
+                    stat=self.power_on_tag
+                else:
+                    stat=self.power_unknown_tag
+                DTime.Reset()
+            printf(stat,direct=True,log=self.log,log_level=1)
+            time.sleep(3)
+        return False
+
+    def Power(self,cmd='status',**opts):
+        pxe=opts.get('pxe',False)
+        pxe_keep=opts.get('pxe_keep',False)
+        uefi=opts.get('uefi',False)
+        up=opts.get('up',opts.get('sensor_up',0))
+        down=opts.get('down',opts.get('sensor_down',0))
+        sensor=opts.get('sensor',False)
+        sensor_temp=opts.get('sensor_temp',False)
+        timeout=opts.get('timeout',1800)
+        silent_status_log=opts.get('silent_status_log',True)
+        def cmd_result(cmd):
+            if IsIn(cmd, ['on','up','reboot','reset','off_on','ForceRestart','GracefulRestart','restart','cycle']):
+                return 'on'
+            elif IsIn(cmd, ['off','shutdown','ForceOff','GracefulShutdown']):
+                return 'off'
+
+        def rf_power_json_cmd(cmd):
+            if IsIn(cmd,['on','up']):
+                return 'On'
+            elif IsIn(cmd,['off','ForceOff']):
+                return 'ForceOff'
+            elif IsIn(cmd,['shutdown','GracefulShutdown']):
+                return 'GracefulShutdown'
+            elif IsIn(cmd,['reset','cycle','ForceRestart']):
+                return 'ForceRestart'
+            elif IsIn(cmd,['reboot','GracefulRestart','restart']):
+                return 'GracefulRestart'
+
+        def _power_(cmd,retry=4,monitor_timeout=300):
+            mt=TIME()
+            for i in range(0,retry):
+                aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': rf_power_json_cmd(cmd)})
+                if aa is False: # Retry
+                    printf('.',log=self.log,direct=True,log_level=1)
+                    time.sleep(5)
+                    continue
+                # reset group command
+                if IsIn(cmd,['reset','cycle','reboot','restart','ForceRestart']):
+                    #check off state
+                    off_state=False
+                    for x in range(0,20):
+                        if self.SystemReadyState() is None:
+                            off_state=True
+                            break
+                        printf('.',log=self.log,direct=True,log_level=1)
+                        time.sleep(3)
+                    if not off_state: continue # retry
+                mt.Reset()
+                while not mt.Out(monitor_timeout):
+                    if self.get_current_power_state() == cmd_result(cmd):
+                        return aa
+                    printf('.',log=self.log,direct=True,log_level=1)
+                    time.sleep(5)
+            return False
+        current_power=self.get_current_power_state()
+        if IsIn(cmd,['status','state']):
+            return current_power
+        # working for defined command only
+        if IsIn(cmd,['on','up','off','shutdown','reboot','reset','off_on','ForceOff','GracefulShutdown','ForceRestart','GracefulRestart','restart','cycle']):
+            if not pxe and self.onoff_state(cmd) == current_power: return True
+            #Do Power command
+            if cmd == 'off_on': #special command
+                if not _power_('off'):
+                    return False
+                cmd='on'
+            #Set PXE Boot
+            if pxe:
+                self.Boot(boot='pxe',mode='Legacy' if uefi is False else 'UEFI',keep='keep' if pxe_keep else 'once')
+                #pxe_str='ipxe' if uefi is True else 'pxe'
+                #if pxe_keep:
+                #    self.Boot(boot=pxe_str,keep='keep')
+                #else:
+                #    self.Boot(boot=pxe_str)
+            # do power cmd
+            rt=_power_(cmd)
+            if rt:
+                if cmd_result(cmd) == 'on':
+                    if up >0:
+                        return self.IsUp(timeout=timeout,keep_up=up,sensor=sensor,sensor_temp=sensor_temp)
+                else:
+                    if down > 0:
+                        return self.IsDown(timeout=timeout,keep_down=down,sensor=sensor,sensor_temp=sensor_temp)
+            return rt
         else:
-            if cmd == 'info':
-                naa={}
-                ok,aa=self.Get('Managers/1/Oem/Supermicro/SmartPower')
-                if not ok:
-                    silent_status_log: printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
-                    return naa
-                if isinstance(aa,dict):
-                    naa['status']=aa.get('PowerStatus')
-                    naa['max']=aa.get('MaxPower')
-                    naa['cap']=aa.get('PowerCapping')
-                ok,aa=self.Get('Chassis/1/Power')
+            if cmd == 'ID_LED': #Get ID_LED status
+                ok,aa=self.Get('Chassis/1')
                 if not ok:
                     printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
                     return naa
                 if isinstance(aa,dict):
+                    return aa.get('IndicatorLED')
+            elif cmd == 'ID_ON':
+                #Turn on ID_LED
+                pass
+            elif cmd == 'ID_OFF':
+                #Turn off ID_LED
+                pass
+            else: #Information
+                naa={'status':self.get_current_power_state()}
+                ok,aa=self.Get('Managers/1/Oem/Supermicro/SmartPower')
+                if ok and isinstance(aa,dict):
+                    naa['max']=aa.get('MaxPower')
+                    naa['cap']=aa.get('PowerCapping')
+                ok,aa=self.Get('Chassis/1/Power')
+                if ok and isinstance(aa,dict):
                     naa['psu']={}
                     if aa.get('PowerControl'):
                         interval='{}m'.format(aa.get('PowerControl')[0].get('PowerMetrics',{}).get('IntervalInMin'))
@@ -314,39 +494,84 @@ class Redfish:
                             input_source=input_source+'({}V)'.format(input_volt)
                         naa['psu'][idx]['input']=input_source
                 return naa
-            elif cmd == 'ID_LED':
-                ok,aa=self.Get('Chassis/1')
-                if not ok:
-                    printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
-                    return naa
-                if isinstance(aa,dict):
-                    return aa.get('IndicatorLED')
     
-    def Boot(self,boot=None,mode='auto',keep='once',simple_mode=False,pxe_boot_mac=None,force=False,set_bios_uefi=False):
-        # mode : auto will default set to UEFI
-        #TODO: Setup iPXE
-        # - bios mode is UEFI and order[0] is not PXE then, setup boot order to UEFI mode PXE
-        #   if not then try again with ipmitool's boot order to iPXE
-        #   until set to want mode
+    def PXEMAC(self,timeout=300):
+        #if it has multiplue PXE bootable mac then try next pxe boot id when next_pxe_id=# (int number)
+        #B13
+        Time=TIME()
+        while not Time.Out(timeout):
+            ok,aa=self.Get('Systems/1/Oem/Supermicro/FixedBootOrder')
+            if ok and isinstance(aa,dict):
+                for i in aa.get('UEFINetwork'):
+                    for x in Split(i):
+                        a=MacV4(x)
+                        if a:
+                            return a
+            #Normal system case
+            ok,aa=self.Get('Systems/1')
+            if not ok or not isinstance(aa,dict):
+                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+                return False
+            rf_key=aa.get('EthernetInterfaces',{}).get('@odata.id')
+            if rf_key:
+                ok,aa=self.Get(rf_key)
+                if ok and isinstance(aa,dict):
+                    rf_key=aa.get('Members',[{}])[0].get('@odata.id')
+                    if rf_key:
+                        ok,aa=self.Get(rf_key)
+                        if ok and isinstance(aa,dict):
+                            if aa.get('LinkStatus') == 'LinkUp':
+                                return MacV4(aa.get('MACAddress'))
+            printf('.',direct=True,log=self.log,log_level=1)
+            time.sleep(3)
+
+    def _Boot_BootSourceOverrideInfo(self):
+        #Get Bootorder information
+        #next: Next Boot
+        #mode: UEFI, Regacy
+        #enable: temporary boot order state
+        #help: bootable order information
+        #order: Settable Boot order in BIOS
+        naa={}
+        cmd='Systems/1'
+        ok,aa=self.Get(cmd)
+        if not ok or not isinstance(aa,dict):
+            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+            naa['error']=aa
+            return naa
+        naa['cmd']=cmd
+        boot_info=aa.get('Boot',{})
+        if boot_info:
+            naa['next']=boot_info.get('BootNext')
+            naa['mode']=boot_info.get('BootSourceOverrideMode')
+            naa['1']=boot_info.get('BootSourceOverrideTarget')
+            naa['enable']=boot_info.get('BootSourceOverrideEnabled')
+            naa['order']=[]
+            naa['help']={}
+            if 'BootSourceOverrideMode@Redfish.AllowableValues' in boot_info: naa['help']['mode']=boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues')
+            if 'BootSourceOverrideTarget@Redfish.AllowableValues' in boot_info: naa['help']['boot']=boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues')
+        return naa
+
+    def _Boot_BiosBootInfo(self,pxe_boot_mac=None,next_pxe_id=False,ipv='v4',http=False):
+        # Try to Special OEM BOOT ORDER first
         def SMC_OEM_SPECIAL_BOOTORDER(next_pxe_id=False):
             #if it has multiplue PXE bootable mac then try next pxe boot id when next_pxe_id=# (int number)
             #B13
             naa={}
-            ok,aa=self.Get('Systems/1/Oem/Supermicro/FixedBootOrder')
-            if not ok or not isinstance(aa,dict):
+            ok,fixed_boot_order_info=self.Get('Systems/1/Oem/Supermicro/FixedBootOrder')
+            if not ok or not isinstance(fixed_boot_order_info,dict):
                 return False
-            naa['mode']=aa.get('BootModeSelected')
+            naa['mode']=fixed_boot_order_info.get('BootModeSelected')
             pxe_boot_mac=[]
-            for i in aa.get('UEFINetwork'):
+            for i in fixed_boot_order_info.get('UEFINetwork'):
                 for x in Split(i):
                     a=MacV4(x)
                     if a and a not in pxe_boot_mac:
                         pxe_boot_mac.append(a)
-            naa['order']=aa.get('FixedBootOrder')
+            naa['order']=fixed_boot_order_info.get('FixedBootOrder')
             for i in range(0,len(naa['order'])):
                 if isinstance(next_pxe_id,int) and not isinstance(next_pxe_id,bool) and next_pxe_id >= i:
                     continue
-
                 for x in Split(naa['order'][i]):
                     a=MacV4(x)
                     if a and a in pxe_boot_mac:
@@ -355,386 +580,450 @@ class Redfish:
                         break
             return naa
 
-        def order_boot():
-            #Get Bootorder information
-            naa={}
-            ok,aa=self.Get('Systems/1')
-            if not ok or not isinstance(aa,dict):
-                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
-                naa['error']=aa
-                return naa
-            boot_info=aa.get('Boot',{})
-            if boot_info:
-                naa['mode']=boot_info.get('BootSourceOverrideMode')
-                naa['1']=boot_info.get('BootSourceOverrideTarget')
-                naa['enable']=boot_info.get('BootSourceOverrideEnabled')
-                naa['help']={}
-                if 'BootSourceOverrideMode@Redfish.AllowableValues' in boot_info: naa['help']['mode']=boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues')
-                if 'BootSourceOverrideTarget@Redfish.AllowableValues' in boot_info: naa['help']['boot']=boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues')
+        naa=SMC_OEM_SPECIAL_BOOTORDER(next_pxe_id=next_pxe_id)
+        if isinstance(naa,dict): return naa
+        #Get BIOS Boot order information
+        cmd='Systems/1/Bios'
+        naa={}
+        ok,bios_info=self.Get(cmd)
+        if not ok or not isinstance(bios_info,dict):
+            printf('Redfish ERROR: {}'.format(bios_info),log=self.log,log_level=1)
+            naa['error']=bios_info
             return naa
+        #CMD
+        if '@Redfish.Settings' in bios_info:
+             naa['cmd']=bios_info.get('@Redfish.Settings',{}).get('SettingsObject',{}).get('@odata.id')
+        else:
+            naa['cmd']=cmd
+        #PXE Boot Mac
+        if pxe_boot_mac in [None,'00:00:00:00:00:00']: pxe_boot_mac=self.BaseMac().get('lan')
+        naa['pxe_boot_mac']=MacV4(pxe_boot_mac)
+     
+        #Boot order
+        boot_attr=bios_info.get('Attributes',{})
+        if boot_attr:
+            #BootMode # X11, X12, (X13,H13, B13, B2??)
+            for ii in boot_attr:
+                if ii.lower().startswith('bootmodeselect'):
+                    naa['mode']=boot_attr.get(ii)
+                    naa['mode_name']=ii
+                    break
+                elif ii.startswith('BootSourceOverrideMode'):
+                    naa['mode']=boot_attr.get(ii)
+                    naa['mode_name']=ii
+                    break
 
-        def bios_boot(pxe_boot_mac=None,next_pxe_id=False):
-            # Try to Special OEM BOOT ORDER first
-            naa=SMC_OEM_SPECIAL_BOOTORDER(next_pxe_id=next_pxe_id)
-            if isinstance(naa,dict): return naa
-            #Get BIOS Boot order information
-            naa={}
-            ok,bios_info=self.Get('Systems/1/Bios')
-            if not ok or not isinstance(bios_info,dict):
-                printf('Redfish ERROR: {}'.format(bios_info),log=self.log,log_level=1)
-                naa['error']=bios_info
-                return naa
-            #PXE Boot Mac
-            if pxe_boot_mac is None: pxe_boot_mac=self.BaseMac().get('lan')
-            naa['pxe_boot_mac']=MacV4(pxe_boot_mac)
-            #Boot order
-            boot_attr=bios_info.get('Attributes',{})
-            if boot_attr:
-                mode=None
-                #Need update for H13, X13, B13, B2 information
-                if 'BootModeSelect' in boot_attr: #X12
-                    mode=boot_attr.get('BootModeSelect')
-                elif 'Bootmodeselect' in boot_attr: #X11
-                    mode=boot_attr.get('Bootmodeselect')
-                elif 'BootSourceOverrideMode' in boot_attr:
-                    mode=boot_attr.get('BootSourceOverrideMode')
-                if IsNone(mode): #X13
-                    #VideoOptionROM
-                    for ii in boot_attr:
-                        if ii.startswith('OnboardVideoOptionROM#'):
-                            naa['OnboardVideoOptionROM']=boot_attr[ii]
-                    #Boot order
-                    ok,aa=self.Get('Systems/1/BootOptions')
-                    if not ok:
-                        printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
-                        naa['error']=aa
-                        return naa
-                    if isinstance(aa,dict):
-                        memb=aa.get('Members',[{}])
-                        if len(memb) == 1:
-                            naa['mode']='Legacy'
-                            naa['order']=['']
-                            naa['pxe_boot_id']=None
+            #pxe boot protocol : http or https
+            for ii in boot_attr:
+                if ii.startswith('HTTPSBootChecksHostname'):
+                    if 'http' not in naa:  naa['http']={'ssl':False}
+                    naa['http']['key']=ii
+                    if boot_attr.get(ii) == 'Enabled': naa['http']['ssl']=True
+                    break
+            # X12,X13,H13,....
+            #VideoOptionROM
+            boot_id=0
+            if 'support' not in naa: naa['support']={}
+            for ii in boot_attr:
+                if ii.startswith('OnboardVideoOptionROM'):
+                    naa['OnboardVideoOptionROM']=boot_attr[ii]
+#                elif ii.startswith('AOC_'):
+#                    naa['mode']=boot_attr[ii]
+                elif ii.startswith('IPv4'): #Check Support PXE mode?
+                    #It applied at redfish when PXE Boot prompt
+                    #it is Advanced/Network Configuration/Network Stack
+                    if 'HTTP' in ii:
+                        if naa.get('http',{}).get('ssl',False):
+                            naa['support']['https']={'key':[ii],'ver':['v4'],'enabled':[True if boot_attr[ii] == 'Enabled' else False]}
                         else:
-                            naa['mode']='UEFI'
-                            naa['order']=[]
-                            for mem_id in memb:
-                                redirect=mem_id.get('@odata.id')
-                                if isinstance(redirect,str) and redirect:
-                                    ok,aa=self.Get(redirect)
-                                    if not ok:
-                                        printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
-                                        naa['error']=aa
-                                        return naa
-                                    if isinstance(aa,dict):
-                                        if 'UEFI Network Card' in aa.get('DisplayName','') or 'UEFI PXE IP' in aa.get('DisplayName',''):
-                                            naa['order'].append('UEFI PXE Network: UEFI')
-                                            a=FIND(aa.get('DisplayName')).Find("(MAC:\w+)")
-                                            if a:
-                                                mac=MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a)
-                                                if naa.get('pxe_boot_id') is None and mac == naa['pxe_boot_mac']:
-                                                    naa['pxe_boot_id']=len(naa['order'])-1
-                                                    break
-                                        else:
-                                            naa['order'].append(aa.get('DisplayName',''))
-                else: #X12
-                    #VideoOptionROM
-                    naa['OnboardVideoOptionROM']=bios_info.get('OnboardVideoOptionROM')
-                    naa['mode']=mode
-                    #Boot order
-                    naa['order']=[]
-                    bios_boot_info=list(boot_attr.items())
-                    for i in range(0,len(bios_boot_info)):
-                        if bios_boot_info[i][0].startswith('BootOption'):
-                            naa['order'].append(bios_boot_info[i][1])
-                            a=FIND(bios_boot_info[i][1]).Find("(MAC:\w+)")
-                            if a:
-                                mac=MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a)
-                                if naa.get('pxe_boot_id') is None and mac == naa['pxe_boot_mac']:
-                                    naa['pxe_boot_id']=len(naa['order'])-1
-                                    break
-            return naa
+                            naa['support']['http']={'key':[ii],'ver':['v4'],'enabled':[True if boot_attr[ii] == 'Enabled' else False]}
+                    else:
+                        naa['support']['pxe']={'key':[ii],'ver':['v4'],'enabled':[True if boot_attr[ii] == 'Enabled' else False]}
+                elif ii.startswith('IPv6'): #Check Support PXE mode?
+                    #It applied at redfish when PXE Boot prompt
+                    #it is Advanced/Network Configuration/Network Stack
+                    if 'HTTP' in ii:
+                        if naa.get('http',{}).get('ssl',False):
+                            if 'https' in naa['support']:
+                                naa['support']['https']['key'].append(ii)
+                                naa['support']['https']['ver'].append('v6')
+                                naa['support']['https']['enabled'].append(True if boot_attr[ii] == 'Enabled' else False)
+                            else:
+                                naa['support']['https']={'key':[ii],'ver':['v6'],'enabled':[True if boot_attr[ii] == 'Enabled' else False]}
+                        else:
+                            if 'http' in naa['support']:
+                                naa['support']['http']['key'].append(ii)
+                                naa['support']['http']['ver'].append('v6')
+                                naa['support']['http']['enabled'].append(True if boot_attr[ii] == 'Enabled' else False)
+                            else:
+                                naa['support']['http']={'key':[ii],'ver':['v6'],'enabled':[True if boot_attr[ii] == 'Enabled' else False]}
+                    else:
+                        if 'pxe' in naa['support']:
+                            naa['support']['pxe']['key'].append(ii)
+                            naa['support']['pxe']['ver'].append('v6')
+                            naa['support']['pxe']['enabled'].append(True if boot_attr[ii] == 'Enabled' else False)
+                        else:
+                            naa['support']['pxe']={'key':[ii],'ver':['v6'],'enabled':[True if boot_attr[ii] == 'Enabled' else False]}
+                elif ii.startswith('BootOption_'): # under X12 : boot order
+                    if 'order' not in naa: naa['order']=[]
+                    name=boot_attr[ii]
+                    bb={'name':name,'id':boot_id,'key':ii}
+                    bb['ip']='v6' if  'IPv6' in name else 'v4'
+                    if  'EFI' in name:
+                         bb['efi']=True
+                    if  'HTTP' in name:
+                         bb['http']=True
+                    if  'PXE' in name:
+                         bb['pxe']=True
+                         bb['dhcp']=True
+                         a=FIND(name).Find("(MAC:\w+)")
+                         if a:
+                             mac=MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a)
+                             bb['mac']=mac
+                             if naa.get('pxe_boot_id') is None and mac == naa['pxe_boot_mac'] and bb.get('http',False) == http and bb.get('ip') == ipv and len(bb.get('key','').split('_')) == 2:
+                                 naa['pxe_boot_id']=boot_id
+                                 if boot_id == 0: naa['type']='http' if bb.get('http') is True  else 'pxe'
+                    naa['order'].append(bb)
+                    boot_id+=1
+            if 'order' not in naa:
+                #Boot order
+                ok,aa=self.Get('Systems/1/BootOptions')
+                if ok and isinstance(aa,dict):
+                    membs=aa.get('Members',[{}])
+                    if len(membs) == 1:
+                        naa['mode']='Legacy'
+                        naa['order']=['']
+                        naa['pxe_boot_id']=None
+                    else:
+                        naa['mode']='UEFI'
+                        naa['order']=[]
+                        ix=0
+                        for mem_i in membs:
+                            redirect=mem_i.get('@odata.id')
+                            if isinstance(redirect,str) and redirect:
+                                ok,aa=self.Get(redirect)
+                                if not ok:
+                                    printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+                                    naa['error']=aa
+                                    return naa
+                                if isinstance(aa,dict):
+                                    if not aa.get('BootOptionEnabled',True): continue # enabled device or not.(old case, just support)
+                                    name=aa.get('DisplayName','')
+                                    bb={'name':name,'id':ix}
+                                    #if 'UEFI Network Card' in name:# or 'UEFI PXE IP' in name:
+                                    #    bb['efi']=True
+                                    #    bb['pxe']=True
+                                    #    bb['ip']='v4'
+                                    #    bb['dhcp']=True
+                                    #    a=FIND(name).Find("(MAC:\w+)")
+                                    #    if a:
+                                    #        mac=MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a)
+                                    #        bb['mac']=mac
+                                    #        if naa.get('pxe_boot_id') is None and mac == naa['pxe_boot_mac']:
+                                    #            naa['pxe_boot_id']=len(naa['order'])-1
+                                    #else:
+                                    if 'UEFI' in name:
+                                        bb['efi']=True
+                                    if 'PXE' in name:
+                                        bb['pxe']=True
+                                    elif 'HTTP' in name:
+                                        bb['http']=True
+                                    if 'UefiDevicePath' in aa:
+                                        for x in aa.get('UefiDevicePath').split('/'):
+                                            if 'MAC(' in x:
+                                                bb['mac']=MacV4(x.split(',')[0].split('(')[1])
+                                            elif 'IP' in x:
+                                                bb['ip']='v6' if 'IPv6' in x else 'v4'
+                                                bb['dhcp']=True if 'DHCP' in x else False
+                                    else:
+                                        bb['dhcp']=True
+                                        bb['ip']='v6' if 'IPv6' in name else 'v4'
+                                        a=FIND(name).Find("(MAC:\w+)")
+                                        if a:
+                                            mac=MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a)
+                                            bb['mac']=mac
+                                    naa['order'].append(bb)
+                                    if naa['pxe_boot_mac'] in [None,'00:00:00:00:00:00'] and ix == 0 and bb.get('mac','A') != 'A' and bb.get('dhcp') is True and bb.get('ip') == ipv and bb.get('dhcp',False) == dhcp:
+                                        naa['pxe_boot_id']=0
+                                        naa['pxe_boot_mac']=bb['mac']
+                                        naa['type']='http' if bb.get('http') is True  else 'pxe'
+                                    elif naa.get('pxe_boot_id') is None and bb.get('mac','A')==naa.get('pxe_boot_mac','B') and bb.get('dhcp') is True and bb.get('ip') == ipv and bb.get('dhcp',False) == dhcp:
+                                        naa['pxe_boot_id']=ix
+                                        naa['type']='http' if bb.get('http') is True  else 'pxe'
+                        ix+=1
+        return naa
 
-        def SetBootOrder(boot,mode='auto',keep='Once',pxe_boot_mac=None,force=False):
-            #Set Bootorder after turn off system
-            def CheckBootInfo(rf_boot_info,boot,mode,keep):
-                # Check current BIOS and Bootorder status is same as want value
-                boot_order_enable=rf_boot_info.get('order',{}).get('enable','')
-                # according to BIOS CFG Boot
-                if boot_order_enable == 'Disabled':
-                    if mode == rf_boot_info.get('bios',{}).get('mode','') or (mode=='Legacy' and rf_boot_info.get('bios',{}).get('mode','') == 'Dual') or (mode == 'UEFI' and rf_boot_info.get('bios',{}).get('mode','') == 'Dual'):
-                        bios_first_boot_order_string=Get(rf_boot_info.get('bios',{}).get('order',[]),0,default='')
-                        if mode=='UEFI':
-                            if (boot == 'Pxe' and 'UEFI PXE' in bios_first_boot_order_string) or (boot.upper() in bios_first_boot_order_string):
-                                printf('Redfish: Already Same condition(1) with {}, {}, {}'.format(mode,boot, keep),log=self.log,log_level=6)
-                                return True,'[redfish] Already Same condition(1) with {}, {}, {}'.format(mode,boot, keep)
-                        elif mode == 'Legacy':
-                            if (boot == 'Pxe' and 'Network:IBA' in bios_first_boot_order_string) or (boot.upper() in bios_first_boot_order_string):
-                                printf('Redfish: Already Same condition(2) with {}, {}, {}'.format(mode,boot, keep),log=self.log,log_level=6)
-                                return True,'[redfish] Already Same condition(2) with {}, {}, {}'.format(mode,boot, keep)
-                # according to Bootorder
-                elif boot_order_enable == 'Continuous':
-                    if rf_boot_info.get('order',{}).get('1','') == boot=='Pxe' and mode == rf_boot_info.get('order',{}).get('mode'):
-                        printf('Redfish: Already Same condition(3) with {}, {}, {}'.format(mode,boot, keep),log=self.log,log_level=6)
-                        return True,'[redfish] Already Same condition(3) with {}, {}, {}'.format(mode,boot,keep)
-                return None,None
+    def _Boot_NetworkBootOrder(self,pxe_boot_mac=None,http=False,ipv='v4'):
+        #Systems/1/BootOptions (Boot) : BootOrder: Network Boot option's ordering, Not Boot order
+        # Get Boot options and change it code
+        boot_orders=[]
+        ok,rt=self.Get('Systems/1/BootOptions')
+        pxe_boot_mac=MacV4(pxe_boot_mac)
+        if ok:
+             for x,i in enumerate(rt.get('Members',[])):
+                 ok,rrt=self.Get(i.get('@odata.id'))
+                 if ok:
+                     if rrt.get('BootOptionEnabled'):
+                         if (http and 'HTTP' in rrt.get('DisplayName')) or ('PXE' in rrt.get('DisplayName')):
+                             if 'IP{}'.format(ipv) in rrt.get('DisplayName'):
+                                 if pxe_boot_mac:
+                                     a=FIND(rrt.get('DisplayName')).Find("(MAC:\w+)")
+                                     if a:
+                                          if pxe_boot_mac == MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a):
+                                              if x == 0: return None  #Already set
+                                              boot_orders=[rrt.get('BootOptionReference')]+boot_orders
+                                              continue
+                                 else:
+                                     boot_orders=[rrt.get('BootOptionReference')]+boot_orders
+                                     continue
+                     boot_orders.append(rrt.get('BootOptionReference'))
+             if boot_orders:
+                 boot_db={'Boot':{'BootOrder':boot_orders}}
+                 return self.Post('Systems/1',json=boot_db,mode='patch')
+             printf('ERROR: Not found boot order information',log=self.log,log_level=1,mode='d')
+        return False
 
+    def _Boot_Name(self,boot):
+        ##  boot
+        if IsIn(boot,['pxe','ipxe','uefi','efi']):
+            return 'Pxe'
+        elif IsIn(boot,['cd']):
+            return 'Cd'
+        elif IsIn(boot,['usb']):
+            return 'Usb'
+        elif IsIn(boot,['hdd']):
+            return 'Hdd'
+        elif IsIn(boot,['floppy']):
+            return 'Floppy'
 
-            rf_boot_info={'order':order_boot(),'bios':bios_boot(pxe_boot_mac=pxe_boot_mac)}
+    def _Boot_Mode(self,mode):
+        #if IsIn(mode,['uefi','efi','ipxe']):
+        #    return 'UEFI'
+        if IsIn(mode,['legacy','dual']):
+            return 'Legacy'
+        return 'UEFI'
+
+    def _Boot_Keep(self,keep):
+        ## Keep
+        if IsIn(keep,[None,False,'disable','del','disabled']):
+            return 'Disabled'
+        elif IsIn(keep,['keep','continue','force','continuous','forever','permanente']):
+            return 'Continuous'
+        return 'Once'
+
+    def _Boot_SetBootOrder(self,boot,mode='auto',keep='Once'):
+        #Set Bootorder after turn off system
+        def _Check_(boot,mode,keep,pre=False):
+            # Check current BIOS and Bootorder status is same as want value
+            _o_=self._Boot_BootSourceOverrideInfo()
+            boot_order_enable=_o_.get('enable','')
+            if (pre is False and IsSame(keep,'Once') and boot_order_enable == 'Disabled') or (IsSame(self._Boot_Keep(keep),boot_order_enable) and boot_order_enable == 'Continuous'):
+                if _o_.get('1','') == self._Boot_Name(boot) and self._Boot_Mode(mode) == _o_.get('mode'):
+                    msg='Redfish: Set BootOrder condition with {}, {}, {}'.format(self._Boot_Mode(mode),self._Boot_Name(boot),self._Boot_Keep(keep))
+                    printf(msg,log=self.log,mode='d')
+                    return True,msg
+            return False,'Can not set bootsourceoverride'
+
+        ## Systems/1
+        # Change keep,mode,boot parameter to Redfish's parameter name
+        if IsIn(boot,['efi_shell','uefi_shell','shell']):
+            mode='UEFI'
+            boot='BiosSetup'
+            keep='Continuous'
+        else:
+            if IsIn(boot,['bios','setup','biossetup','set']):
+                mode='Legacy'
+                boot='BiosSetup'
+                keep='Once'
+            else:
+                mode=self._Boot_Mode(mode)
+                boot=self._Boot_Name(boot)
+                keep=self._Boot_Keep(keep)
+        boot_db={'Boot':{
+             'BootSourceOverrideEnabled':keep,
+             'BootSourceOverrideMode':mode,
+             'BootSourceOverrideTarget':boot
+             }
+        }
+        if _Check_(boot,mode,keep,pre=True)[0] is False:
+            if self.Post('Systems/1',json=boot_db,mode='patch') is True:
+                return _Check_(boot,mode,keep)
+        return None,'Redfish: ALready get same BootOrder condition'
+
+    def _Boot_SetHTTP(self,_b_,mode,https=False,retry=3):
+        setting_cmd=_b_.get('cmd',"Systems/1/Bios")
+        chk='https' if https else 'http'
+        boot_db={}
+        if mode != _b_.get('mode'):
+            if 'Attributes' not in boot_db: boot_db['Attributes']={}
+            boot_db['Attributes'][_b_.get('mode_name')]=mode
+        if chk not in _b_.get('support'):
+            if https:
+                if 'Attributes' not in boot_db: boot_db['Attributes']={}
+                boot_db['Attributes']['HTTPSBootChecksHostname']='Enabled'
+            else:
+                if 'Attributes' not in boot_db: boot_db['Attributes']={}
+                boot_db['Attributes']['HTTPSBootChecksHostname']='Disabled (WARNING: Security Risk!!)'
+        if boot_db.get('Attributes'):
+            for j in range(0,retry):
+                if self.Post(setting_cmd,json=boot_db,mode='patch') in [True,None]:
+                    _b_=BiosBootInfo()
+                    if chk in _b_.get('support'):
+                        return _b_ #Setup
+                printf('.',no_intro=True,log=self.log,log_level=1)
+                time.sleep(10)
+            return False # Not setup
+        else:
+            return _b_ #All Same
+
+    def _Boot_SetBiosBootOrder(self,boot='pxe',mode='UEFI',pxe_boot_mac=None,http=False,https=False,ipv='v4',retry=3,_b_=None):
+        pxe_boot_mac=MacV4(pxe_boot_mac)
+        if not isinstance(_b_,dict): _b_=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
+        if http: #HTTP stuff
+            _b_=self.SetHTTP(_b_,mode,https=https,retry=3)
+            if _b_ is False: return False,'Can not setup BootMODE or HTTP/HTTPS protocol'
+
+        net_boot=self._Boot_NetworkBootOrder(pxe_boot_mac=pxe_boot_mac,http=http,ipv=ipv)
+        if net_boot is False: #Error
+            printf('Network Boot(PXE) setting Error: Not found Network Boot Source',log=self.log,log_level=1)
+            return False,'Network Boot(PXE) setting Error: Not found Network Boot Source'
+        elif net_boot is True: # Set
+            _b_=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
+        #Exist
+
+        ## Systems/1/Bios
+        setting_cmd=_b_.get('cmd',"Systems/1/Bios")
+        boot_db={}
+        #Change BIOS Boot order (under X12)
+        if pxe_boot_mac:
+            if _b_.get('pxe_boot_id') == 0 and _b_.get('pxe_boot_mac') == pxe_boot_mac:
+                return True,'Already Same PXE Boot Condition({})'.format(pxe_boot_mac)
+        if _b_.get('pxe_boot_mac') and _b_.get('pxe_boot_id'):
+            if _b_.get('pxe_boot_mac') == pxe_boot_mac:
+                boot_db={'Attributes':{_b_.get('order')[0].get('key'):_b_.get('order')[_b_.get('pxe_boot_id')].get('name')}}
+            else:
+                for i in _b_.get('order'):
+                    if i.get('mac') == pxe_boot_mac and i.get('dhcp') is True and i.get('ip') == 'v4' and i.get('http',False) == http:
+                        boot_db={'Attributes':{_b_.get('order')[0].get('key'):i.get('name')}}
+                        break
+        mode=self._Boot_Mode(mode)
+        if mode != _b_.get('mode'):
+            #Change BootMode(BootModeSelect)
+            if 'Attributes' not in boot_db: boot_db['Attributes']={}
+            boot_db['Attributes'][_b_.get('mode_name')]=mode
+        if (http is None or http is True) and 'http' in _b_.get('support'):
+            #Change Support (http) (IPv4HTTPSupport)
+            if 'Attributes' not in boot_db: boot_db['Attributes']={}
+            http_info=_b_.get('support').get('http')
+            if 'v4' in http_info.get('ver',{}):
+                v4_id=http_info.get('ver').index('v4')
+                if http_info.get('enabled')[v4_id] is False:
+                    boot_db['Attributes'][http_info.get('key')[v4_id]]='Enabled'
+        if (http is None or http is False) and 'pxe' in _b_.get('support'):
+            #Change Support (PXE) (IPv4PXESupport)
+            if 'Attributes' not in boot_db: boot_db['Attributes']={}
+            pxe_info=_b_.get('support').get('pxe')
+            if 'v4' in pxe_info.get('ver',{}):
+                v4_id=pxe_info.get('ver').index('v4')
+                if pxe_info.get('enabled')[v4_id] is False:
+                    boot_db['Attributes'][pxe_info.get('key')[v4_id]]='Enabled'
+
+        if boot_db.get('Attributes'):
+            for j in range(0,retry):
+                if self.Post(setting_cmd,json=boot_db,mode='patch') in [True,None]:
+                    binfo=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
+                    if binfo.get('pxe_boot_id') == 0:
+                       return True,'Set {} Boot with {}'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE',binfo.get('pxe_boot_mac'))
+                printf('.',no_intro=True,log=self.log,log_level=1)
+                time.sleep(10)
+            return False,'Can not set {} Boot at BIOS'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE')
+        return None,'Not found any updating parameters'
+
+    def BootInfo(self,simple_mode=False,rf_boot_info=None):
+        if not isinstance(rf_boot_info,dict):
+            rf_boot_info={'order':self._Boot_BootSourceOverrideInfo(),'bios':self._Boot_BiosBootInfo(pxe_boot_mac=MacV4(pxe_boot_mac))}
             if not rf_boot_info['order'] and not rf_boot_info['bios']:
                 #Redfish issue
                 return False,'Redfish Issue'
-            # Change keep,mode,boot parameter to Redfish's parameter name
-            if IsIn(boot,['efi_shell','uefi_shell','shell']):
-                keep='Continuous'
-                mode='UEFI'
-                boot='BiosSetup'
-            else:
-                #New Setup    
-                ## Mode
-                if IsIn(boot,['ipxe','uefi','efi']) or IsIn(mode,['uefi','efi','ipxe']):
-                    boot='Pxe'
-                    mode='UEFI'
-                elif IsIn(mode,['legacy','dual']):
-                    mode='Legacy'
-                else: # auto then 
-                    mode=rf_boot_info.get('bios',{}).get('mode')
-                    if IsNone(mode) or IsIn(mode,['Dual']): mode='Legacy'
-
-                ## Keep
-                if IsIn(keep,[None,False,'disable','del','disabled']):
-                    keep='Disabled'
-                elif IsIn(keep,['keep','continue','force','continuous']):
-                    keep='Continuous'
-                else:
-                    keep='Once'
-
-                ##  boot
-                if IsIn(boot,['pxe']):
-                    boot='Pxe'
-                elif IsIn(boot,['cd']):
-                    boot='Cd'
-                elif IsIn(boot,['usb']):
-                    boot='Usb'
-                elif IsIn(boot,['hdd']):
-                    boot='Hdd'
-                elif IsIn(boot,['floppy']):
-                    boot='Floppy'
-                elif IsIn(boot,['bios','setup','biossetup']):
-                    mode='Legacy'
-                    boot='BiosSetup'
-                    keep='Once'
-                #########################################
-                #Check Already got same condition
-                if not force:
-                    ok,msg=CheckBootInfo(rf_boot_info,boot,mode,keep)
-                    if ok:
-                        return ok,msg
-
-            #Setup required power condition off for Redfish
-            pw=self.Power()
-            if pw != 'off':
-                for i in range(0,5):
-                    if self.Power(cmd='off',sensor_up=3):
-                        pw='off'
-                        break
-                    printf('.',log=self.log,direct=True,log_level=1)
-                    time.sleep(10)
-            if pw != 'off':
-                printf('.',no_intro=True,log=self.log,log_level=1,scr_dbg=False)
-                return False,'Power off fail in SetBiosBootmode()'
-            #Set bootorder mode
-            boot_db={'Boot':{
-                 'BootSourceOverrideEnabled':keep,
-                 'BootSourceOverrideMode':mode,
-                 'BootSourceOverrideTarget':boot
-                 }
-            }
-            rc=False
-            rc_msg='[redfish] Can not set to {},{},{}'.format(mode,boot, keep)
-            for i in range(0,3):
-                rc=self.Post('Systems/1',json=boot_db,mode='patch')
-                if rc:
-                
-                    for j in range(0,100):
-                        time.sleep(10)
-                        chk={'order':order_boot(),'bios':bios_boot(pxe_boot_mac=pxe_boot_mac)}
-                        ok,msg=CheckBootInfo(chk,boot,mode,keep)
-                        if ok:
-                            rc_msg='[redfish] Set to {},{},{}'.format(mode,boot, keep)
-                            rc=True
-                            break
-                        else:
-                            rc_msg='[redfish] Can not find {},{},{} config'.format(mode,boot, keep)
-                            rc=False
-                        time.sleep(5)
-                        printf('.',log=self.log,direct=True,log_level=1)
-                    break
-                else:
-                    #Try Power On and off for Redfish error
-                    self.Power(cmd='on',sensor_up=5)
-                    self.Power(cmd='off',sensor_up=5)
-                    time.sleep(5)
-                    printf('.',log=self.log,direct=True,log_level=1)
-            printf('.',no_intro=True,log=self.log,log_level=1)
-            printf('{}'.format(rc_msg),log=self.log,log_level=6)
-            return rc,rc_msg
-
-        if isinstance(mode,str) and isinstance(boot,str) and boot.lower() in ['efi_shell','uefi_shell','shell','pxe','ipxe','cd','usb','hdd','floppy','bios','setup','biossetup','efi','uefi','set']:
-            if set_bios_uefi and IsIn(boot,['uefi','efi','ipxe']) and IsIn(mode,['auto','uefi_bootmode','uefi','efi']):
-                ok,rm=self.SetBiosBootmode(mode='UEFI',force=force) # Set to UEFI Bootmode in BIOS CFG
-                if ok: # Set to UEFI Bootmode in BIOS CFG
-                    return True,'Set UEFI Mode with PXE Boot order in BIOS CFG'
-                if 'Not licensed to perform' in rm:
-                    return False,rm
-                return ok,rm
-            return SetBootOrder(boot,mode,keep,pxe_boot_mac,force)
-        else:
-            if IsIn(simple_mode,[True,'simple']):
-                bios_boot_info=bios_boot(pxe_boot_mac=pxe_boot_mac)
-                if 'error' in bios_boot_info: return bios_boot_info.get('error')
-                if bios_boot_info: return True,bios_boot_info.get('mode')
-            elif IsIn(simple_mode,['bios']):
-                #return True,bios_boot(pxe_boot_mac=pxe_boot_mac)
-                bbrc=bios_boot(pxe_boot_mac=pxe_boot_mac)
-                return True,bbrc
-            elif IsIn(simple_mode,['order']):
-                return True,order_boot()
-            elif IsIn(simple_mode,['flags']):
-                naa={'order':order_boot(),'bios':bios_boot(pxe_boot_mac=pxe_boot_mac)}
+        # Information
+        if IsIn(simple_mode,[True,'simple']):
+            bios_boot_info=rf_boot_info.get('bios')
+            if 'error' in bios_boot_info: return bios_boot_info.get('error')
+            if bios_boot_info: return True,bios_boot_info.get('mode')
+        elif IsIn(simple_mode,['bios']):
+            return True,rf_boot_info['bios']
+        #elif IsIn(simple_mode,['order','bootsourceoverride','override','temp','temporary']):
+        elif IsIn(simple_mode,['bootsourceoverride','override','temp','temporary']):
+            return True,rf_boot_info['order']
+        elif IsIn(simple_mode,['flags']):
+            return True,'''Boot Flags :
+   - BIOS {} boot
+   - BIOS PXE Boot order : {}
+   - Options apply to {}
+   - Boot Device Selector : {}
+   - Boot with {}
+'''.format(rf_boot_info.get('bios',{}).get('mode'),rf_boot_info.get('bios',{}).get('pxe_boot_id'),'all future boots' if rf_boot_info.get('order',{}).get('enable') == 'Continuous' else rf_boot_info.get('order',{}).get('enable'),rf_boot_info.get('order',{}).get('1'),rf_boot_info.get('order',{}).get('mode'))
+        else: #all
+            #if IsIn(boot,'order'):
+            if IsIn(simple_mode,['order']):
                 return True,'''Boot Flags :
    - BIOS {} boot
    - BIOS PXE Boot order : {}
    - Options apply to {}
    - Boot Device Selector : {}
    - Boot with {}
-'''.format(naa.get('bios',{}).get('mode'),naa.get('bios',{}).get('pxe_boot_id'),'all future boots' if naa.get('order',{}).get('enable') == 'Continuous' else naa.get('order',{}).get('enable'),naa.get('order',{}).get('1'),naa.get('order',{}).get('mode'))
-            else: #all
-                naa={'order':order_boot(),'bios':bios_boot(pxe_boot_mac=pxe_boot_mac)}
-                if isinstance(boot,str) and boot.lower() == 'order':
-                    return True,'''Boot Flags :
-   - BIOS {} boot
-   - BIOS PXE Boot order : {}
-   - Options apply to {}
-   - Boot Device Selector : {}
-   - Boot with {}
-'''.format(naa.get('bios',{}).get('mode'),naa.get('bios',{}).get('pxe_boot_id'),'all future boots' if naa.get('order',{}).get('enable') == 'Continuous' else naa.get('order',{}).get('enable'),naa.get('order',{}).get('1'),naa.get('order',{}).get('mode'))
-                return True,naa
+'''.format(rf_boot_info.get('bios',{}).get('mode'),rf_boot_info.get('bios',{}).get('pxe_boot_id'),'all future boots' if rf_boot_info.get('order',{}).get('enable') == 'Continuous' else rf_boot_info.get('order',{}).get('enable'),rf_boot_info.get('order',{}).get('1'),rf_boot_info.get('order',{}).get('mode'))
+            return True,rf_boot_info
 
-    def SetBiosBootmode(self,mode='UEFI',power='auto',power_timeout=300,monitor_timeout=600,force=False):
-        #Setup Bios Bootmode after turn off the system(Redfish)
-        #Setting BIOS Boot Mode : UEFI, Legacy, Dual
-        if mode not in ['UEFI','Legacy','Dual']: return False
-        ok,bios_boot_mode=self.Boot(simple_mode='bios')
-        if not ok:
-            return False,bios_boot_mode
-        if force is False and bios_boot_mode.get('mode') == mode and bios_boot_mode.get('pxe_boot_id') == 0:
-            return True,'[redfish] Already UEFI Mode with PXE Boot order in BIOS CFG'
-        ok,rc=self.Get("Systems/1/Bios")
-        if not ok:
-            printf('Redfish ERROR: {}'.format(rc),log=self.log,log_level=1)
-            return False,rc
-        if not isinstance(rc,dict): return False
-        setting_cmd=rc.get('@Redfish.Settings',{}).get('SettingsObject',{}).get('@odata.id')
-        if setting_cmd:
-            if 'BootModeSelect' in rc.get('Attributes',{}): #X12 & H12
-                boot_mode_name='BootModeSelect'
-            elif 'Bootmodeselect' in rc.get('Attributes',{}): #X11
-                boot_mode_name='Bootmodeselect'
-            else:
-                #Need update for H13, X13, B13, B2 information
-                #Not found Boot mode select name in BIOS
-                return False,'Unknown BIOS Bootmode'
-
-            #Setup required power condition off for Redfish
-            pw=self.Power()
-            if pw != 'off':
-                for i in range(0,5):
-                    if self.Power(cmd='off',sensor_up=3):
-                        pw='off'
-                        break
-                    printf('.',log=self.log,direct=True,log_level=1)
-                    time.sleep(10)
-            if pw != 'off':
-                printf('.',log=self.log,no_intro=True,log_level=1,scr_dbg=False)
-                return False,'Power off fail in SetBiosBootmode()'
-
-            aa={'Attributes': {boot_mode_name: mode}}
-            if self.Post(setting_cmd,json=aa,mode='patch'):
-                time.sleep(10)
-                tok,tbios_boot_mode=self.Boot(simple_mode='bios')
-                printf('.',log=self.log,no_intro=True,log_level=1,scr_dbg=False)
-                if tbios_boot_mode.get('mode') == mode and tbios_boot_mode.get('pxe_boot_id') == 0:
-                    return True,'[redfish] Set UEFI Mode with PXE Boot order in BIOS CFG'
-                return False,'[redfish] Can not set UEFI Bios Mode with PXE Boot order in BIOS CFG'
-            else:
-                printf('.',log=self.log,no_intro=True,log_level=1,scr_dbg=False)
-                return False,'[redfish] Can not set UEFI Bios Mode'
-        printf('.',log=self.log,no_intro=True,log_level=1,scr_dbg=False)
-        return False,'Unkown redfish power command'
-
-    def SystemReadySensor(self):
-        ok,aa=self.Get('Chassis/1/Thermal')
-        if not ok:
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
-            return False
-        if isinstance(aa,dict):
-            rc=False
-            for ii in aa.get('Temperatures',[]):
-                if ii.get('PhysicalContext') == 'CPU':
-                    rc=None
-                    try:
-                        return int(ii.get('ReadingCelsius'))
-                    except:
-                        pass
-            #If Redfish find CPU then return None(power down)
-            #If not found CPU then return to False(Error)
-            return rc
-        return False
-        
-    def IsUp(self,timeout=600,keep_up=0):
-        up_init=None
-        Time=TIME()
-        while True:
-            if Time.Out(timeout): break
-            stat=self.power_unknown_tag
-            cpu_temp=self.SystemReadySensor()
-            if cpu_temp is False: return False
-            if cpu_temp in ['up']:
-                if keep_up > 0:
-                    if up_init is None: up_init=TIME()
-                    if up_init.Out(keep_up): return True
-                    stat=self.power_on_tag
+    def Boot(self,boot=None,mode='UEFI',keep='once',simple_mode=False,pxe_boot_mac=None,force=False,set_bios_uefi=False,set_mode='auto',ipv='v4',http=False,https=False):
+        # set_mode: auto(default: set override fail then bios cfg), ['order','bootoverride','temp','simple','temporary']: set override, others: BIOS CFG, [info,None]: show information
+        # - info 
+        #    simple_mode: bios, simple, ['bootsourceoverride','override','temp','temporary'], order, flags, None(default)
+        # - common(BIOSCFG, Bootoverride): 
+        #    mode : UEFI(default),Dual,Regacy
+        #    boot : ['efi_shell','uefi_shell','shell','pxe','ipxe','cd','usb','hdd','floppy','bios','setup','biossetup','efi','uefi','set'], [None,unknown]: infomation
+        # - BIOS CFG
+        #    ipv  : IP Version: v4(default), v6
+        #    http : pxe boot protocol : False(default: pxe), True: http
+        #    https: http protocol : False(default: http), True: https
+        #    pxe_boot_mac: set pxe boot device same as the pxe_boot_mac when muti devices
+        # - Boot over ride 
+        #    keep: once(default), [keep,permanente,continue,force,...]: continue,  disable
+        #################################################
+        # Setting 
+        #Check
+        if pxe_boot_mac is None: pxe_boot_mac=self.pxe_boot_mac
+        rf_boot_info={'order':self._Boot_BootSourceOverrideInfo(),'bios':self._Boot_BiosBootInfo(pxe_boot_mac=MacV4(pxe_boot_mac))}
+        if not rf_boot_info['order'] and not rf_boot_info['bios']:
+            #Redfish issue
+            return False,'Redfish Issue'
+        if IsIn(boot,['efi_shell','uefi_shell','shell','pxe','ipxe','cd','usb','hdd','floppy','bios','setup','biossetup','efi','uefi','set','http','https']):
+            if IsIn(boot,['ipxe','efi','uefi']):
+                boot='pxe'
+                mode='UEFI'
+            elif IsIn(boot,['http']):
+                boot='pxe'
+                http=True
+                https=False
+                mode='UEFI'
+            elif IsIn(boot,['https']):
+                boot='pxe'
+                http=True
+                https=True
+                mode='UEFI'
+            #Temporary Boot order
+            if IsIn(set_mode,['auto','order','bootoverride','temp','simple','temporary']) or IsIn(boot,['efi_shell','uefi_shell','shell','cd','usb','hdd','floppy','bios','setup','biossetup','set']):
+                rt=self._Boot_SetBootOrder(boot,mode,keep=keep)
+                if IsIn(set_mode,['auto']):
+                    if rt[0]: return rt
+                    #If fail then set boot bios cfg
                 else:
-                    return True
-            else:
-                stat=self.power_off_tag
-            #StdOut(stat)
-            printf(stat,direct=True,log=self.log,log_level=1)
-            time.sleep(3)
-        return False
-
-    def IsDown(self,timeout=300,keep_down=0):
-        dn_init=None
-        Time=TIME()
-        while True:
-            if Time.Out(timeout): break
-            stat=self.power_unknown_tag
-            cpu_temp=self.SystemReadySensor()
-            if cpu_temp is False: return False
-            if cpu_temp in ['up']:
-                stat=self.power_on_tag
-            else:
-                if keep_down > 0:
-                    if dn_init is None: dn_init=TIME()
-                    if dn_init.Out(keep_down): return True
-                    stat=self.power_off_tag
-                else:
-                    return True
-            #StdOut(stat)
-            printf(stat,direct=True,log=self.log,log_level=1)
-            time.sleep(3)
-        return False
+                    return rt
+            #BIOS CFG Change
+            return self._Boot_SetBiosBootOrder(boot,mode,pxe_boot_mac,http,https,ipv,_b_=rf_boot_info['bios'])
+        else:
+        # Information
+            return self.BootInfo(simple_mode,rf_boot_info)
 
     def BmcVer(self):
         ok,aa=self.Get('UpdateService/FirmwareInventory/BMC')
@@ -847,30 +1136,6 @@ class Redfish:
                             naa[ai_id]['port'][port_q.get('Id')]['state']=port_q.get('LinkStatus')
         return naa
 
-    def PXEMAC(self):
-        #if it has multiplue PXE bootable mac then try next pxe boot id when next_pxe_id=# (int number)
-        #B13
-        ok,aa=self.Get('Systems/1/Oem/Supermicro/FixedBootOrder')
-        if ok and isinstance(aa,dict):
-            for i in aa.get('UEFINetwork'):
-                for x in Split(i):
-                    a=MacV4(x)
-                    return a
-        #Normal system case
-        ok,aa=self.Get('Systems/1')
-        if not ok or not isinstance(aa,dict):
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
-            return False
-        rf_key=aa.get('EthernetInterfaces',{}).get('@odata.id')
-        if rf_key:
-            ok,aa=self.Get(rf_key)
-            if ok and isinstance(aa,dict):
-                rf_key=aa.get('Members',[{}])[0].get('@odata.id')
-                if rf_key:
-                    ok,aa=self.Get(rf_key)
-                    if ok and isinstance(aa,dict):
-                        return MacV4(aa.get('MACAddress'))
-        
     def Memory(self):
         naa={}
         ok,aa=self.Get('Systems/1/Memory')
@@ -967,8 +1232,6 @@ class Redfish:
         }
         return self.Post('Systems/1/Bios/Actions/Bios.ChangePassword',json=passwd_db)
 
-    def FactoryDefaultBios(self):
-        return self.Post('Systems/1/Bios/Actions/Bios.ResetBios')
 
     def VirtualMedia(self,mode='floppy'):
         mode=mode.lower()
@@ -1030,7 +1293,7 @@ class Redfish:
                         webbrowser.open_new('https://{}/{}'.format(self.host,aa[1].get('URI')))
                         return True,'ok'
                 else:
-                    if not self.Post(rf_key,json={'Current interface':'HTML 5'},mode='patch'):
+                    if self.Post(rf_key,json={'Current interface':'HTML 5'},mode='patch') is False:
                         return False,'Can not set to HTML 5'
             else:
                 rf_key='/Managers/1/IKVM'
@@ -1042,22 +1305,41 @@ class Redfish:
         if aa[0]:
             for ii in aa[1].get('SerialConsole'):
                 if ii not in out: out[ii]={}
-                for jj in aa[1]['SerialConsole'][ii]:
-                    if jj in ['Port','ServiceEnabled']:
-                        out[ii][jj]=aa[1]['SerialConsole'][ii][jj]
+                if isinstance(aa[1]['SerialConsole'][ii],(dict,list)):
+                    for jj in aa[1]['SerialConsole'][ii]:
+                        if jj in ['Port','ServiceEnabled']:
+                            out[ii][jj]=aa[1]['SerialConsole'][ii][jj]
+                else:
+                    out[ii]=aa[1]['SerialConsole'][ii]
             gpc=aa[1].get('GraphicalConsole')
             if gpc:
                 out[gpc.get('ConnectTypesSupported')[0]]={'Port':gpc.get('Port'),'ServiceEnabled':gpc.get('ServiceEnabled')}
         return out
 
-    def McResetCold(self,keep_on=20):
+    def McResetCold(self,keep_on=30):
         rc=self.Post('/Managers/1/Actions/Manager.Reset')
-        if rc:
+        if rc is True:
              time.sleep(5)
              printf("""Wait until response from BMC""",log=self.log,log_level=1,dsp='d')
              return ping(self.host,keep_good=keep_on,timeout=self.timeout,cancel_func=self.cancel_func,log=self.log)
         return rc
 
+    def FactoryDefault(self,keep_on=30):
+        rc=self.Post('/Managers/1/Actions/Oem/SmcManagerConfig.Reset')
+        if rc is True:
+            time.sleep(5)
+            self.Power(cmd='on' if self.Power() == 'off' else 'reset' ,sensor_up=keep_on,sensor=True)
+        return rc
+
+    def LoadDefaultBios(self,keep_on=30): #Good
+        rc=self.Post('/Systems/1/Bios/Actions/Bios.ResetBios')
+        if rc is True:
+            time.sleep(5)
+            self.Power(cmd='on' if self.Power() == 'off' else 'reset' ,sensor_up=keep_on,sensor=True)
+        return rc
+
+    def FactoryDefaultBios(self):
+        return LoadDefaultBios()
 
 class kBmc:
     def __init__(self,*inps,**opts):
@@ -1143,7 +1425,7 @@ class kBmc:
 
     def CallRedfish(self,force=False,check=True,no_ipmitool=False,detail_log=False):
         if self.redfish or force:
-            if check:
+            if force or check:
                 # when it called from here and there. So too much logging
                 if detail_log: printf("Check IP Address",log=self.log,log_level=1,dsp='d')
                 ip=self.mac2ip(self.mac) if self.mac2ip and self.checked_ip is False and MacV4(self.mac) else '{}'.format(self.ip)
@@ -1167,44 +1449,53 @@ class kBmc:
                     ok=False
                     if not no_ipmitool:
                         ok,user,passwd=self.find_user_pass(ip,no_redfish=True)
-                    if ok:
-                        return Redfish(host=ip,user=user,passwd=passwd,log=self.log)
-                    else:
-                        test_user=MoveData(self.test_user[:],self.user,to='first')
-                        if not test_user: test_user=['ADMIN']
-                        test_passwd=self.test_passwd[:]
-                        test_passwd=MoveData(test_passwd,test_passwd[-1],to='first') # move last one
-                        if self.upasswd: test_passwd=MoveData(test_passwd,self.upasswd,to='first') # move uniq passwd
-                        if self.default_passwd : test_passwd=MoveData(test_passwd,self.default_passwd,to='first') # move default  passwd
-                        if self.org_passwd: test_passwd=MoveData(test_passwd,self.org_passwd,to='first') # move original passwd
-                        test_passwd=MoveData(test_passwd,self.passwd,to='first') # move current passwd
-                        printf("Search User and Password in Redfish",log=self.log,mode='d')
-                        for i_user in test_user:
-                            for i in range(0,len(test_passwd)):
-                                rf=Redfish(host=ip,user=i_user,passwd=test_passwd[i],log=self.log)
-                                aa=rf.Get('/Systems')
-                                if krc(aa,chk=True):
-                                    printf('.',no_intro=True,log=self.log)
-                                    printf("Found Redfish Login User&Password: {},{}".format(i_user,test_passwd[i]),log=self.log,log_level=1,mode='d')
-                                    return rf
-                                printf(".",direct=True,log=self.log)
-                                if i > 1 and i+1 % 2 == 0:
-                                    time.sleep(50)
-                                else:
-                                    time.sleep(1)
-                        printf("Can not find Redfish working user/password",log=self.log,log_level=1,dsp='w')
-                        self.error(_type='user_pass',msg="Can not find Redfish working User/password")
-                        return False
+                        if ok is False:
+                            printf("Can not find working user and password",log=self.log,log_level=1,dsp='e')
+                            return False
+                    rf=Redfish(bmc=self)
+                    if krc(rf.Get('/Systems'),chk=True):
+                        return rf
+                    printf("Maybe not support redfish on this system",log=self.log,log_level=1,dsp='d')
+                    return False
+                    #if ok:
+                    #    return Redfish(host=ip,user=user,passwd=passwd,log=self.log)
+                    #else:
+                    #    test_user=MoveData(self.test_user[:],self.user,to='first')
+                    #    if not test_user: test_user=['ADMIN']
+                    #    test_passwd=self.test_passwd[:]
+                    #    test_passwd=MoveData(test_passwd,test_passwd[-1],to='first') # move last one
+                    #    if self.upasswd: test_passwd=MoveData(test_passwd,self.upasswd,to='first') # move uniq passwd
+                    #    if self.default_passwd : test_passwd=MoveData(test_passwd,self.default_passwd,to='first') # move default  passwd
+                    #    if self.org_passwd: test_passwd=MoveData(test_passwd,self.org_passwd,to='first') # move original passwd
+                    #    test_passwd=MoveData(test_passwd,self.passwd,to='first') # move current passwd
+                    #    printf("Search User and Password in Redfish",log=self.log,mode='d')
+                    #    for i_user in test_user:
+                    #        for i in range(0,len(test_passwd)):
+                    #            rf=Redfish(host=ip,user=i_user,passwd=test_passwd[i],log=self.log)
+                    #            aa=rf.Get('/Systems')
+                    #            if krc(aa,chk=True):
+                    #                printf('.',no_intro=True,log=self.log)
+                    #                printf("Found Redfish Login User&Password: {},{}".format(i_user,test_passwd[i]),log=self.log,log_level=1,mode='d')
+                    #                return rf
+                    #            printf(".",direct=True,log=self.log)
+                    #            if i > 1 and i+1 % 2 == 0:
+                    #                time.sleep(50)
+                    #            else:
+                    #                time.sleep(1)
+                    #    printf("Can not find Redfish working user/password",log=self.log,log_level=1,dsp='w')
+                    #    self.error(_type='user_pass',msg="Can not find Redfish working User/password")
+                    #    return False
                 else:
                     printf("Can not ping to {}".format(ip),log=self.log,log_level=1,dsp='e')
                     self.error(_type='net',msg="Can not ping to {}".format(ip))
                     return False
             else:
-                return Redfish(host=self.ip,user=self.user,passwd=self.passwd,log=self.log)
-        printf(".",log=self.log,log_level=1,no_intro=True,scr_dbg=False)
+            #    return Redfish(host=self.ip,user=self.user,passwd=self.passwd,log=self.log)
+                return Redfish(bmc=self)
+        #Not support redfish
         return False
 
-    def SystemReadySensor(self,cmd_str,name):
+    def SystemReadyState(self,cmd_str,name):
         #ipmitool/smcipmitool's cpu temperature
         rrc=self.run_cmd(cmd_str)
         if krc(rrc,chk=True):
@@ -1243,7 +1534,7 @@ class kBmc:
         #Check Redfish again
         rf=self.CallRedfish()
         if rf:
-            cpu_temp=rf.SystemReadySensor()
+            cpu_temp=rf.SystemReadyState()
             if cpu_temp is False: return 'error'
             if isinstance(cpu_temp,int): return 'up'
             return 'down'
@@ -1274,11 +1565,11 @@ class kBmc:
                     aa=Split(rt[1][1])
                     if aa:
                         if IsIn(aa[-1],['on','off']):
-                            out[2]=aa
+                            out[2]=aa[-1]
                             break
         if sensor:
             for mm in self.cmd_module:
-                rt=self.SystemReadySensor(mm.cmd_str('ipmi sensor',passwd=self.passwd),mm.__name__)
+                rt=self.SystemReadyState(mm.cmd_str('ipmi sensor',passwd=self.passwd),mm.__name__)
                 out[0]='on' if rt == 'up' else 'off' if rt == 'down' else rt
                 break 
         return out,checked_redfish
@@ -1828,10 +2119,11 @@ class kBmc:
                                 if 'Chassis Power is' in rc[1]:
                                     chk_user_pass=True
                                 # IPMITOOL Failed then try with Redfish
-                                elif self.find_user_passwd_with_redfish and self.redfish: #Redfish will lock bmc user when many times failed login
-                                    rf=Redfish(host=ip,user=uu,passwd=pp)
-                                    if IsIn(rf.Power(cmd='status',silent_status_log=True),['on','off']):
-                                        chk_user_pass=True
+# Redfish case, few times fail then blocked the account
+#                                elif self.find_user_passwd_with_redfish and self.redfish: #Redfish will lock bmc user when many times failed login
+#                                    rf=Redfish(host=ip,user=uu,passwd=pp)
+#                                    if IsIn(rf.Power(cmd='status',silent_status_log=True),['on','off']):
+#                                        chk_user_pass=True
                             if chk_user_pass:
                                 #Found Password. 
                                 if self.user != uu: #If changed user
