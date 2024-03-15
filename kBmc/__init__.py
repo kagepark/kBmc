@@ -146,8 +146,12 @@ class Redfish:
             return "https://{}/redfish/v1/{}".format(host,cmd)
 
     def Get(self,cmd,host=None):
-        if not host: host=self.host
         if not isinstance(cmd,str): return False
+        if not host: host=self.host
+        if not ping(host,timeout=1800):
+            printf("ERROR: Can not access the ip({}) over 30min.".format(host),log=self.log)
+            return False,"ERROR: Can not access the ip({}) over 30min.".format(host)
+        err_msg='Redfish Request Error'
         for i in range(0,2):
             data = WEB().Request(self.Cmd(cmd,host=host),auth=(self.user, self.passwd))
             if data[0]:
@@ -159,6 +163,7 @@ class Redfish:
                             if self.bmc:
                                 if self.bmc.find_user_pass()[0] is True:
                                     continue
+                        err_msg=data[1].text
                         return False,data[1].text
                 try:
                     data_dic=json.loads(data[1].text)
@@ -174,21 +179,27 @@ class Redfish:
                             if self.bmc:
                                 if self.bmc.find_user_pass()[0] is True:
                                     continue
+                        err_msg=data[1].text
                         return False, err_msg
                 except:
                     if isinstance(data[1].text,str) and 'unauthorized' in data[1].text:
                         if self.bmc:
                             if self.bmc.find_user_pass()[0] is True:
                                 continue
-                    return False,data[1].text
-        return False,'Request Error'
+                    err_msg=data[1].text
+                    return False,err_msg
+        msg='Redfish Request : {}'.format(err_msg)
+        printf(msg,log=self.log,mode='d')
+        return False,msg
 
     def Post(self,cmd,host=None,json=None,data=None,files=None,mode='post',retry=3):
         if not host: host=self.host
         if not ping(host,timeout=1800):
             printf("ERROR: Can not access the ip({}) over 30min.".format(host),log=self.log)
             return False
-        if not isinstance(cmd,str): return False
+        if not isinstance(cmd,str):
+            printf("ERROR: Not support command({})".format(cmd),log=self.log)
+            return False
         url=self.Cmd(cmd,host=host)
         #patch then need the power on
         if mode == 'patch':
@@ -266,7 +277,7 @@ class Redfish:
         if thermal:
             ok,aa=self.Get('Chassis/1/Thermal')
             if not ok:
-                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
                 return False #Error
             if isinstance(aa,dict):
                 for ii in aa.get('Temperatures',[]):
@@ -278,7 +289,7 @@ class Redfish:
         else:
             ok,aa=self.Get('Systems/1')
             if not ok:
-                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
                 return False #Error
             if isinstance(aa,dict):
                 #The hardware initialization finish / ready state
@@ -297,7 +308,7 @@ class Redfish:
         #return : on/off/unknown
         ok,aa=self.Get('Systems/1')
         if not ok:
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
             return False
         current_power=self.onoff_state(Get(aa,'PowerState'))
         if current_power is None:
@@ -318,7 +329,7 @@ class Redfish:
             else:
                 mon=self.get_current_power_state()
             if mon is False:
-                break
+                return False
             elif mon in [None,'off','unknown']:
                 UTime.Reset()
                 if mon == 'unknown':
@@ -333,7 +344,7 @@ class Redfish:
                     return True
             printf(stat,direct=True,log=self.log,log_level=1)
             time.sleep(3)
-        return False
+        return None
 
     def IsDown(self,timeout=300,keep_down=0,sensor=False,sensor_temp=False):
         Time=TIME()
@@ -345,7 +356,7 @@ class Redfish:
             else:
                 mon=self.get_current_power_state()
             if mon is False:
-                break
+                return False
             elif mon in [None,'off']:
                 if keep_down > 0:
                     if DTime.Out(keep_down): return True
@@ -360,7 +371,7 @@ class Redfish:
                 DTime.Reset()
             printf(stat,direct=True,log=self.log,log_level=1)
             time.sleep(3)
-        return False
+        return None
 
     def Power(self,cmd='status',**opts):
         pxe=opts.get('pxe',False)
@@ -393,9 +404,11 @@ class Redfish:
         def _power_(cmd,retry=4,monitor_timeout=300):
             mt=TIME()
             mot=TIME()
+            ok=None
             for i in range(0,retry):
                 aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': rf_power_json_cmd(cmd)})
                 if aa is False: # Retry
+                    ok=False #error
                     printf('.',log=self.log,direct=True,log_level=1)
                     time.sleep(5)
                     continue
@@ -416,7 +429,7 @@ class Redfish:
                 while not mt.Out(monitor_timeout):
                     cps=self.get_current_power_state()
                     if cps == cmd_result(cmd):
-                        return aa
+                        return True
                     elif IsIn(cmd,['reset','cycle','reboot','restart','ForceRestart']) and cps == 'off':
                         #If reset command didn't power on after off then manually power on again
                         if mot.Out(60):
@@ -424,7 +437,7 @@ class Redfish:
                             mot.Reset()
                     printf('.',log=self.log,direct=True,log_level=1)
                     time.sleep(5)
-            return False
+            return ok
         current_power=self.get_current_power_state()
         if IsIn(cmd,['status','state']):
             return current_power
@@ -433,8 +446,9 @@ class Redfish:
             if not pxe and self.onoff_state(cmd) == current_power: return True
             #Do Power command
             if cmd == 'off_on': #special command
-                if not _power_('off'):
-                    return False
+                off_s=_power_('off')
+                if not off_s:
+                    return off_s # False:Error, None: fail command
                 cmd='on'
             #Set PXE Boot
             if pxe:
@@ -449,17 +463,19 @@ class Redfish:
             if rt:
                 if cmd_result(cmd) == 'on':
                     if up >0:
+                        #True: up, None: down, False: Error
                         return self.IsUp(timeout=timeout,keep_up=up,sensor=sensor,sensor_temp=sensor_temp)
                 else:
                     if down > 0:
+                        #True: down, None: up, False: Error
                         return self.IsDown(timeout=timeout,keep_down=down,sensor=sensor,sensor_temp=sensor_temp)
-            return rt
+            return rt # False:Error, None: fail command
         else:
             if cmd == 'ID_LED': #Get ID_LED status
                 ok,aa=self.Get('Chassis/1')
                 if not ok:
-                    printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
-                    return naa
+#                    printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+                    return False
                 if isinstance(aa,dict):
                     return aa.get('IndicatorLED')
             elif cmd == 'ID_ON':
@@ -519,7 +535,7 @@ class Redfish:
             #Normal system case
             ok,aa=self.Get('Systems/1')
             if not ok or not isinstance(aa,dict):
-                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
                 return False
             rf_key=aa.get('EthernetInterfaces',{}).get('@odata.id')
             if rf_key:
@@ -545,7 +561,7 @@ class Redfish:
         cmd='Systems/1'
         ok,aa=self.Get(cmd)
         if not ok or not isinstance(aa,dict):
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
             naa['error']=aa
             return naa
         naa['cmd']=cmd
@@ -578,7 +594,7 @@ class Redfish:
                     if a and a not in pxe_boot_mac:
                         pxe_boot_mac.append(a)
             naa['order']=fixed_boot_order_info.get('FixedBootOrder')
-            for i in range(0,len(naa['order'])):
+            for i in range(0,len(Iterable(naa['order']))):
                 if isinstance(next_pxe_id,int) and not isinstance(next_pxe_id,bool) and next_pxe_id >= i:
                     continue
                 for x in Split(naa['order'][i]):
@@ -596,7 +612,7 @@ class Redfish:
         naa={}
         ok,bios_info=self.Get(cmd)
         if not ok or not isinstance(bios_info,dict):
-            printf('Redfish ERROR: {}'.format(bios_info),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(bios_info),log=self.log,log_level=1,mode='d')
             naa['error']=bios_info
             return naa
         #CMD
@@ -712,7 +728,7 @@ class Redfish:
                             if isinstance(redirect,str) and redirect:
                                 ok,aa=self.Get(redirect)
                                 if not ok:
-                                    printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#                                    printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
                                     naa['error']=aa
                                     return naa
                                 if isinstance(aa,dict):
@@ -835,7 +851,7 @@ class Redfish:
                 return True,msg
         return False,'Can not set bootsourceoverride'
 
-    def _Boot_SetBootOrder(self,boot,mode='auto',keep='Once',_o_=None):
+    def _Boot_SetBootOrder(self,boot,mode='auto',keep='continue',_o_=None):
         ## Systems/1
         # Change keep,mode,boot parameter to Redfish's parameter name
         if IsIn(boot,['efi_shell','uefi_shell','shell']):
@@ -1057,24 +1073,24 @@ class Redfish:
     def BmcVer(self):
         ok,aa=self.Get('UpdateService/FirmwareInventory/BMC')
         if not ok:
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
             return None
         if isinstance(aa,dict): return aa.get('Version')
         ok,aa=self.Get('Managers/1')
         if not ok:
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
             return None
         if isinstance(aa,dict): return aa.get('FirmwareVersion')
 
     def BiosVer(self):
         ok,aa=self.Get('UpdateService/FirmwareInventory/BIOS')
         if not ok:
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
             return None
         if isinstance(aa,dict): return aa.get('Version')
         ok,aa=self.Get('Systems/1')
         if not ok:
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
             return None
         if isinstance(aa,dict): return aa.get('BiosVersion')
 
@@ -1101,7 +1117,7 @@ class Redfish:
         naa={}
         ok,aa=self.Get('Managers/1')
         if not ok:
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
             return naa
         if isinstance(aa,dict):
             naa['bmc']=MacV4(Get(Split(aa.get('UUID'),'-'),-1))
@@ -1109,7 +1125,7 @@ class Redfish:
         if not naa['lan']:
             ok,aa=self.Get('Systems/1')
             if not ok:
-                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
                 return naa
             if isinstance(aa,dict):
                 naa['lan']=MacV4(Get(Split(aa.get('UUID'),'-'),-1))
@@ -1131,13 +1147,13 @@ class Redfish:
         naa={}
         ok,aa=self.Get('Chassis/1/NetworkAdapters')
         if not ok:
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
             return naa
         if isinstance(aa,dict):
             for ii in Iterable(aa.get('Members',[])):
                 ok,ai=self.Get(ii.get('@odata.id'))
                 if not ok:
-                    printf('Redfish ERROR: {}'.format(ai),log=self.log,log_level=1)
+#                    printf('Redfish ERROR: {}'.format(ai),log=self.log,log_level=1,mode='d')
                     return naa
                 if isinstance(ai,dict):
                     ai_id=ai.get('Id')
@@ -1152,13 +1168,13 @@ class Redfish:
                     naa[ai_id]['port']={}
                     ok,port=self.Get(ai.get('NetworkPorts').get('@odata.id'))
                     if not ok:
-                        printf('Redfish ERROR: {}'.format(port),log=self.log,log_level=1)
+#                        printf('Redfish ERROR: {}'.format(port),log=self.log,log_level=1,mode='d')
                         return naa
                     if isinstance(port,dict):
                         for pp in Iterable(port.get('Members')):
                             ok,port_q=self.Get(pp.get('@odata.id'))
                             if not ok:
-                               printf('Redfish ERROR: {}'.format(port_q),log=self.log,log_level=1)
+#                               printf('Redfish ERROR: {}'.format(port_q),log=self.log,log_level=1,mode='d')
                                return naa
                             naa[ai_id]['port'][port_q.get('Id')]={}
                             naa[ai_id]['port'][port_q.get('Id')]['mac']=port_q.get('AssociatedNetworkAddresses')[0]
@@ -1169,13 +1185,13 @@ class Redfish:
         naa={}
         ok,aa=self.Get('Systems/1/Memory')
         if not ok:
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
             return naa
         if isinstance(aa,dict):
             for ii in Iterable(aa.get('Members',[])):
                 ok,ai=self.Get(ii.get('@odata.id'))
                 if not ok:
-                    printf('Redfish ERROR: {}'.format(ai),log=self.log,log_level=1)
+#                    printf('Redfish ERROR: {}'.format(ai),log=self.log,log_level=1,mode='d')
                     return naa
                 if isinstance(ai,dict):
                     idx=ai.get('Id')
@@ -1193,13 +1209,13 @@ class Redfish:
         naa={}
         ok,aa=self.Get('Systems/1/Processors')
         if not ok:
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
             return naa
         if isinstance(aa,dict):
             for ii in Iterable(aa.get('Members',[])):
                 ok,ai=self.Get(ii.get('@odata.id'))
                 if not ok:
-                    printf('Redfish ERROR: {}'.format(ai),log=self.log,log_level=1)
+#                    printf('Redfish ERROR: {}'.format(ai),log=self.log,log_level=1,mode='d')
                     return naa
                 if isinstance(ai,dict):
                     idx=ai.get('Id')
@@ -1224,14 +1240,14 @@ class Redfish:
         naa['cpu']=self.Cpu()
         ok,aa=self.Get('Managers/1')
         if not ok:
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
             return naa
         naa['mac']={}
         if isinstance(aa,dict):
             naa['mac']['bmc']=MacV4(Get(Split(aa.get('UUID'),'-'),-1))
         ok,aa=self.Get('Systems/1')
         if not ok:
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
             return naa
         if isinstance(aa,dict):
             naa['mac']['lan']=MacV4(Get(Split(aa.get('UUID'),'-'),-1))
@@ -1240,7 +1256,7 @@ class Redfish:
             naa['UUID']=aa.get('UUID')
         ok,aa=self.Get('Chassis/1')
         if not ok:
-            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
             return naa
         if isinstance(aa,dict):
             manufacturer=aa.get('Manufacturer')
@@ -1267,7 +1283,7 @@ class Redfish:
         info=[]
         ok,vv=self.Get('Managers/1/VirtualMedia')
         if not ok:
-            printf('Redfish ERROR: {}'.format(vv),log=self.log,log_level=1)
+#            printf('Redfish ERROR: {}'.format(vv),log=self.log,log_level=1,mode='d')
             return False
         if isinstance(vv,dict):
             for ii in Iterable(vv.get('Members',[])):
@@ -1281,7 +1297,7 @@ class Redfish:
                 if redfish_path:
                     ok,aa=self.Get(redfish_path)
                     if not ok:
-                        printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#                        printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
                         return False
                     if aa:
                         if aa.get('Inserted'):
@@ -1298,7 +1314,7 @@ class Redfish:
         while TIME().Int() - old < timeout:
             ok,aa=self.Get('Systems')
             if not ok:
-                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1)
+#                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
                 return False
             if not isinstance(aa,dict):
                 #StdOut('.')
@@ -1584,9 +1600,11 @@ class kBmc:
             rf=self.CallRedfish(check=False if checked_redfish else True)
             if rf:
                 checked_redfish=True
-                rt=rf.Power(cmd='status')
+                rt=rf.Power()
                 if IsIn(rt,['on','off']):
                     out[1]=rt
+                else:
+                    out[1]='error'
         if tools:
             for mm in Iterable(self.cmd_module):
                 rt=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
@@ -2696,12 +2714,13 @@ class kBmc:
             # Setup Boot order
             #######################
             rf=self.CallRedfish()
-            if rf:
+            if self.redfish and rf:
                 # Update new information
                 #ok,rf_boot=rf.Boot(boot='ipxe' if (ipxe and mode == 'pxe') or (mode == 'ipxe') else mode,mode='UEFI' if mode == 'ipxe' or (mode == 'pxe' and ipxe is True) else 'auto',keep='keep' if persistent else 'Once',force=force,set_bios_uefi=set_bios_uefi)
                 #printf("[RF] {2} Boot mode set to {0} at {1}".format('ipxe' if (ipxe and mode == 'pxe') or (mode == 'ipxe') else mode,ipmi_ip,'Persistently' if persistent else 'Temporarily'),log=self.log,log_level=7)
                 #rc=ok,(ok,'Persistently set to {}'.format('ipxe' if (ipxe and mode == 'pxe') or (mode == 'ipxe') else mode) if ok else rf_boot)
-                if rf.Power(cmd='on',sensor_up=10,sensor=True):
+                rfp=rf.Power(cmd='on',sensor_up=10,sensor=True)
+                if rfp is True:
                     if (ipxe is True and mode == 'pxe') or (IsIn(mode,['ipxe','uefi'])):
                         boot='pxe'
                         mode='UEFI'
@@ -2712,36 +2731,37 @@ class kBmc:
                     if krc(rc,chk=True):
                         return True,rc[1][1]
                     return rc
-                else:
+                elif rfp is None:
                     printf('Can not power on the server',log=self.log,log_level=6)
                     return False,'Can not power on the server'
-            else:
-                # Check Network
-                chk_err=self.error(_type='net')
-                if chk_err[0]: return False,chk_err[1]
-                if self.power('off',verify=True):
-                    if self.is_down(timeout=1200,interval=5,sensor_off_monitor=5,keep_off=5)[0]:
+                #Error then next
 
-                        if mode == 'pxe' and IsIn(ipxe,['on',True,'True']):
-                            # ipmitool -I lanplus -H 172.16.105.74 -U ADMIN -P 'ADMIN' raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00
-                            if persistent:
-                                ipmi_cmd='raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00'
-                            else:
-                                ipmi_cmd='chassis bootdev {0} options=efiboot'.format(mode)
-                            rc=self.run_cmd(mm.cmd_str(ipmi_cmd,passwd=self.passwd))
-                            printf("{1} Boot mode set to iPXE at {0}".format(ipmi_ip,'Persistently' if persistent else 'Temporarily'),log=self.log,log_level=7)
+            # Check Network
+            chk_err=self.error(_type='net')
+            if chk_err[0]: return False,chk_err[1]
+            if self.power('off',verify=True):
+                if self.is_down(timeout=1200,interval=5,sensor_off_monitor=5,keep_off=5)[0]:
+
+                    if mode == 'pxe' and IsIn(ipxe,['on',True,'True']):
+                        # ipmitool -I lanplus -H 172.16.105.74 -U ADMIN -P 'ADMIN' raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00
+                        if persistent:
+                            ipmi_cmd='raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00'
                         else:
-                            rc=self.run_cmd(mm.cmd_str('chassis bootdev {0}{1}'.format(mode,' options=persistent' if persistent else ''),passwd=self.passwd))
-                            printf("{2} Boot mode set to {0} at {1}".format(mode,ipmi_ip,'Persistently' if persistent else 'Temporarily'),log=self.log,log_level=7)
-                        if krc(rc,chk=True):
-                            return True,rc[1][1]
-                        return rc
+                            ipmi_cmd='chassis bootdev {0} options=efiboot'.format(mode)
+                        rc=self.run_cmd(mm.cmd_str(ipmi_cmd,passwd=self.passwd))
+                        printf("{1} Boot mode set to iPXE at {0}".format(ipmi_ip,'Persistently' if persistent else 'Temporarily'),log=self.log,log_level=7)
                     else:
-                        printf('The server still UP over 20min',log=self.log,log_level=6)
-                        return False,'The server still UP over 20min'
+                        rc=self.run_cmd(mm.cmd_str('chassis bootdev {0}{1}'.format(mode,' options=persistent' if persistent else ''),passwd=self.passwd))
+                        printf("{2} Boot mode set to {0} at {1}".format(mode,ipmi_ip,'Persistently' if persistent else 'Temporarily'),log=self.log,log_level=7)
+                    if krc(rc,chk=True):
+                        return True,rc[1][1]
+                    return rc
                 else:
-                    printf('Can not power off the server',log=self.log,log_level=6)
-                    return False,'Can not power off the server'
+                    printf('The server still UP over 20min',log=self.log,log_level=6)
+                    return False,'The server still UP over 20min'
+            else:
+                printf('Can not power off the server',log=self.log,log_level=6)
+                return False,'Can not power off the server'
 
         def smcipmitool_bootorder_setup(mm,mode,persistent,ipxe):
             # Check Network
@@ -2993,6 +3013,15 @@ class kBmc:
         keep_on=Pop(opts,'keep_up',Pop(opts,'keep_on',30))
         keep_off=Pop(opts,'keep_down',Pop(opts,'keep_off',0))
         opts['mode']=opts.get('mode','s')
+        rf=self.CallRedfish()
+        if self.redfish and rf:
+            rfp=rf.IsUp(timeout=Int(timeout,default=1200),keep_up=Int(keep_on,30),sensor=True if opts.get('mode','s') == 's' else False)
+            if rfp is True:
+                return True,'Node is UP' 
+            elif rfp is None:
+                return False,'Node is DOWN'
+            #Error then try next
+ 
         rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['on'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=0,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
         out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
         out_a=Split(out,'-')
@@ -3022,6 +3051,15 @@ class kBmc:
         keep_on=Pop(opts,'keep_up',Pop(opts,'keep_on',0))
         keep_off=Pop(opts,'keep_down',Pop(opts,'keep_off',20))
         opts['mode']=opts.get('mode','s')
+        rf=self.CallRedfish()
+        if self.redfish and rf:
+            rfp=rf.IsDown(timeout=Int(timeout,default=1200),keep_down=Int(keep_off,20),sensor=True if opts.get('mode','s') == 's' else False)
+            if rfp is True:
+                return True,'Node is DOWN' 
+            elif rfp is None:
+                return False,'Node is UP'
+            #Error then try next
+
         rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['off'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=0,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
         out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
         out_a=Split(out,'-')
@@ -3049,18 +3087,17 @@ class kBmc:
         pre_keep_up=Int(pre_keep_up,default=0)
         post_keep_up=Int(post_keep_up,default=20)
         post_keep_down=Int(post_keep_down,default=0)
+        rf=self.CallRedfish()
         if cancel_func is None: cancel_func=self.cancel_func
         if cmd == 'status':
+            if self.redfish and rf:
+                rfp=rf.Power('status')
+                if IsIn(rfp,['on','off']): return rfp
             aa=self.do_power('status',verify=verify)
             if krc(aa[0],chk='error'):
                 return 'error'
             elif aa[0]:
                 return aa[1]
-            elif self.redfish:
-                rf=self.CallRedfish()
-                if rf:
-                    rfp=rf.Power('status')
-                    if IsIn(rfp,['on','off']): return rfp
             return aa[1]
         if boot_mode:
             if boot_mode == 'ipxe' or ipxe:
@@ -3093,6 +3130,8 @@ class kBmc:
         kfdt=TIME().Int() # keep fail down time
         kfut=TIME().Int() # keep fail up time
         total_time=TIME().Int() # total time
+        rf=self.CallRedfish()
+
         def lanmode_check(mode):
             # BMC Lan mode Checkup
             cur_lan_mode=self.lanmode()
@@ -3118,31 +3157,41 @@ class kBmc:
             retry=int(retry)+2
             checked_lanmode=None
             if verify or cmd == 'status':
-                init_rc=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
+                if self.redfish and rf:
+                    rfp=rf.Power('status')
+                    ok=True
+                    err=None
+                if not IsIn(rfp,['on','off']):
+                    init_rc=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
+                    rfp=init_rc[1][1]
+                    ok=init_rc[0]
+                    err=init_rc[-1]
                 #ERROR
-                if krc(init_rc,chk='error'):
+                if krc(ok,chk='error'):
                     printf('Power status got some error',log=self.log,log_level=3)
-                    printf(' - reason : {}'.format(init_rc[-1]),log=self.log,no_intro=True,mode='d')
+                    printf(' - reason : {}'.format(err),log=self.log,no_intro=True,mode='d')
                     if error:
-                        self.error(_type='power',msg=init_rc[-1])
-                    return init_rc[0],init_rc[1] # error the nstop
+                        self.error(_type='power',msg=err)
+                    #return init_rc[0],init_rc[1] # error the nstop
+                    return ok,rfp
                 #Fail
-                elif init_rc[0] is False:
-                    if init_rc[-1] == 'canceling':
+                elif ok is False:
+                    if err == 'canceling':
                         printf(' Canceling',no_intro=True,log=self.log,log_level=1)
                         return True,'canceling' #cancel
                     else:
                         printf('Power status got some error',slog=self.log,log_level=3)
-                        printf(' - reason : {}'.format(init_rc[-1]),slog=self.log,no_intro=True,mode='d')
-                        self.warn(_type='power',msg="Power status got some error ({})".format(init_rc[-1]))
+                        printf(' - reason : {}'.format(err),slog=self.log,no_intro=True,mode='d')
+                        self.warn(_type='power',msg="Power status got some error ({})".format(err))
                         time.sleep(3) 
                         continue #Trye with next command
                 #True condition
                 if cmd == 'status':
                     # No need new line
-                    return True,init_rc[1][1]
+                    return True,rfp
                 #Get Initial status
-                init_status=Get(Get(Get(init_rc,1,default=[]),1,default='').split(),-1)
+                #init_status=Get(Get(Get(init_rc,1,default=[]),1,default='').split(),-1)
+                init_status=Get(rfp.split(),-1)
                 if init_status == 'off' and cmd in ['reset','cycle']:
                     cmd='on'
                 # Check Pre-Keep up time
@@ -3161,7 +3210,8 @@ class kBmc:
                 verify_status_a=Split(do_power_mode[rr],' ')
                 verify_status=verify_status_a[-1]
                 if verify:
-                    if chk == 0 and init_rc[0] and init_status == verify_status:
+                    #if chk == 0 and init_rc[0] and init_status == verify_status:
+                    if chk == 0 and ok and init_status == verify_status:
                         printf('* Already power {}'.format(verify_status),no_intro=True,log=self.log,log_level=1)
                         if chk == verify_num: #Single command then return
                             return True,verify_status
@@ -3178,20 +3228,28 @@ class kBmc:
                              printf('!! Node state is off. So try power ON instead {}'.format(verify_status),log=self.log,log_level=1)
                              verify_status='on'
                 printf('* Turn power {}{} '.format(verify_status,'({})'.format(fail_down) if fail_down > 0 else ''),no_start_newline=True,end_newline=False,log=self.log,log_level=3,scr_dbg=False)
-                rc=self.run_cmd(mm.cmd_str(do_power_mode[rr],passwd=self.passwd),retry=2)
-                if krc(rc,chk='error'):
+                ok=False
+                if self.redfish and rf:
+                    ok=rf.Power(verify_status,keep_up=0,keep_down=0,retry=2,timeout=60)
+                    err_msg=''
+                    rc_msg=verify_status
+                if ok is False:
+                    rc=self.run_cmd(mm.cmd_str(do_power_mode[rr],passwd=self.passwd),retry=2)
+                    ok=Get(rc,0)
                     err_msg=Get(Get(rc,1),2,default=Get(Get(rc,1),1))
+                    rc_msg=Get(Get(rc,1),1)
+                if krc(ok,chk='error'):
                     printf(' ! power {} error\n{}'.format(verify_status,err_msg),log=self.log,log_level=3)
                     if error:
                         self.error(_type='power',msg=err_msg)
-                    return Get(rc,0),err_msg
-                if krc(rc,chk=True):
+                    return ok,err_msg
+                if krc(ok,chk=True):
                     if verify_status in ['reset','cycle']:
                         verify_status='on'
                         if verify:
                             time.sleep(10)
                 else:
-                    printf(' ! power {} fail\n{}'.format(verify_status,rc[1][2]),log=self.log,log_level=3)
+                    printf(' ! power {} fail\n{}'.format(verify_status,err_msg),log=self.log,log_level=3)
                     self.warn(_type='power',msg="power {} fail".format(verify_status))
                     time.sleep(5)
                     break # try next command
@@ -3293,24 +3351,32 @@ class kBmc:
                     if cmd == 'off_on':
                         if verify_status in ['off','down']:
                             for i in range(0,60):
-                                i_rc=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
-                                i_rc_msg=Get(Get(i_rc,1),1)
-                                i_rc_msg_a=Split(i_rc_msg)
-                                if i_rc_msg_a: 
-                                    if krc(i_rc,chk=True):
-                                        if i_rc_msg_a[-1] == 'off':
-                                            printf( self.power_off_tag ,no_intro=True,log=self.log,log_level=1)
-                                            chkd=True
-                                            rr+=1
-                                            chk+=1
-                                            break
+                                i_rc=False
+                                i_rc_msg_a=[]
+                                if self.redfish and rf:
+                                    rfp=rf.Power('status')
+                                    if IsIn(rfp,['on','off']):
+                                       i_rc=True
+                                       i_rc_msg_a=rfp.split()
+                                if i_rc is False:
+                                    i_rc=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
+                                    i_rc_msg=Get(Get(i_rc,1),1)
+                                    i_rc_msg_a=Split(i_rc_msg)
+                                if krc(i_rc,chk=True) and i_rc_msg_a: 
+                                    if i_rc_msg_a[-1] == 'off':
+                                        printf( self.power_off_tag ,no_intro=True,log=self.log,log_level=1)
+                                        chkd=True
+                                        rr+=1
+                                        chk+=1
+                                        break
                                     printf(self.power_on_tag if i_rc_msg_a[-1] == 'on' else self.power_off_tag ,direct=True,log=self.log,log_level=1)
                                 else:
                                     printf(self.power_unknown_tag,direct=True,log=self.log,log_level=1)
                                 time.sleep(2)
                             continue
                     printf(self.power_on_tag if verify_status== 'on' else self.power_off_tag ,no_intro=True,log=self.log,log_level=1)
-                    return True,Get(Get(rc,1),1)
+                    #return True,Get(Get(rc,1),1)
+                    return True,rc_msg
             #can not verify then try with next command
             time.sleep(3)
         if chkd:
