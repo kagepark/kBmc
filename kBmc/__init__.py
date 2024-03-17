@@ -212,12 +212,12 @@ class Redfish:
         printf('Post:\n - url:{}\n - mode:{}\n - data:{}\n - json:{}\n - file:{}'.format(url,mode,data,json,files),log=self.log,mode='d')
         for i in range(0,retry):
             data = WEB().Request(url,auth=(self.user, self.passwd),mode=mode,json=json,data=data,files=files)
+            printf(' - code:{}\n - msg:{}'.format(data[1].status_code,data[1].text),no_intro=None,log=self.log,mode='d')
             #Password Error then....
             if isinstance(data[1].text,str) and 'unauthorized' in data[1].text:
                 if self.bmc:
                     if self.bmc.find_user_pass()[0] is True:
                         continue
-            printf(' - code:{}\n - msg:{}'.format(data[1].status_code,data[1].text),no_intro=True,log=self.log,mode='d')
             if data[0]:
                 try:
                     tmp=FormData(data[1].text)
@@ -236,7 +236,8 @@ class Redfish:
                             #Retry
                             # This error message required reset the power to flushing the redfish's garbage configuration
                             self.Power('reset',up=30,sensor=True)
-                            printf('.',end='',log=self.log)
+                            #printf('.',end='',log=self.log)
+                            printf('.',direct=True,log=self.log)
                             continue
                 if data[1].status_code == 200: #OK
                     if mode == 'patch': # if patch command then reset the power to apply
@@ -898,7 +899,8 @@ class Redfish:
                     _b_=BiosBootInfo()
                     if chk in _b_.get('support'):
                         return _b_ #Setup
-                printf('.',no_intro=True,log=self.log,log_level=1)
+                #printf('.',no_intro=True,log=self.log,log_level=1)
+                printf('.',direct=True,log=self.log,log_level=1)
                 time.sleep(10)
             return False # Not setup
         else:
@@ -975,7 +977,8 @@ class Redfish:
 #                    binfo=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
 #                    if binfo.get('pxe_boot_id') == 0:
                        return True,'Set {} Boot with {}'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE',pxe_boot_mac)
-                printf('.',no_intro=True,log=self.log,log_level=1)
+                #printf('.',no_intro=True,log=self.log,log_level=1)
+                #printf('.',no_intro=True,log=self.log,log_level=1)
                 time.sleep(10)
             return False,'Can not set {} Boot at BIOS'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE')
         return None,'Not found any updating parameters'
@@ -1656,7 +1659,7 @@ class kBmc:
         #### define local varible
         # count : how many loop
         # printed : fix printing 
-        def is_on_off(data,mode='a',sensor_time=None,sensor_off_time=420):
+        def is_on_off(data,mode='a',sensor_time=None,sensor_off_time=420,before=None):
             #<sensor>,<redfish>,<ipmi/tool>
             # data: [Sensor data(ipmitool/smcipmitool), Redfish data, ipmitool/smcipmitool data)]
             if data[0] == data[1] and data[1] == data[2]: # All same data then return without any condition
@@ -1664,9 +1667,9 @@ class kBmc:
                 return data[0],0
             if mode == 's':
                 if not sensor_time: sensor_time=TIME().Int()
-                if data[1] == data[2] and data[1] == 'off':
+                if data[1] == 'off' and (data[1] == data[2] or data[0] == data[1]):
                     return 'off',sensor_time
-                elif data[0] == 'off':
+                elif data[0] == 'off' or data[1] == 'off':
                     # over 7min(420) then use redfish and ipmitool command result
                     if isinstance(sensor_time,int) and sensor_time:
                         if TIME().Int()-sensor_time > sensor_off_time:
@@ -1679,10 +1682,13 @@ class kBmc:
                                 elif data[2] == 'unknown' and data[1] in ['on','off']:
                                     return data[1],sensor_time
                         else:
-                            if data[1] == data[2] and data[1] =='on': #booting
+                            #if data[1] == data[2] and data[1] =='on': #booting
+                            if data[2] =='on': #booting
+                                if IsIn(before,['on']): # reset command/suddenly changed state then got off state
+                                    return 'off',sensor_time
                                 return 'up',sensor_time
                     return 'off',sensor_time
-                elif data[0] == 'on':
+                elif data[0] == 'on' or data[1] == 'on':
                     return 'on',sensor_time
             elif mode == 'a':
                 if 'on' in data[1:]: return 'on',0 # anyone on then on 
@@ -1743,6 +1749,7 @@ class kBmc:
         data['remain_time']=data.get('timeout')
         is_on_off_time=None
         Time=TIME()
+        before=None
         ss=''
         while True:
             data['count']+=1
@@ -1794,7 +1801,7 @@ class kBmc:
             ############################################
             ## monitoring current condition (convert to defined mode(on/off/unknown) only)
             curr_power_status,checked_redfish=get_current_power_status(checked_redfish=checked_redfish)
-            on_off,is_on_off_time=is_on_off(curr_power_status,mode=data['mode'],sensor_time=is_on_off_time,sensor_off_time=data['sensor_off_time'])
+            on_off,is_on_off_time=is_on_off(curr_power_status,mode=data['mode'],sensor_time=is_on_off_time,sensor_off_time=data['sensor_off_time'],before=monitoring_state)
             if on_off not in data['monitored_status']: data['monitored_status'][on_off]=[]
             if monitoring_state == on_off: #same condition : update time
                 data['monitored_status'][on_off][-1]['keep_time']=TIME().Int()
@@ -1930,7 +1937,7 @@ class kBmc:
             #self.bgpm['start']=start
             # Block duplicated running
             if self.bgpm.get('worker') and self.bgpm['worker'].isAlive():
-                print('Already running')
+                printf('Already running',log=self.log)
                 return self.bgpm
             # if new monitoring then initialize data
             self.bgpm={'status':{},'repeat':0,'stop':False,'count':0,'start':start,'timeout':timeout,'cancel_func':self.cancel_func}
@@ -2382,7 +2389,7 @@ class kBmc:
                     printf('''** Do CMD   : %s
  - Path         : %s
  - Timeout      : %-15s  - Progress : %s
- - Check_RC     : %s'''%(cmd_str,path,timeout,progress,return_code),log=self.log,log_level=1,dsp='d' if dbg else 's')
+ - Check_RC     : %s'''%(cmd_str,path,timeout,progress,return_code),log=self.log,log_level=1,dsp='s' if show_str or not dbg else 'd')
                 if self.cancel(cancel_func=cancel_func):
                     printf(' !! Canceling Job',start_newline=True,log=self.log,log_level=1,dsp='d')
                     self.warn(_type='cancel',msg="Canceling")
@@ -2405,14 +2412,14 @@ class kBmc:
                     self.warn(_type='cmd',msg="Your command({}) got error\n{}".format(cmd_str,e))
                     return 'error',(-1,'Your command({}) got error\n{}'.format(cmd_str,e),'unknown',0,0,cmd_str,path),'Your command got error'
 
-                printf(' - CMD : {}\n - RT_CODE : {}\n - Output  : {}'.format(cmd_str,Get(rc,0),Get(rc,1)),log=self.log,log_level=1, mode='s' if show_str else 'i' if Get(rc,0) == 0 else 'd')
+                rc_0=Int(Get(rc,0))
+                printf(' - RT_CODE : {}\n - Spend   : {}\n - Output  : {}'.format(rc_0,Human_Unit(Int(Get(rc,4),0)-Int(Get(rc,3),0),unit='S'),Get(rc,1)),log=self.log,log_level=1, mode='s' if show_str else 'i' if Get(rc,0) == 0 else 'd',no_intro=None)
 
-                rc_0=Get(rc,0)
                 if 'Function access denied' in Get(rc,1):
                     return False,rc,'Locked BMC'
                 elif rc_0 == 1:
                     return False,rc,'Command file not found'
-                elif (not rc_ok and rc_0 == 0) or IsIn(rc_0,rc_ok):
+                elif rc_0 == 0 or IsIn(rc_0,rc_ok):
                     return True,rc,'ok'
                 elif IsIn(rc_0,rc_err_bmc_redfish): # retry after reset the BMC
                     if not self.McResetCold():
@@ -2500,6 +2507,9 @@ class kBmc:
                                 return 'error',rc,'return code({}) is in User/Password issue condition({})'.format(rc[0],rc_err_bmc_user)
                             elif isinstance(rc,tuple) and rc_0 > 0:
                                 return False,rc,'Not defined return-condition, So it will be fail'
+                            else:
+                                #fieltered all of issue, So return done
+                                return False,rc,'unknown issue'
                         except:
                             return 'unknown',rc,'Unknown result'
         if rc is None:
@@ -3212,7 +3222,7 @@ class kBmc:
                 if verify:
                     #if chk == 0 and init_rc[0] and init_status == verify_status:
                     if chk == 0 and ok and init_status == verify_status:
-                        printf('* Already power {}'.format(verify_status),no_intro=True,log=self.log,log_level=1)
+                        printf('* Already power {}'.format(verify_status),no_intro=None,log=self.log,log_level=1)
                         if chk == verify_num: #Single command then return
                             return True,verify_status
                         #Check next command
@@ -3227,7 +3237,7 @@ class kBmc:
                          if init_status == 'off':
                              printf('!! Node state is off. So try power ON instead {}'.format(verify_status),log=self.log,log_level=1)
                              verify_status='on'
-                printf('* Turn power {}{} '.format(verify_status,'({})'.format(fail_down) if fail_down > 0 else ''),no_start_newline=True,end_newline=False,log=self.log,log_level=3,scr_dbg=False)
+                printf('* Turn power {}{} '.format(verify_status,'({})'.format(fail_down) if fail_down > 0 else ''),start_newline='auto',end='',log=self.log,log_level=3,scr_dbg=False)
                 ok=False
                 if self.redfish and rf:
                     ok=rf.Power(verify_status,keep_up=0,keep_down=0,retry=2,timeout=60)
