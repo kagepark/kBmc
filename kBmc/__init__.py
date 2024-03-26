@@ -3167,6 +3167,7 @@ class kBmc:
             retry=int(retry)+2
             checked_lanmode=None
             if verify or cmd == 'status':
+                rfp=None
                 if self.redfish and rf:
                     rfp=rf.Power('status')
                     ok=True
