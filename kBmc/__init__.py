@@ -1,6 +1,7 @@
 # Kage Park
 # Inteligent BMC Tool
 # Version 2
+
 import re
 import os
 import sys
@@ -2848,9 +2849,15 @@ class kBmc:
                                 persistent=True
                         else:
                             efi=True if rf_boot_info.get('bios',{}).get('mode','') == 'UEFI' else False
-                            if 'Network:' in Get(rf_boot_info.get('bios',{}).get('order',[]),0,default={}).get('name'):
-                                status='pxe'
-                                persistent=True
+                            order_info=Get(rf_boot_info.get('bios',{}).get('order',[]),0,default={})
+                            if isinstance(order_info,dict):
+                                if 'Network:' in order_info.get('name'):
+                                    status='pxe'
+                                    persistent=True
+                            elif isinstance(order_info,str):
+                                if 'Network:' in order_info:
+                                    status='pxe'
+                                    persistent=True
                     else: # Follow instant overwriten Boot-Order
                         efi=True if rf_boot_info.get('order',{}).get('mode','') == 'UEFI' else False
                         status=rf_boot_info.get('order',{}).get('1','').lower()
