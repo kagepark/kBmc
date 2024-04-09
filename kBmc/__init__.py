@@ -2109,8 +2109,13 @@ class kBmc:
         if cancel_func is None: cancel_func=self.cancel_func
         if ip is None: ip=self.ip
         if not IpV4(ip): return False,None,None
-        test_user=MoveData(self.test_user[:],self.user,to='first')
-        if not test_user: test_user=['ADMIN']
+        test_user=None
+        if self.test_user:
+            if isinstance(self.test_user,list):
+                test_user=MoveData(self.test_user[:],self.user,to='first')
+            elif isinstance(self.test_user,str):
+                test_user=[self.user,self.test_user]
+        if not isinstance(test_user,list): test_user=['ADMIN']
         if 'ADMIN' not in test_user: test_user=['ADMIN']+test_user
         if isinstance(first_user,str) and first_user: test_user=MoveData(test_user[:],first_user,to='first')
         if extra_test_user and isinstance(extra_test_user,list):
