@@ -281,12 +281,16 @@ class Redfish:
 #                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
                 return False #Error
             if isinstance(aa,dict):
-                for ii in aa.get('Temperatures',[]):
-                    if ii.get('PhysicalContext') == 'CPU':
-                        try:
-                            return int(ii.get('ReadingCelsius')) #ON
-                        except:
-                            pass
+                support=aa.get('Temperatures')
+                if support:
+                    for ii in support:
+                        if ii.get('PhysicalContext') == 'CPU':
+                            try:
+                                return int(ii.get('ReadingCelsius')) #ON
+                            except:
+                                pass
+                else:
+                    return False
         else:
             ok,aa=self.Get('Systems/1')
             if not ok:
@@ -295,8 +299,12 @@ class Redfish:
             if isinstance(aa,dict):
                 #The hardware initialization finish / ready state
                 #Same as ipmitool's sensor data readable step
-                if IsIn(aa.get('BootProgress',{}).get('LastState'),['SystemHardwareInitializationComplete']):
-                    return 'on' #ON
+                support=aa.get('BootProgress',{}).get('LastState')
+                if support:
+                    if IsIn(support,['SystemHardwareInitializationComplete']):
+                        return 'on' #ON
+                else:
+                    return False
         return None # power off state
 
     def onoff_state(self,cmd):
@@ -418,9 +426,12 @@ class Redfish:
                     #check off state
                     off_state=False
                     for x in range(0,20):
-                        if self.SystemReadyState() is None:
+                        xxx=self.SystemReadyState()
+                        if xxx is None:
                             off_state=True
                             break
+                        elif xxx is False:
+                            return False
                         printf('.',log=self.log,direct=True,log_level=1)
                         time.sleep(3)
                     if not off_state:
@@ -769,11 +780,11 @@ class Redfish:
                                             mac=MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a)
                                             bb['mac']=mac
                                     naa['order'].append(bb)
-                                    if naa['pxe_boot_mac'] in [None,'00:00:00:00:00:00'] and ix == 0 and bb.get('mac','A') != 'A' and bb.get('dhcp') is True and bb.get('ip') == ipv and bb.get('dhcp',False) == dhcp:
+                                    if naa['pxe_boot_mac'] in [None,'00:00:00:00:00:00'] and ix == 0 and bb.get('mac','A') != 'A' and bb.get('dhcp') is True and bb.get('ip') == ipv:
                                         naa['pxe_boot_id']=0
                                         naa['pxe_boot_mac']=bb['mac']
                                         naa['type']='http' if bb.get('http') is True  else 'pxe'
-                                    elif naa.get('pxe_boot_id') is None and bb.get('mac','A')==naa.get('pxe_boot_mac','B') and bb.get('dhcp') is True and bb.get('ip') == ipv and bb.get('dhcp',False) == dhcp:
+                                    elif naa.get('pxe_boot_id') is None and bb.get('mac','A')==naa.get('pxe_boot_mac','B') and bb.get('dhcp') is True and bb.get('ip') == ipv:
                                         naa['pxe_boot_id']=ix
                                         naa['type']='http' if bb.get('http') is True  else 'pxe'
                         ix+=1
@@ -1544,6 +1555,16 @@ class kBmc:
         return False
 
     def SystemReadyState(self,cmd_str,name):
+        #Check Redfish again
+        rf=self.CallRedfish()
+        if rf:
+            cpu_temp=rf.SystemReadyState()
+            if cpu_temp is not False:
+                if isinstance(cpu_temp,int): return 'up'
+                return 'down'
+        elif rf is 0:
+            return 'cancel'
+
         #ipmitool/smcipmitool's cpu temperature
         rrc=self.run_cmd(cmd_str)
         if krc(rrc,chk=True):
@@ -1579,15 +1600,6 @@ class kBmc:
                                     return 'down'
                                 except:
                                     pass
-        #Check Redfish again
-        rf=self.CallRedfish()
-        if rf:
-            cpu_temp=rf.SystemReadyState()
-            if cpu_temp is False: return 'error'
-            if isinstance(cpu_temp,int): return 'up'
-            return 'down'
-        elif rf is 0:
-            return 'cancel'
         return 'unknown'
 
     def power_get_status(self,redfish=None,sensor=None,tools=None,**opts):
@@ -2109,13 +2121,8 @@ class kBmc:
         if cancel_func is None: cancel_func=self.cancel_func
         if ip is None: ip=self.ip
         if not IpV4(ip): return False,None,None
-        test_user=None
-        if self.test_user:
-            if isinstance(self.test_user,list):
-                test_user=MoveData(self.test_user[:],self.user,to='first')
-            elif isinstance(self.test_user,str):
-                test_user=[self.user,self.test_user]
-        if not isinstance(test_user,list): test_user=['ADMIN']
+        test_user=MoveData(self.test_user[:],self.user,to='first')
+        if not test_user: test_user=['ADMIN']
         if 'ADMIN' not in test_user: test_user=['ADMIN']+test_user
         if isinstance(first_user,str) and first_user: test_user=MoveData(test_user[:],first_user,to='first')
         if extra_test_user and isinstance(extra_test_user,list):
