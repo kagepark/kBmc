@@ -1434,7 +1434,8 @@ class kBmc:
         self.default_passwd=Get(opts,['ipmi_dpass','dpasswd','default_password'],default='ADMIN',err=True,peel='force')
         self.org_passwd=opts.get('org_passwd',self.passwd)
         self.test_user=opts.get('test_user')
-        if not self.test_user: self.test_user=['ADMIN','Admin','admin','root','Administrator']
+        if isinstance(self.test_user,str): self.test_user=self.test_user.split(',')
+        if not isinstance(self.test_user,list) or not self.test_user: self.test_user=['ADMIN','Admin','admin','root','Administrator']
         self.base_passwd=['ADMIN','Admin','admin','root','Administrator']
         self.test_passwd=opts.get('test_pass',opts.get('test_passwd',self.base_passwd))
         if not isinstance(self.test_passwd,list):
@@ -1555,16 +1556,6 @@ class kBmc:
         return False
 
     def SystemReadyState(self,cmd_str,name):
-        #Check Redfish again
-        rf=self.CallRedfish()
-        if rf:
-            cpu_temp=rf.SystemReadyState()
-            if cpu_temp is not False:
-                if isinstance(cpu_temp,int): return 'up'
-                return 'down'
-        elif rf is 0:
-            return 'cancel'
-
         #ipmitool/smcipmitool's cpu temperature
         rrc=self.run_cmd(cmd_str)
         if krc(rrc,chk=True):
@@ -1600,6 +1591,17 @@ class kBmc:
                                     return 'down'
                                 except:
                                     pass
+        #Check Redfish again
+        rf=self.CallRedfish()
+        if rf:
+            cpu_temp=rf.SystemReadyState()
+            if cpu_temp is not False:
+                if IsIn(cpu_temp,['on','off','up','down']):
+                    return cpu_temp.lower()
+                elif isinstance(cpu_temp,int): return 'up'
+                return 'down'
+        elif rf is 0:
+            return 'cancel'
         return 'unknown'
 
     def power_get_status(self,redfish=None,sensor=None,tools=None,**opts):
