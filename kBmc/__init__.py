@@ -301,6 +301,7 @@ class Redfish:
                 #Same as ipmitool's sensor data readable step
                 support=aa.get('BootProgress',{}).get('LastState')
                 if support:
+                    if support == 'None': return False
                     if IsIn(support,['SystemHardwareInitializationComplete']):
                         return 'on' #ON
                 else:
