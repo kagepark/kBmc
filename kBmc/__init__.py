@@ -1938,7 +1938,7 @@ class kBmc:
         if 'worker' in data: data.pop('worker')
         # end of status printing condition
         if status_log:
-            printf('',log=self.log,no_intro=True,log_level=1)
+            printf('',log=self.log,no_intro=True,ignore_empty=False)
         # convert monitored_status to searial ordering
         A={}
         for i in Iterable(data['monitored_status']):
