@@ -2782,6 +2782,9 @@ class kBmc:
                     if (ipxe is True and mode == 'pxe') or (IsIn(mode,['ipxe','uefi'])):
                         boot='pxe'
                         mode='UEFI'
+                    else:
+                        boot=mode
+                        mode='UEFI'
                     printf("[RF] Boot: boot:{}, mode:{}, keep:{}, force:{}".format(boot,mode,True if persistent else False,force),log=self.log,mode='d')
                     ok,rf_boot=rf.Boot(boot=boot,mode=mode,keep='keep' if persistent else 'Once',force=force,set_bios_uefi=set_bios_uefi,pxe_boot_mac=pxe_boot_mac)
                     printf("[RF] SET : {}".format(ok),log=self.log,mode='d')
