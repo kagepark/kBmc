@@ -324,10 +324,18 @@ class Redfish:
             return 'unknown'
         return current_power
 
-    def IsUp(self,timeout=600,keep_up=0,sensor=False,sensor_temp=False):
+    def IsUp(self,**opts):
+        sensor=opts.get('sensor',False)
+        sensor_temp=opts.get('sensor_temp',False)
+        timeout=Int(opts.get('timeout'),600)
+        keep_on=Int(opts.get('keep_up',opts.get('keep_on')),0)
+        keep_off=Int(opts.get('keep_down',opts.get('keep_off',opts.get('power_down'))),0)
+        keep_uknown=Int(opts.get('keep_unknown'),0)
         up_init=None
         Time=TIME()
         UTime=TIME()
+        DTime=TIME()
+        UNTime=TIME()
         while not Time.Out(timeout):
             stat=self.power_unknown_tag
             if sensor:
@@ -337,26 +345,44 @@ class Redfish:
             if mon is False:
                 return False
             elif mon in ['on']:
-                if keep_up > 0:
-                    if UTime.Out(keep_up): return True
-                    stat=self.power_on_tag
+                DTime.Reset()
+                UNTime.Reset()
+                stat=self.power_on_tag
+                if keep_on > 0:
+                    if UTime.Out(keep_on): return True
                 else:
                     return True
             else:
                 UTime.Reset()
                 if mon in ['up']:
+                    DTime.Reset()
+                    UNTime.Reset()
                     stat=self.power_up_tag
                 elif mon in [None,'off']:
+                    UNTime.Reset()
                     stat=self.power_off_tag
+                    if keep_off > 0:
+                        if DTime.Out(keep_off): return None
                 else: #Unknown 
+                    DTime.Reset()
                     stat=self.power_unknown_tag
+                    if keep_unknown > 0:
+                        if UNTime.Out(keep_unkown): return None
             printf(stat,direct=True,log=self.log,log_level=1)
             time.sleep(3)
         return None
 
-    def IsDown(self,timeout=300,keep_down=0,sensor=False,sensor_temp=False):
+    def IsDown(self,**opts):
+        sensor=opts.get('sensor',False)
+        sensor_temp=opts.get('sensor_temp',False)
+        timeout=Int(opts.get('timeout'),300)
+        keep_on=Int(opts.get('keep_up',opts.get('keep_on')),0)
+        keep_off=Int(opts.get('keep_down',opts.get('keep_off')),0)
+        keep_uknown=Int(opts.get('keep_unknown'),0)
         Time=TIME()
         DTime=TIME()
+        UTime=TIME()
+        UNTime=TIME()
         while not Time.Out(timeout):
             stat=self.power_unknown_tag
             if sensor:
@@ -366,19 +392,29 @@ class Redfish:
             if mon is False:
                 return False
             elif IsIn(mon,[None,'off']):
-                if keep_down > 0:
-                    if DTime.Out(keep_down): return True
+                UTime.Reset()
+                UNTime.Reset()
+                if keep_off > 0:
+                    if DTime.Out(keep_off): return True
                     stat=self.power_off_tag
                 else:
                     return True
             else:
                 DTime.Reset()
                 if IsIn(mon,['up']):
+                    UNTime.Reset()
+                    UTime.Reset()
                     stat=self.power_up_tag
                 elif IsIn(mon,['on']):
+                    UNTime.Reset()
                     stat=self.power_on_tag
+                    if keep_on > 0:
+                        if UTime.Out(keep_on): return None
                 else:
+                    UTime.Reset()
                     stat=self.power_unknown_tag
+                    if keep_unknown > 0:
+                        if UNTime.Out(keep_unknown): return None
             printf(stat,direct=True,log=self.log,log_level=1)
             time.sleep(3)
         return None
@@ -387,11 +423,11 @@ class Redfish:
         pxe=opts.get('pxe',False)
         pxe_keep=opts.get('pxe_keep',False)
         uefi=opts.get('uefi',False)
-        up=opts.get('up',opts.get('sensor_up',0))
-        down=opts.get('down',opts.get('sensor_down',0))
+        up=Int(opts.get('up',opts.get('sensor_up')),0)
+        down=Int(opts.get('down',opts.get('sensor_down')),0)
         sensor=opts.get('sensor',False)
         sensor_temp=opts.get('sensor_temp',False)
-        timeout=opts.get('timeout',1800)
+        timeout=Int(opts.get('timeout'),1800)
         silent_status_log=opts.get('silent_status_log',True)
         def cmd_result(cmd):
             if IsIn(cmd, ['on','up','reboot','reset','off_on','ForceRestart','GracefulRestart','restart','cycle']):
@@ -3079,19 +3115,20 @@ class kBmc:
 
 
     def is_up(self,timeout=1200,interval=8,sensor_on_monitor=600,reset_after_unknown=0,full_state=True,status_log=True,**opts):
-        keep_on=Pop(opts,'keep_up',Pop(opts,'keep_on',30))
-        keep_off=Pop(opts,'keep_down',Pop(opts,'keep_off',0))
+        timeout=Int(timeout,default=1200)
+        keep_on=Int(Pop(opts,'keep_up',Pop(opts,'keep_on')),default=30)
+        keep_off=Int(Pop(opts,'keep_down',Pop(opts,'keep_off',Pop(opts,'power_down'))),default=30)
         if 'mode' not in opts: opts['mode']='s'
         rf=self.CallRedfish()
         if self.redfish and rf:
-            rfp=rf.IsUp(timeout=Int(timeout,default=1200),keep_up=Int(keep_on,30),sensor=True if opts.get('mode','s') == 's' else False)
+            rfp=rf.IsUp(timeout=timeout,keep_up=keep_on,keep_down=keep_off,sensor=True if opts.get('mode','s') == 's' else False)
             if rfp is True:
                 return True,'Node is UP' 
             elif rfp is None:
                 return False,'Node is DOWN'
             #Error then try next
  
-        rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['on'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=0,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
+        rt=self.power_monitor(timeout,monitor_status=['on'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=0,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
         out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
         out_a=Split(out,'-')
         if out_a:
