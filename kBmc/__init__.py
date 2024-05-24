@@ -3141,10 +3141,11 @@ class kBmc:
         return False,out
 
     def is_down_up(self,timeout=1200,sensor_on_monitor=600,sensor_off_monitor=0,interval=8,status_log=True,reset_after_unknown=0,**opts): # Node state
-        keep_on=Pop(opts,'keep_up',Pop(opts,'keep_on',60))
-        keep_off=Pop(opts,'keep_down',Pop(opts,'keep_off',0))
+        timeout=Int(timeout,default=1200)
+        keep_on=Int(Pop(opts,'keep_up',Pop(opts,'keep_on')),default=30)
+        keep_off=Int(Pop(opts,'keep_down',Pop(opts,'keep_off')),default=0)
         if 'mode' not in opts: opts['mode']='s'
-        rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['off','on'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
+        rt=self.power_monitor(timeout,monitor_status=['off','on'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
         out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
         if isinstance(rt.get('monitored_order'),list):
             if out == 'on' and 'off' in rt.get('monitored_order'):
@@ -3154,12 +3155,13 @@ class kBmc:
         return False,out
 
     def is_down(self,timeout=1200,interval=8,sensor_off_monitor=0,full_state=True,status_log=True,reset_after_unknown=0,**opts): # Node state
-        keep_on=Pop(opts,'keep_up',Pop(opts,'keep_on',0))
-        keep_off=Pop(opts,'keep_down',Pop(opts,'keep_off',20))
+        timeout=Int(timeout,default=1200)
+        keep_on=Int(Pop(opts,'keep_up',Pop(opts,'keep_on')),default=30)
+        keep_off=Int(Pop(opts,'keep_down',Pop(opts,'keep_off')),default=30)
         if 'mode' not in opts: opts['mode']='s'
         rf=self.CallRedfish()
         if self.redfish and rf:
-            rfp=rf.IsDown(timeout=Int(timeout,default=1200),keep_down=Int(keep_off,20),sensor=True if opts.get('mode','s') == 's' else False)
+            rfp=rf.IsDown(timeout=timeout,keep_up=keep_on,keep_down=keep_off,sensor=True if opts.get('mode','s') == 's' else False)
             if rfp is True:
                 return True,'Node is DOWN' 
             elif rfp is None:
