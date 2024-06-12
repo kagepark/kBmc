@@ -591,14 +591,32 @@ class Redfish:
                 return False
             rf_key=aa.get('EthernetInterfaces',{}).get('@odata.id')
             if rf_key:
-                ok,aa=self.Get(rf_key)
-                if ok and isinstance(aa,dict):
-                    rf_key=aa.get('Members',[{}])[0].get('@odata.id')
-                    if rf_key:
-                        ok,aa=self.Get(rf_key)
-                        if ok and isinstance(aa,dict):
-                            if aa.get('LinkStatus') == 'LinkUp':
-                                return MacV4(aa.get('MACAddress'))
+                ok,eint=self.Get(rf_key)
+                if ok and isinstance(eint,dict):
+                    for n in eint.get('Members',[{}]):
+                        rf_key=n.get('@odata.id')
+                        if rf_key:
+                            ok,elnk=self.Get(rf_key)
+                            if ok and isinstance(elnk,dict):
+                                #ToManager : Redfish_HI interface 
+                                if elnk.get('Id') == 'ToManager': continue
+                                if elnk.get('LinkStatus') == 'LinkUp':
+                                    return MacV4(elnk.get('MACAddress'))
+                    for n in eint.get('Members',[{}]):
+                        rf_key=n.get('@odata.id')
+                        if rf_key:
+                            ok,elnk=self.Get(rf_key)
+                            if ok and isinstance(elnk,dict):
+                                #ToManager : Redfish_HI interface 
+                                if elnk.get('Id') == 'ToManager': continue
+                                nl=elnk.get('Links')
+                                if nl:
+                                    nd=nl.get('NetworkDeviceFunctions')
+                                    if nd:
+                                        ok,aa=self.Get(nd[0].get('@odata.id'))
+                                        if ok and isinstance(aa,dict):
+                                            if aa.get('DeviceEnabled'):
+                                                return aa.get('Ethernet').get('MACAddress')
             printf('.',direct=True,log=self.log,log_level=1)
             time.sleep(3)
 
@@ -1508,14 +1526,16 @@ class kBmc:
         rf=None
         if self.redfish is None:
             rf=self.CallRedfish(True,True)
-            self.redfish=rf.IsEnabled() if rf else False
+            if rf:
+                self.redfish=rf.IsEnabled() if rf else False
         if self.redfish:
             # If support Redfish then check redfish_hi interface
             if isinstance(opts.get('redfish_hi'),bool):
                 self.redfish_hi=opts.get('redfish_hi')
             else:
                 if rf is None: rf=self.CallRedfish(True,True)
-                self.redfish_hi=rf.RedfishHI().get('enable') if rf else False
+                if rf:
+                    self.redfish_hi=rf.RedfishHI().get('enable') if rf else False
         else:
             self.redfish_hi=False
         self.power_monitor_stop=False
@@ -3044,9 +3064,10 @@ class kBmc:
                                 eth_mac=None
                             if not eth_mac or eth_mac == '00:00:00:00:00:00':
                                 rf=self.CallRedfish()
-                                mac=rf.PXEMAC()
-                                if MacV4(mac) and mac!= '00:00:00:00:00:00':
-                                    eth_mac=mac
+                                if rf:
+                                    mac=rf.PXEMAC()
+                                    if MacV4(mac) and mac!= '00:00:00:00:00:00':
+                                        eth_mac=mac
                             if eth_mac and eth_mac != '00:00:00:00:00:00':
                                 self.eth_mac=eth_mac
                                 return True,self.eth_mac
