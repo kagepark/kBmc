@@ -1022,22 +1022,24 @@ class Redfish:
             #Change BootMode(BootModeSelect)
             if 'Attributes' not in boot_db: boot_db['Attributes']={}
             boot_db['Attributes'][_b_.get('mode_name')]=mode
-        if (http is None or http is True) and 'http' in _b_.get('support'):
-            #Change Support (http) (IPv4HTTPSupport)
-            if 'Attributes' not in boot_db: boot_db['Attributes']={}
-            http_info=_b_.get('support').get('http')
-            if 'v4' in http_info.get('ver',{}):
-                v4_id=http_info.get('ver').index('v4')
-                if http_info.get('enabled')[v4_id] is False:
-                    boot_db['Attributes'][http_info.get('key')[v4_id]]='Enabled'
-        if (http is None or http is False) and 'pxe' in _b_.get('support'):
-            #Change Support (PXE) (IPv4PXESupport)
-            if 'Attributes' not in boot_db: boot_db['Attributes']={}
-            pxe_info=_b_.get('support').get('pxe')
-            if 'v4' in pxe_info.get('ver',{}):
-                v4_id=pxe_info.get('ver').index('v4')
-                if pxe_info.get('enabled')[v4_id] is False:
-                    boot_db['Attributes'][pxe_info.get('key')[v4_id]]='Enabled'
+        support_mode=_b_.get('support')
+        if support_mode:
+            if (http is None or http is True) and 'http' in support_mode:
+                #Change Support (http) (IPv4HTTPSupport)
+                if 'Attributes' not in boot_db: boot_db['Attributes']={}
+                http_info=_b_.get('support').get('http')
+                if 'v4' in http_info.get('ver',{}):
+                    v4_id=http_info.get('ver').index('v4')
+                    if http_info.get('enabled')[v4_id] is False:
+                        boot_db['Attributes'][http_info.get('key')[v4_id]]='Enabled'
+            if (http is None or http is False) and 'pxe' in support_mode:
+                #Change Support (PXE) (IPv4PXESupport)
+                if 'Attributes' not in boot_db: boot_db['Attributes']={}
+                pxe_info=_b_.get('support').get('pxe')
+                if 'v4' in pxe_info.get('ver',{}):
+                    v4_id=pxe_info.get('ver').index('v4')
+                    if pxe_info.get('enabled')[v4_id] is False:
+                        boot_db['Attributes'][pxe_info.get('key')[v4_id]]='Enabled'
 
         if boot_db.get('Attributes'):
             for j in range(0,retry):
@@ -1238,19 +1240,26 @@ class Redfish:
                         naa[ai_id]['max_pci']='{}({})'.format(ai.get('Controllers')[0].get('PCIeInterface',{}).get('MaxPCIeType'),ai.get('Controllers')[0].get('PCIeInterface',{}).get('MaxLanes'))
                         naa[ai_id]['location']='{}'.format(ai.get('Controllers')[0].get('Location',{}).get('PartLocation',{}).get('LocationOrdinalValue'))
                     naa[ai_id]['port']={}
-                    ok,port=self.Get(ai.get('NetworkPorts').get('@odata.id'))
-                    if not ok:
-#                        printf('Redfish ERROR: {}'.format(port),log=self.log,log_level=1,mode='d')
-                        return naa
-                    if isinstance(port,dict):
-                        for pp in Iterable(port.get('Members')):
-                            ok,port_q=self.Get(pp.get('@odata.id'))
-                            if not ok:
-#                               printf('Redfish ERROR: {}'.format(port_q),log=self.log,log_level=1,mode='d')
-                               return naa
-                            naa[ai_id]['port'][port_q.get('Id')]={}
-                            naa[ai_id]['port'][port_q.get('Id')]['mac']=port_q.get('AssociatedNetworkAddresses')[0]
-                            naa[ai_id]['port'][port_q.get('Id')]['state']=port_q.get('LinkStatus')
+                    networkports=ai.get('NetworkPorts',{})
+                    if isinstance(networkports,dict):
+                        np_rc=self.Get(networkports.get('@odata.id'))
+                        ok=False
+                        port=None
+                        if isinstance(np_rc,tuple) and len(np_rc) == 2:
+                            ok=np_rc[0]
+                            port=np_rc[1]
+                        if not ok:
+#                            printf('Redfish ERROR: {}'.format(port),log=self.log,log_level=1,mode='d')
+                            return naa
+                        if isinstance(port,dict):
+                            for pp in Iterable(port.get('Members')):
+                                ok,port_q=self.Get(pp.get('@odata.id'))
+                                if not ok:
+#                                   printf('Redfish ERROR: {}'.format(port_q),log=self.log,log_level=1,mode='d')
+                                   return naa
+                                naa[ai_id]['port'][port_q.get('Id')]={}
+                                naa[ai_id]['port'][port_q.get('Id')]['mac']=port_q.get('AssociatedNetworkAddresses')[0]
+                                naa[ai_id]['port'][port_q.get('Id')]['state']=port_q.get('LinkStatus')
         return naa
 
     def Memory(self):
