@@ -192,7 +192,7 @@ class Redfish:
         printf(msg,log=self.log,mode='d')
         return False,msg
 
-    def Post(self,cmd,host=None,json=None,data=None,files=None,mode='post',retry=3):
+    def Post(self,cmd,host=None,json=None,data=None,files=None,mode='post',retry=3,patch_reset=False):
         if not host: host=self.host
         if not ping(host,timeout=1800):
             printf("ERROR: Can not access the ip({}) over 30min.".format(host),log=self.log)
@@ -226,19 +226,49 @@ class Redfish:
                 if isinstance(tmp,dict):
                     # sometimes, success with 202 code or maybe others(??)
                     if IsIn(next(iter(tmp)),['Success','Accepted']): #OK
-                        if mode == 'patch':# if patch command then reset the power to apply
-                            time.sleep(5)
-                            return self.Power('reset',up=30,sensor=True)
+                        if patch_reset:
+                            if mode == 'patch':# if patch command then reset the power to apply
+                                time.sleep(5)
+                                return self.Power('reset',up=30,sensor=True)
                         return True #OK
                     if IsIn(next(iter(tmp)),['error']): #Error
-                        mm= tmp.get('error',{}).get('@Message.ExtendedInfo')[-1].get('Message')
-                        if isinstance(mm,str) and ('temporarily unavailable' in mm and 'Retry in  seconds' in mm) or ('Bios setting file already exists' in mm):
-                            #Retry
-                            # This error message required reset the power to flushing the redfish's garbage configuration
-                            self.Power('reset',up=30,sensor=True)
-                            #printf('.',end='',log=self.log)
-                            printf('.',direct=True,log=self.log)
+                        _mm_= tmp.get('error',{})
+                        if 'message' in _mm_:
+                            mm=_mm_.get('message')
+                        elif '@Message.ExtendedInfo' in _mm_:
+                            mm=_mm_.get('@Message.ExtendedInfo',[{}])[-1].get('Message')
+                        else:
+                            print('Unknown error:{}'.format(_mm_))
+                            self.Power('reset',up=10,sensor=True)
                             continue
+                        if isinstance(mm,str):
+                            if ('temporarily unavailable' in mm and 'Retry in  seconds' in mm) or ('Bios setting file already exists' in mm):
+                                #Retry
+                                # This error message required reset the power to flushing the redfish's garbage configuration
+                                self.Power('reset',up=30,sensor=True)
+                                printf('.',direct=True,log=self.log)
+                                continue 
+                            elif ('general error has occurred' in mm):
+                                printf('Error for {} command : {}'.format(mode,mm),log=self.log)
+                                return False
+                                #for _ in range(0,200):
+                                #    data = WEB().Request(url,auth=(self.user, self.passwd),mode=mode,json=json,data=data,files=files)
+                                #    tmp=FormData(data[1].text)
+                                #    print('>>tmp:',tmp)
+                                #    if IsIn(next(iter(tmp)),['error']): #Error
+                                #        _mm_= tmp.get('error',{})
+                                #        if 'message' in _mm_:
+                                #            mm=_mm_.get('message')
+                                #        elif '@Message.ExtendedInfo' in _mm_:
+                                #            mm=_mm_.get('@Message.ExtendedInfo',[{}])[-1].get('Message')
+                                #        print('>>mm:',mm)
+                                #        if 'general error has occurred' not in mm:
+                                #            break
+                                #    else:
+                                #        break
+                                #    printf('.',direct=True,log=self.log)
+                                #    time.sleep(3)
+                             
                 if data[1].status_code == 200: #OK
                     if mode == 'patch': # if patch command then reset the power to apply
                         time.sleep(5)
@@ -1168,23 +1198,42 @@ class Redfish:
             return None
         if isinstance(aa,dict): return aa.get('BiosVersion')
 
-    def RedfishHI(self):
+    def RedfishHI(self,active=None,permanent=False):
         naa={}
         ok,aa=self.Get('Systems/1/EthernetInterfaces/ToManager')
         if isinstance(aa,dict):
-            ipv4=aa.get('IPv4Addresses',[{}])[0]
-            naa['ip']=ipv4.get('Address')
-            naa['netmask']=ipv4.get('SubnetMask')
-            naa['gateway']=ipv4.get('Gateway')
-            naa['type']=ipv4.get('AddressOrigin')
-            naa['mtu']=aa.get('MTUSize')
-            naa['full_duplex']=aa.get('FullDuplex')
-            naa['auto']=aa.get('AutoNeg')
-            naa['speed']=aa.get('SpeedMbps')
-            naa['mac']=aa.get('PermanentMACAddress')
-            naa['enable']=aa.get('InterfaceEnabled')
-            #naa['status']=aa.get('Status',{}).get('Health')
-            naa['status']=aa.get('Status',{}).get('State')
+            ipv4=aa.get('IPv4Addresses',aa.get('IPv4StaticAddresses',[{}]))[0]
+            if ipv4:
+                naa['ip']=ipv4.get('Address')
+                naa['netmask']=ipv4.get('SubnetMask')
+                naa['gateway']=ipv4.get('Gateway')
+                naa['type']=ipv4.get('AddressOrigin')
+                naa['mtu']=aa.get('MTUSize')
+                naa['full_duplex']=aa.get('FullDuplex')
+                naa['linkstatus']=aa.get('LinkStatus')
+                naa['interface']=aa.get('InterfaceEnabled')
+                naa['interface_id']=aa.get('Links',{}).get('HostInterface',{}).get('@odata.id')
+                if isinstance(naa['interface_id'],str):
+                    dok,daa=self.Get(naa['interface_id'])
+                    if isinstance(daa,dict):
+                        naa['boot_on']=daa.get('CredentialBootstrapping',{}).get('Enabled')
+                        naa['reset_on']=daa.get('CredentialBootstrapping',{}).get('EnableAfterReset')
+                naa['auto']=aa.get('AutoNeg')
+                naa['speed']=aa.get('SpeedMbps')
+                naa['mac']=aa.get('PermanentMACAddress',aa.get('MACAddress'))
+                naa['status']=aa.get('Status',{}).get('State')
+                naa['connect']=aa.get('Oem',{}).get('Supermicro',{}).get('USBConnection')
+        if naa and isinstance(active,bool) and naa['interface_id']:
+            if active:
+                rndis_act={'InterfaceEnabled':True}
+                if permanent: #Not sure
+                    rndis_act['CredentialBootstrapping']={'EnableAfterReset': True,'Enabled': True}
+            else:
+                rndis_act={'InterfaceEnabled':False}
+                if permanent: #Not sure
+                    rndis_act['CredentialBootstrapping']={'EnableAfterReset': False,'Enabled': False}
+            bb=self.Post(naa['interface_id'],json=rndis_act,mode='patch')
+            #bb=self.Post('Systems/1/EthernetInterfaces/ToManager',json=rndis_act,mode='patch')
         return naa
 
     def BaseMac(self,port=None):
