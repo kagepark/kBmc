@@ -1601,14 +1601,14 @@ class kBmc:
         self.power_get_sensor=opts.get('power_get_sensor',True)
         self.power_get_tools=opts.get('power_get_tools',True)
 
-    def CallRedfish(self,force=False,check=True,no_ipmitool=False,detail_log=False):
+    def CallRedfish(self,force=False,check=True,no_ipmitool=False,detail_log=False,timeout=None):
         if self.redfish or force:
             if force or check:
                 # when it called from here and there. So too much logging
                 if detail_log: printf("Check IP Address",log=self.log,log_level=1,dsp='d')
                 ip=self.mac2ip(self.mac) if self.mac2ip and self.checked_ip is False and MacV4(self.mac) else '{}'.format(self.ip)
                 if detail_log: printf("Check Ping to the IP({}):".format(ip),log=self.log,log_level=1,dsp='d',end='')
-                ping_rc=ping(ip,keep_good=0,timeout=self.timeout,log=self.log,cancel_func=self.cancel_func)
+                ping_rc=ping(ip,keep_good=0,timeout=timeout if IsInt(timeout) else self.timeout,log=self.log,cancel_func=self.cancel_func)
                 if ping_rc is True:
                     self.checked_ip=True
                     cc=False
@@ -1626,6 +1626,7 @@ class kBmc:
                         return False
                     ok=False
                     if not no_ipmitool:
+
                         ok,user,passwd=self.find_user_pass(ip,no_redfish=True)
                         if ok is False:
                             printf("Can not find working user and password",log=self.log,log_level=1,dsp='e')
@@ -3989,19 +3990,27 @@ class kBmc:
         else:
             return _monitor_(title,find,timeout,session_out,stdout)
 
-#    def ping(self,host=None,**opts):
-#        if host is None: host=self.ip
-#        if 'cancel_func' not in opts:
-#            opts['cancel_func']=self.cancel
-#        opts['count']=1
-#        sping=ping(host,**opts)
-#        if sping:
-#            return True
-#        else:
-#            if 'timeout' not in opts: opts['timeout']=1200
-#            printf(' Check network of IP({}) (timeout:{})'.format(host,opts.get('timeout',1200)),log=self.log,log_level=4,dsp='f')
-#            return ping(host,**opts)
-
+    def Ping(self,host=None,**opts):
+        if host is None: host=self.ip
+        if 'cancel_func' not in opts:
+            opts['cancel_func']=self.cancel
+        opts['count']=1
+        sping=ping(host,**opts)
+        if sping:
+            if isinstance(self.error,dict):
+                if 'net' in self.error:
+                    self.error.pop('net')
+            return True
+        else:
+            if 'timeout' not in opts: opts['timeout']=1200
+            if 'count' in opts: opts.pop('count')
+            printf(' Check network of IP({}) (timeout:{})'.format(host,opts.get('timeout',1200)),log=self.log,log_level=4,dsp='f')
+            prc=ping(host,**opts)
+            if prc:
+                if isinstance(self.error,dict):
+                    if 'net' in self.error:
+                        self.error.pop('net')
+            return prc
       
 
 ##############
