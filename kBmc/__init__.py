@@ -118,6 +118,8 @@ class Redfish:
             }
         self.timeout=opts.get('timeout',1800)
         self.cancel_func=opts.get('cancel_func',opts.get('stop_func',None))
+        self.cancel_args=opts.get('cancel_args',opts.get('stop_args',{}))
+        if not isinstance(self.cancel_args,dict): self.cancel_args={}
         self.bmc=opts.get('bmc')
         if self.bmc:
             self.user=self.bmc.__dict__['user'] 
@@ -148,7 +150,7 @@ class Redfish:
     def Get(self,cmd,host=None):
         if not isinstance(cmd,str): return False
         if not host: host=self.host
-        if not ping(host,timeout=1800):
+        if not ping(host,timeout=1800,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log):
             printf("ERROR: Can not access the ip({}) over 30min.".format(host),log=self.log)
             return False,"ERROR: Can not access the ip({}) over 30min.".format(host)
         err_msg='Redfish Request Error'
@@ -194,7 +196,7 @@ class Redfish:
 
     def Post(self,cmd,host=None,json=None,data=None,files=None,mode='post',retry=3,patch_reset=False):
         if not host: host=self.host
-        if not ping(host,timeout=1800):
+        if not ping(host,timeout=1800,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log):
             printf("ERROR: Can not access the ip({}) over 30min.".format(host),log=self.log)
             return False
         if not isinstance(cmd,str):
@@ -1496,7 +1498,7 @@ class Redfish:
         if rc is True:
              time.sleep(5)
              printf("""Wait until response from BMC""",log=self.log,log_level=1,dsp='d')
-             return ping(self.host,keep_good=keep_on,timeout=self.timeout,cancel_func=self.cancel_func,log=self.log)
+             return ping(self.host,keep_good=keep_on,timeout=self.timeout,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log)
         return rc
 
     def FactoryDefault(self,keep_on=30):
@@ -1543,6 +1545,7 @@ class kBmc:
         self.warning={}
         self.canceling={}
         self.cancel_func=opts.get('cancel_func',opts.get('stop_func',None))
+        self.cancel_args=opts.get('cancel_args',opts.get('stop_args',opts.get('cancel_arg',opts.get('stop_arg',{}))))
         self.bgpm={}
         self.mac2ip=opts.get('mac2ip',None)
         self.log=opts.get('log',None)
@@ -1608,7 +1611,8 @@ class kBmc:
                 if detail_log: printf("Check IP Address",log=self.log,log_level=1,dsp='d')
                 ip=self.mac2ip(self.mac) if self.mac2ip and self.checked_ip is False and MacV4(self.mac) else '{}'.format(self.ip)
                 if detail_log: printf("Check Ping to the IP({}):".format(ip),log=self.log,log_level=1,dsp='d',end='')
-                ping_rc=ping(ip,keep_good=0,timeout=timeout if IsInt(timeout) else self.timeout,log=self.log,cancel_func=self.cancel_func)
+                #ping_rc=ping(ip,keep_good=0,timeout=timeout if IsInt(timeout) else self.timeout,log=self.log,cancel_func=self.cancel_func)
+                ping_rc=self.Ping(host=ip,keep_good=0,timeout=timeout if IsInt(timeout) else self.timeout,log=self.log)
                 if ping_rc is True:
                     self.checked_ip=True
                     cc=False
@@ -1873,13 +1877,17 @@ class kBmc:
             if data['init'].get('start',{}).get('time'):
                 data['remain_time']=data.get('timeout') - (TIME().Int() - data['init'].get('start',{}).get('time'))
             #manually stop condition (Need this condition at any time)
-            if data.get('stop') is True or IsBreak(data.get('cancel_func')):
-                if IsBreak(data.get('cancel_func')):
-                    data['done']={TIME().Int():'Got Cancel Signal during monitor {}{}'.format('_'.join(data['monitoring']),ss)}
-                    data['done_reason']='cancel'
-                else:
-                    data['done']={TIME().Int():'Got STOP Signal during monitor {}{}'.format('_'.join(data['monitoring']),ss)}
-                    data['done_reason']='stop'
+            #if data.get('stop') is True or IsBreak(data.get('cancel_func')):
+            if self.cancel():
+                data['done']={TIME().Int():'Got Cancel Signal during monitor {}{}'.format('_'.join(data['monitoring']),ss)}
+                data['done_reason']='cancel'
+                if 'worker' in data: data.pop('worker')
+                if status_log:
+                    printf('.',no_intro=True,log=self.log,log_level=1)
+                return
+            elif data.get('stop') is True:
+                data['done']={TIME().Int():'Got STOP Signal during monitor {}{}'.format('_'.join(data['monitoring']),ss)}
+                data['done_reason']='stop'
                 if 'worker' in data: data.pop('worker')
                 if status_log:
                     printf('.',no_intro=True,log=self.log,log_level=1)
@@ -2123,7 +2131,6 @@ class kBmc:
         return False
 
     def check(self,mac2ip=None,cancel_func=None,trace=False,timeout=None):
-        if cancel_func is None: cancel_func=self.cancel_func
         if timeout is None: timeout=self.timeout
         rc=False
         ip='{}'.format(self.ip)
@@ -2141,7 +2148,8 @@ class kBmc:
                         return False,self.ip,self.user,self.passwd
                 ip=mac2ip(self.mac)
                 self.checked_port=False
-        ping_rc=ping(ip,keep_good=0,timeout=timeout,log=self.log,cancel_func=cancel_func)
+        #ping_rc=ping(ip,keep_good=0,timeout=timeout,log=self.log,cancel_func=cancel_func)
+        ping_rc=self.Ping(host=ip,keep_good=0,timeout=timeout,log=self.log,cancel_func=cancel_func)
         if ping_rc is True:
             if self.checked_port is False:
                 cc=False
@@ -2268,7 +2276,7 @@ class kBmc:
                 return True,found
         return False,('','','','')
 
-    def find_user_pass(self,ip=None,default_range=12,check_cmd='ipmi power status',cancel_func=None,error=True,trace=False,extra_test_user=[],extra_test_pass=[],no_redfish=False,first_user=None,first_passwd=None,failed_passwd=None):
+    def find_user_pass(self,ip=None,default_range=12,check_cmd='ipmi power status',cancel_func=None,cancel_args=None,error=True,trace=False,extra_test_user=[],extra_test_pass=[],no_redfish=False,first_user=None,first_passwd=None,failed_passwd=None):
         # Check Network
         chk_err=self.error(_type='net')
         if chk_err[0]: return False,None,None
@@ -2325,7 +2333,8 @@ class kBmc:
                         #If password is None then skip
                         if IsNone(pp): continue
                         #Check ping first before try password
-                        ping_rc=ping(ip,keep_good=0,timeout=self.timeout,log=self.log,cancel_func=cancel_func) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
+                        #ping_rc=ping(ip,keep_good=0,timeout=self.timeout,log=self.log,cancel_func=cancel_func) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
+                        ping_rc=self.Ping(host=ip,keep_good=0,timeout=self.timeout,log=self.log,cancel_func=cancel_func,cancel_args=cancel_args) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
                         if ping_rc is True:
                             tested_user_pass.append((uu,pp))
                             cmd_str=mm.cmd_str(check_cmd,passwd=pp)
@@ -2596,7 +2605,8 @@ class kBmc:
                     printf('Connection Error:',log=self.log,log_level=1,dsp='d',direct=True)
                     #Check connection
                     ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                    ping_rc=ping(self.ip,keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
+                    #ping_rc=ping(self.ip,keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
+                    ping_rc=self.Ping(keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],keep_good=0,timeout=self.timeout)
                     ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                     if ping_rc == 0:
                         printf(' !! Canceling Job',start_newline=True,log=self.log,log_level=1,dsp='d')
@@ -2610,7 +2620,8 @@ class kBmc:
                     printf('Issue in BMC Login issue({})'.format(rc_err_bmc_user),log=self.log,log_level=1,dsp='d')
                     #Check connection
                     ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                    ping_rc=ping(self.ip,keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
+                    #ping_rc=ping(self.ip,keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
+                    ping_rc=self.Ping(keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],keep_good=0,timeout=self.timeout)
                     ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                     if ping_rc == 0:
                         printf(' !! Canceling Job',start_newline=True,log=self.log,log_level=1,dsp='d')
@@ -2639,7 +2650,8 @@ class kBmc:
                         printf('Issue of ipmitool command',log=self.log,log_level=1,dsp='d')
                         #Check connection
                         ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                        ping_rc=ping(self.ip,keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
+                        #ping_rc=ping(self.ip,keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
+                        ping_rc=self.Ping(keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],keep_good=0,timeout=self.timeout)
                         ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                         if ping_rc == 0:
                             printf(' !! Canceling Job',log=self.log,log_level=1,dsp='d')
@@ -2690,7 +2702,8 @@ class kBmc:
         for i in range(0,1+retry):
             rc=None
             for mm in Iterable(self.cmd_module):
-                ping_rc=ping(self.ip,timeout=timeout,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
+                #ping_rc=ping(self.ip,timeout=timeout,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
+                ping_rc=self.Ping(timeout=timeout,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
                 if ping_rc == 0:
                     return 0,'Canceled'
                 elif ping_rc is False:
@@ -2701,7 +2714,8 @@ class kBmc:
                         continue # try with next module
                     elif krc(rc,chk=True):
                         time.sleep(5)
-                        ping_rc=ping(self.ip,timeout=timeout,keep_good=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
+                        #ping_rc=ping(self.ip,timeout=timeout,keep_good=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
+                        ping_rc=self.Ping(timeout=timeout,keep_good=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
                         if ping_rc == 0:
                             return 0,'Canceled'
                         elif ping_rc is True:
@@ -2728,7 +2742,8 @@ class kBmc:
                 self.checked_port=True
         for mm in Iterable(self.cmd_module):
             for i in range(0,2):
-                ping_rc=ping(ip,keep_good=0,timeout=self.timeout,log=self.log,cancel_func=self.cancel_func)
+                #ping_rc=ping(ip,keep_good=0,timeout=self.timeout,log=self.log,cancel_func=self.cancel_func)
+                ping_rc=self.Ping(host=ip,keep_good=0,timeout=self.timeout,log=self.log)
                 if ping_rc is False: return False,None
                 
                 name=mm.__name__
@@ -3174,7 +3189,8 @@ class kBmc:
         return rf.Network()
 
     def summary(self): # BMC is ready(hardware is ready)
-        if ping(self.ip,timeout=self.timeout,bad=30) is False:
+        #if ping(self.ip,timeout=self.timeout,bad=30) is False:
+        if self.Ping(timeout=self.timeout,bad=30) is False:
             print('%10s : %s'%("Ping","Fail"))
             return False
         print('%10s : %s'%("Ping","OK"))
@@ -3667,14 +3683,16 @@ class kBmc:
                 if get_msg: return True,get_msg
                 return False,None
 
-    def cancel(self,cancel_func=None,msg=None,log=None,log_level=1,parent=2,task_all_stop=True):
+    def cancel(self,cancel_func=None,msg=None,log=None,log_level=1,parent=2,task_all_stop=True,cancel_args={}):
         #task_all_stop : True, stop kBMc all, False, Only check current step for cancel() 
         if cancel_func is None: cancel_func=self.cancel_func
         if log is None: log=self.log
         if self.canceling:
             return self.canceling
         else:
-            if IsBreak(cancel_func,log=log,log_level=log_level):
+            if not cancel_args: cancel_args=self.cancel_args
+            if not isinstance(cancel_args,dict): cancel_args={}
+            if IsBreak(cancel_func,log=log,log_level=log_level,**cancel_args):
                 caller_name=FunctionName(parent=parent)
                 caller_name='{}() : '.format(caller_name) if isinstance(caller_name,str) else ''
                 if msg :
@@ -3991,9 +4009,13 @@ class kBmc:
             return _monitor_(title,find,timeout,session_out,stdout)
 
     def Ping(self,host=None,**opts):
-        if host is None: host=self.ip
-        if 'cancel_func' not in opts:
+        if not host: host=self.ip
+        if not opts.get('cancel_func'):
             opts['cancel_func']=self.cancel
+        if opts.get('cancel_arg'):
+            opts['cancel_args']=opts.pop('cancel_arg')
+        elif not opts.get('cancel_args'):
+            opts['cancel_args']=self.cancel_args
         opts['count']=1
         sping=ping(host,**opts)
         if sping:
