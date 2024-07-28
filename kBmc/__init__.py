@@ -211,7 +211,7 @@ class Redfish:
                 if not self.Power('on',up=30,sensor=True):
                     printf("ERROR: Required power ON for the command, but can't power ON the system. Please look at the BMC or Redfish for power",log=self.log)
                     return False
-        printf('Post:\n - url:{}\n - mode:{}\n - data:{}\n - json:{}\n - file:{}'.format(url,mode,data,json,files),log=self.log,mode='d')
+        printf('Redfish.Post:\n - url:{}\n - mode:{}\n - data:{}\n - json:{}\n - file:{}'.format(url,mode,data,json,files),log=self.log,mode='d',no_intro=None)
         for i in range(0,retry):
             data = WEB().Request(url,auth=(self.user, self.passwd),mode=mode,json=json,data=data,files=files)
             printf(' - code:{}\n - msg:{}'.format(data[1].status_code,data[1].text),no_intro=None,log=self.log,mode='d')
@@ -226,23 +226,34 @@ class Redfish:
                 except:
                     pass
                 if isinstance(tmp,dict):
+                    answer_tag=next(iter(tmp))
                     # sometimes, success with 202 code or maybe others(??)
-                    if IsIn(next(iter(tmp)),['Success','Accepted']): #OK
+                    if IsIn(answer_tag,['Success','Accepted']): #OK
                         if patch_reset:
                             if mode == 'patch':# if patch command then reset the power to apply
                                 time.sleep(5)
                                 return self.Power('reset',up=30,sensor=True)
                         return True #OK
-                    if IsIn(next(iter(tmp)),['error']): #Error
-                        _mm_= tmp.get('error',{})
+                    if IsIn(answer_tag,['error','Action@Message.ExtendedInfo']): #Error
+                        _mm_= tmp.get(answer_tag)
+                        if isinstance(_mm_,list):
+                            if _mm_:
+                                _mm_=_mm_[0]
+                            else: 
+                                printf(' - Error: Missing DATA for {} command : {}'.format(mode,tmp),log=self.log,no_intro=None,mode='d')
+                                return False
                         if 'message' in _mm_:
                             mm=_mm_.get('message')
+                        elif 'Message' in _mm_:
+                            mm=_mm_.get('Message')
                         elif '@Message.ExtendedInfo' in _mm_:
                             mm=_mm_.get('@Message.ExtendedInfo',[{}])[-1].get('Message')
                         else:
-                            print('Unknown error:{}'.format(_mm_))
-                            self.Power('reset',up=10,sensor=True)
-                            continue
+                            printf(' - Error: Unknown : {}'.format(_mm_),log=self.log,no_intro=None,mode='d')
+                            return False
+                            #print('Unknown error:{}'.format(_mm_))
+                            #self.Power('reset',up=10,sensor=True)
+                            #continue
                         if isinstance(mm,str):
                             if ('temporarily unavailable' in mm and 'Retry in  seconds' in mm) or ('Bios setting file already exists' in mm):
                                 #Retry
@@ -251,7 +262,7 @@ class Redfish:
                                 printf('.',direct=True,log=self.log)
                                 continue 
                             elif ('general error has occurred' in mm):
-                                printf('Error for {} command : {}'.format(mode,mm),log=self.log)
+                                printf(' - Error : {} command : {}'.format(mode,mm),log=self.log,no_intro=None,mode='d')
                                 return False
                                 #for _ in range(0,200):
                                 #    data = WEB().Request(url,auth=(self.user, self.passwd),mode=mode,json=json,data=data,files=files)
@@ -270,16 +281,18 @@ class Redfish:
                                 #        break
                                 #    printf('.',direct=True,log=self.log)
                                 #    time.sleep(3)
-                             
+                            elif ('property Action is not in the list' in mm):
+                                printf(' - Error: Remove the unknown property from the request body and resubmit the request if the operation failed',log=self.log,no_intro=None,mode='d')
+                                return 0
                 if data[1].status_code == 200: #OK
                     if mode == 'patch': # if patch command then reset the power to apply
                         time.sleep(5)
                         return self.Power('reset',up=30,sensor=True)
                     return True
                 #Fail
-                printf('ERROR({}:{}):{}'.format(mode,data[1].status_code,data[1].text),log=self.log)
+                printf(' - Error: ({}:{}):{}'.format(mode,data[1].status_code,data[1].text),log=self.log,no_intro=None,mode='d')
                 break
-        return False
+        return 0
 
     def Data(self,data):
         ndata={}
@@ -480,12 +493,15 @@ class Redfish:
                 return 'GracefulRestart'
 
         def _power_(cmd,retry=4,monitor_timeout=300):
+            #return None(Timeout),False(Error),True(OK)
             mt=TIME()
             mot=TIME()
             ok=None
             for i in range(0,retry):
                 aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': rf_power_json_cmd(cmd)})
-                if aa is False: # Retry
+                if aa is 0: # ERROR. STOP
+                    return False
+                elif aa is False: # Retry
                     ok=False #error
                     printf('.',log=self.log,direct=True,log_level=1)
                     time.sleep(5)
@@ -3434,11 +3450,15 @@ class kBmc:
                              verify_status='on'
                 printf('* Turn power {}{} '.format(verify_status,'({})'.format(fail_down) if fail_down > 0 else ''),start_newline='auto',end='',log=self.log,log_level=3,scr_dbg=False)
                 ok=False
+                _cc_=False
                 if self.redfish and rf:
+                    _cc_=True
                     ok=rf.Power(verify_status,keep_up=0,keep_down=0,retry=2,timeout=60)
                     err_msg=''
                     rc_msg=verify_status
-                if ok is False:
+                #if ok is False:
+                if ok in [False,None]: # Timeout(None) or Error(False) then try with ipmitool command instead Redfish
+                    if _cc_: printf('{} : Try again {}'.format(mm.__name__,verify_status),log=self.log,no_intro=None,mode='d')
                     rc=self.run_cmd(mm.cmd_str(do_power_mode[rr],passwd=self.passwd),retry=2)
                     ok=Get(rc,0)
                     err_msg=Get(Get(rc,1),2,default=Get(Get(rc,1),1))
