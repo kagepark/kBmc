@@ -342,10 +342,11 @@ class Redfish:
                 elif IsIn(physical_power,['On']) and isinstance(aa.get('BootProgress'),dict):
                     support=aa.get('BootProgress').get('LastState')
                     if support:
-                        if support == 'None':
-                            return 'up' # Power state is on. but not ready. So going up
-                        elif IsIn(support,['SystemHardwareInitializationComplete']):
+                        #if support == 'None':
+                        #    return 'up' # Power state is on. but not ready. So going up
+                        if IsIn(support,['SystemHardwareInitializationComplete']):
                             return 'on' #ON state
+                        return 'up' # Power state is on. but not ready. So going up
         return False # Error with status(Not support BootProgress or Temperature sensor
 
     def onoff_state(self,cmd):
@@ -1720,6 +1721,7 @@ class kBmc:
         if redfish is None: redfish=self.power_get_redfish
         if sensor is None: sensor=self.power_get_sensor
         if tools is None: tools=self.power_get_tools
+        redfish_sensor=opts.get('redfish_sensor',True)
 
         checked_redfish=opts.get('checked_redfish',False)
         # _: Down, ¯: Up, ·: Unknown sensor data, !: ipmi sensor command error
@@ -1736,8 +1738,10 @@ class kBmc:
             if rf:
                 checked_redfish=True
 
-                rt=rf.Power(sensor=True)
-                out[1]='on' if IsIn(rt,['up','on']) else 'off' if IsIn(rt,['down','off']) else rt
+                rt=rf.Power(sensor=redfish_sensor)
+                out[1]='on' if IsIn(rt,['on']) else 'up' if IsIn(rt,['up']) else 'off' if IsIn(rt,['down','off']) else rt
+                if out[1] not in ['on','off','up']: # wrong data then not checked redfish
+                    checked_redfish=False
         if tools:
             for mm in Iterable(self.cmd_module):
                 rt=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
@@ -1753,7 +1757,7 @@ class kBmc:
     def power_status_monitor_t(self,monitor_status,data={},keep_off=0,keep_on=0,sensor_on=600,sensor_off=0,monitor_interval=5,timeout=1200,reset_after_unknown=0,mode='s'):
         return self.power_status_monitor(monitoring_state=monitor_status,data=data,keep_off=keep_off,keep_on=keep_on,sensor_on=sensor_on,sensor_off=sensor_off,status_log=False,monitor_interval=monitor_interval,timeout=timeout,reset_after_unknown=reset_after_unknown,mode=mode)
 
-    def power_status_monitor(self,monitoring_state=None,data=None,**opts):
+    def power_status_monitor(self,monitoring_state=None,data=None,sensor=False,**opts):
         if not monitoring_state and 'monitor_status' in opts: monitoring_state=opts.get('monitor_status')
         if not monitoring_state: return False,'not found monitoring_state value'
         if data is None and 'data' in opts: data=opts['data']
@@ -1784,41 +1788,55 @@ class kBmc:
         #### define local varible
         # count : how many loop
         # printed : fix printing 
-        def is_on_off(data,mode='a',sensor_time=None,sensor_off_time=420,before=None):
+        def is_on_off(data,mode='a',sensor_time=None,sensor_off_time=420,before=None,checked_redfish=False):
             #<sensor>,<redfish>,<ipmi/tool>
             # data: [Sensor data(ipmitool/smcipmitool), Redfish data, ipmitool/smcipmitool data)]
-            if data[0] == data[1] and data[1] == data[2]: # All same data then return without any condition
-                #return OFF/ON at sensor or auto mode
+            if data.count('off') == 3 or data.count('on') == 3: # All same data then return without any condition
                 return data[0],0
             if mode == 's':
                 if not sensor_time: sensor_time=TIME().Int()
-                if data[1] == 'off' and (data[1] == data[2] or data[0] == data[1]):
+                #if data[1] == 'off' and (data[1] == data[2] or data[0] == data[1]):
+                #if 'off' in data and (data[2] == data[0] or data[2] == data[1] or data[0] == data[1]):
+                if data.count('off') >= 2:
                     return 'off',sensor_time
-                elif data[0] == 'off' or data[1] == 'off':
+                elif data.count('on') >= 2:
+                    return 'on',sensor_time
+                #elif data[0] == 'off' or data[1] == 'off':
+                elif 'off' in data[0:2] or 'up' in data[0:2]: # temp or redfish has off or up case
                     # over 7min(420) then use redfish and ipmitool command result
                     if isinstance(sensor_time,int) and sensor_time:
                         if TIME().Int()-sensor_time > sensor_off_time:
                             if data[1] == data[2]: # redfish and ipmitool has same result then cmd result
                                 return data[1],sensor_time
                             else:
-                                # one of command got unknown then the other result
-                                if IsIn(data[1],['unknown','none',None]) and data[2] in ['on','off']:
-                                    return data[2],sensor_time
-                                elif IsIn(data[2],['unknown','none',None]) and data[1] in ['on','off']:
-                                    return data[1],sensor_time
+                                if checked_redfish:
+                                    if data[1] in ['on','off','up']: #redfish data
+                                        return data[1],sensor_time
+                                if data[0] in ['on','off','up']: #temp data
+                                    return data[0],sensor_time
+                                return data[2],sensor_time #ipmitool data
+                                ## one of command got unknown then the other result
+                                #if IsIn(data[1],['unknown','none',None]) and data[2] in ['on','off']:
+                                #    return data[2],sensor_time
+                                #elif IsIn(data[2],['unknown','none',None]) and data[1] in ['on','off']:
+                                #    return data[1],sensor_time
                         else:
-                            if data[2] =='on': #booting
+                            #if data[2] =='on': #booting
+                            #if 'up' in data[0:2] or 'on' not in data[0:2]:# sensor changed to up then short time off
+                            if 'up' in data[0:2]:# sensor changed to up then short time off
                                 if IsIn(before,['on']): # reset command/suddenly changed state then got off state
                                     return 'off',sensor_time
                                 return 'up',sensor_time
                     return 'off',sensor_time
-                elif data[0] == 'on' or data[1] == 'on':
-                    return 'on',sensor_time
+                #elif data[0] == 'on' or data[1] == 'on':
             elif mode == 'a':
-                if data.count('off') == 3: return 'off',0 # off state
-                elif data.count('on') == 3: return 'on',0 # on state
+                #if data.count('off') == 3: return 'off',0 # off state
+                #elif data.count('on') == 3: return 'on',0 # on state
+                if data.count('off') >= 2: return 'off',0 # off state
+                elif data.count('on') >= 2: return 'on',0 # on state
                 elif IsIn(before,['on']): # ON->Something changed : OFF
-                    if 'off' in data:
+                    #if 'off' in data or 'up' in data:
+                    if 'up' in data:
                         return 'off',0
                 if not sensor_time: sensor_time=TIME().Int()
                 if isinstance(sensor_time,int) and sensor_time:
@@ -1857,7 +1875,6 @@ class kBmc:
         else:
             keep_last_state_time=Int(opts.get('keep_last_state_time'),0)
             keep_error_state_time=Int(opts.get('keep_error_state_time'),0)
-
         #########################################
         #initialize data
         #########################################
@@ -1865,6 +1882,7 @@ class kBmc:
         if 'count' not in data: data['count']=0
         if 'stop' not in data: data['stop']=False
         if 'timeout' not in data: data['timeout']=timeout # default 1800(30min)
+        if 'sensor' not in data: data['sensor']=sensor # default 1800(30min)
         if 'sensor_off_time' not in data: data['sensor_off_time']=Int(sensor_off_time,450) # Sensor monitoring timeout 
         if 'monitor_interval' not in data: data['monitor_interval']=Int(monitor_interval,5) # default 5
         if 'keep_last_state_time' not in data: data['keep_last_state_time']=keep_last_state_time
@@ -1924,18 +1942,18 @@ class kBmc:
                 #if curr_power_status.count('off') > 1  and curr_power_status.count('on') > 0:
                 #minimum ipmitool and sensor data is on or off or ipmitool and redfish data is on or off
                 #or all off or on
-                if 'up' in curr_power_status: # if got error or unknown or up
-                    data['symbol']='.'
+                if 'up' in curr_power_status[0:2]: #if up state in temp and redfish
+                    data['symbol']=self.power_up_tag 
                     time.sleep(3)
-                    continue
+                    continue # wait until right initial state (on/off)
                 elif curr_power_status.count('off') == 0:
-                    if curr_power_status.count('on') < 3:
+                    if curr_power_status.count('on') < 3 :
                         if right_start_on < 0: #check keep 60 seconds error/unknown or not
                             right_start_on-=1
                             right_start_off-=20
                             data['symbol']='.'
                             time.sleep(3)
-                            continue
+                            continue # 
                 elif curr_power_status.count('on') == 0:
                     if curr_power_status.count('off') < 3:
                         if right_start_off < 0: #check keep 60 seconds error/unknown or not
@@ -1987,9 +2005,15 @@ class kBmc:
             # check special condition for off state 
             #   ON->UP: mark to OFF with changed status without detacting physical power OFF state
             if not before_power_state:
-                if curr_power_status.count('off') == 0  or curr_power_status.count('on') >= 2:
-                    before_power_state='on'
-            on_off,is_on_off_time=is_on_off(curr_power_status,mode=data['mode'],sensor_time=is_on_off_time,sensor_off_time=data['sensor_off_time'],before=before_power_state)
+                #if curr_power_status.count('off') == 0  or curr_power_status.count('on') >= 2:
+                #    before_power_state='on'
+                if checked_redfish:
+                    if curr_power_status[1]==curr_power_status[2]=='on':
+                        before_power_state='on'
+                else:
+                    if curr_power_status[0]==curr_power_status[2]=='on':
+                        before_power_state='on'
+            on_off,is_on_off_time=is_on_off(curr_power_status,mode=data['mode'],sensor_time=is_on_off_time,sensor_off_time=data['sensor_off_time'],before=before_power_state,checked_redfish=checked_redfish)
             if on_off in ['on','off','up']:
                 before_power_state=on_off
             if on_off not in data['monitored_status']: data['monitored_status'][on_off]=[]
@@ -3222,7 +3246,7 @@ class kBmc:
         print('%10s : %s'%("DHCP",'{}'.format(self.dhcp()[1])))
         print('%10s : %s'%("Gateway",'{}'.format(self.gateway()[1])))
         print('%10s : %s'%("Netmask",'{}'.format(self.netmask()[1])))
-        print('%10s : %s'%("LanMode",'{}'.format(self.lanmode()[1])))
+        print('%10s : %s'%("LanMode",'{}'.format(self.Lanmode()[1])))
         print('%10s : %s'%("BootOrder",'{}'.format(self.bootorder()[1])))
 
 
@@ -3233,7 +3257,7 @@ class kBmc:
         if 'mode' not in opts: opts['mode']='s'
         rf=self.CallRedfish()
         if self.redfish and rf:
-            rfp=rf.IsUp(timeout=timeout,keep_up=keep_on,keep_down=keep_off,sensor=True if opts.get('mode','s') == 's' else False)
+            rfp=rf.IsUp(timeout=timeout,keep_up=keep_on,keep_down=keep_off,sensor=True if opts.get('mode','s') in ['s','a'] else False)
             if rfp is True:
                 return True,'Node is UP' 
             elif rfp is None:
@@ -3273,7 +3297,7 @@ class kBmc:
         if 'mode' not in opts: opts['mode']='s'
         rf=self.CallRedfish()
         if self.redfish and rf:
-            rfp=rf.IsDown(timeout=timeout,keep_up=keep_on,keep_down=keep_off,sensor=True if opts.get('mode','s') == 's' else False)
+            rfp=rf.IsDown(timeout=timeout,keep_up=keep_on,keep_down=keep_off,sensor=True if opts.get('mode','s') in ['s','a'] else False)
             if rfp is True:
                 return True,'Node is DOWN' 
             elif rfp is None:
@@ -3295,7 +3319,7 @@ class kBmc:
     def get_boot_mode(self):
         return self.bootorder(mode='status')
 
-    def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,post_keep_down=0,timeout=1800,lanmode=None,fail_down_time=240,cancel_func=None,set_bios_uefi_mode=False,monitor_mode='a',command_gap=5,error=False,mc_reset=False):
+    def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,post_keep_down=0,timeout=1800,lanmode=None,fail_down_time=240,cancel_func=None,set_bios_uefi_mode=False,monitor_mode='a',command_gap=5,error=False,mc_reset=False,off_on_interval=0,sensor=None):
         # verify=False
         #  - just send a command 
         #  - if off_on command then check off mode without sensor monitor
@@ -3309,6 +3333,8 @@ class kBmc:
         post_keep_down=Int(post_keep_down,default=0)
         rf=self.CallRedfish()
         if cancel_func is None: cancel_func=self.cancel_func
+        if not isinstance(cmd,str): cmd='status'
+        cmd=cmd.lower()
         if cmd == 'status':
             if self.redfish and rf:
                 rfp=rf.Power('status')
@@ -3342,30 +3368,34 @@ class kBmc:
                     return False,rc[1],-1
                 printf('Set BootOrder output: {}'.format(rc),log=self.log,mode='d')
                 time.sleep(10)
-        return self.do_power(cmd,retry=retry,verify=verify,timeout=timeout,post_keep_up=post_keep_up,post_keep_down=post_keep_down,lanmode=lanmode,fail_down_time=fail_down_time,mode=monitor_mode,command_gap=command_gap,error=error,mc_reset=mc_reset)
+        return self.do_power(cmd,retry=retry,verify=verify,timeout=timeout,post_keep_up=post_keep_up,post_keep_down=post_keep_down,lanmode=lanmode,fail_down_time=fail_down_time,mode=monitor_mode,command_gap=command_gap,error=error,mc_reset=mc_reset,off_on_interval=off_on_interval,sensor=sensor)
 
-    def do_power(self,cmd,retry=0,verify=False,timeout=1200,post_keep_up=40,post_keep_down=0,pre_keep_up=0,lanmode=None,cancel_func=None,fail_down_time=300,fail_up_time=300,mode='a',command_gap=5,error=False,mc_reset=False):
+    def do_power(self,cmd,retry=0,verify=False,timeout=1200,post_keep_up=40,post_keep_down=0,pre_keep_up=0,lanmode=None,cancel_func=None,fail_down_time=300,fail_up_time=300,mode=None,command_gap=5,error=False,mc_reset=False,off_on_interval=0,sensor=None,end_newline=True):
         timeout=Int(timeout,default=1200)
         command_gap=Int(command_gap,default=5)
         kfdt=TIME().Int() # keep fail down time
         kfut=TIME().Int() # keep fail up time
         total_time=TIME().Int() # total time
         rf=self.CallRedfish()
+        if isinstance(sensor,bool): # sensor parameter is more higher level than mode.
+            mode='s' if sensor is True else 't'
+        if not IsIn(mode,['s','a','r','t']): mode='t'
+        # mode : s:sensor, a:any data, r: redfish data, t: ipmitool data
 
-        def lanmode_check(mode):
+        def LanmodeCheck(lanmode):
             # BMC Lan mode Checkup
-            cur_lan_mode=self.lanmode()
+            cur_lan_mode=self.Lanmode()
             if cur_lan_mode[0]:
-                if self.lanmode_convert(mode) == self.lanmode_convert(cur_lan_mode[1]):
-                    printf(' Already {}'.format(self.lanmode_convert(mode,string=True)),log=self.log,log_level=7)
-                    return self.lanmode_convert(cur_lan_mode[1],string=True)
+                if self.LanmodeConvert(lanmode) == self.LanmodeConvert(cur_lan_mode[1]):
+                    printf(' Already {}'.format(self.LanmodeConvert(lanmode,string=True)),log=self.log,log_level=7)
+                    return self.LanmodeConvert(cur_lan_mode[1],string=True)
                 else:
-                    rc=self.lanmode(mode)
+                    rc=self.Lanmode(lanmode)
                     if rc[0]:
                         printf(' Set to {}'.format(Get(rc,1)),log=self.log,log_level=5)
                         return Get(rc,1)
                     else:
-                        printf(' Can not set to {}'.format(self.lanmode_convert(mode,string=True)),log=self.log,log_level=1)
+                        printf(' Can not set to {}'.format(self.LanmodeConvert(lanmode,string=True)),log=self.log,log_level=1)
         chkd=False
         for mm in Iterable(self.cmd_module):
             name=mm.__name__
@@ -3374,6 +3404,8 @@ class kBmc:
                 self.warn(_type='power',msg="Unknown command({})".format(cmd))
                 return False,'Unknown command({})'.format(cmd)
 
+            if not isinstance(cmd,str): cmd='status'
+            cmd=cmd.lower()
             retry=int(retry)+2
             checked_lanmode=None
             if verify or cmd == 'status':
@@ -3441,8 +3473,8 @@ class kBmc:
                         rr+=1
                         continue
                     # BMC Lan mode Checkup before power on/cycle/reset
-                    if checked_lanmode is None and self.lanmode_convert(lanmode) in [0,1,2] and verify_status in ['on','reset','cycle']:
-                       lanmode_check(lanmode)
+                    if checked_lanmode is None and self.LanmodeConvert(lanmode) in [0,1,2] and verify_status in ['on','reset','cycle']:
+                       LanmodeCheck(lanmode)
 
                     if verify_status in ['reset','cycle']:
                          if init_status == 'off':
@@ -3488,7 +3520,7 @@ class kBmc:
                                 # It need new line for the next command
                                 printf(self.power_on_tag,no_intro=True,log=self.log,log_level=1)
                             else: # chk >= verify_num
-                                printf(self.power_on_tag,no_intro=True,log=self.log,log_level=1)
+                                if end_newline: printf(self.power_on_tag,no_intro=True,log=self.log,log_level=1)
                                 return True,'on'
                         elif IsIn(Get(Split(is_up[1],'-'),-1),['down','off']) and not chkd:
                             high_temp=None
@@ -3539,13 +3571,17 @@ class kBmc:
                         if is_down[0]:
                             kfut=TIME().Int() # keep fail up time
                             if chk == len(mm.power_mode[cmd]):
-                                printf(self.power_off_tag,no_intro=True,log=self.log,log_level=1)
+                                if end_newline: printf(self.power_off_tag,no_intro=True,log=self.log,log_level=1)
                                 return True,'off'
                             if chk < verify_num:
                                 # It need new line for the next command
-                                printf(self.power_off_tag,no_intro=True,log=self.log,log_level=1)
+                                if isinstance(off_on_interval,int) and off_on_interval > 0 :
+                                    printf('{} (Wait Interval-Time to ON({}s)...'.format(self.power_off_tag,off_on_interval),no_intro=True,log=self.log,log_level=1)
+                                    time.sleep(off_on_interval)
+                                else:
+                                    printf(self.power_off_tag,no_intro=True,log=self.log,log_level=1)
                             else: # chk >= verify_num
-                                printf(self.power_off_tag,no_intro=True,log=self.log,log_level=1)
+                                if end_newline: printf(self.power_off_tag,no_intro=True,log=self.log,log_level=1)
                                 return True,'off'
                         elif IsIn(Get(Split(is_down[1],'-'),-1),['up','on']) and not chkd:
                             pre_msg=' - Suddenly on' if IsIn(Get(Split(is_up[1],'-'),-2),['off','down']) else ' - Keep on(never off)'
@@ -3599,7 +3635,7 @@ class kBmc:
                                     printf(self.power_unknown_tag,direct=True,log=self.log,log_level=1)
                                 time.sleep(2)
                             continue
-                    printf(self.power_on_tag if verify_status== 'on' else self.power_off_tag ,no_intro=True,log=self.log,log_level=1)
+                    if end_newline: printf(self.power_on_tag if verify_status== 'on' else self.power_off_tag ,no_intro=True,log=self.log,log_level=1)
                     #return True,Get(Get(rc,1),1)
                     return True,rc_msg
             #can not verify then try with next command
@@ -3610,39 +3646,39 @@ class kBmc:
             return False,'It looks BMC issue. (Need reset the physical power)'
         return False,'time out'
 
-    def lanmode_convert(self,mode=None,string=False):
-        if isinstance(mode,str):
-            if mode.lower() in ['dedicate','dedicated','0']:
-                mode=0
-            elif mode.lower() in ['share','shared','onboard','1']:
-                mode=1
-            elif mode.lower() in ['failover','ha','2']:
-                mode=2
-        if string:
-            if mode == 0:
+    def LanmodeConvert(self,lanmode=None,string=False):
+        if isinstance(lanmode,str): lanmode=lanmode.lower()
+        if lanmode in ['dedicate','dedicated','0',0]:
+            lanmode=0
+        elif lanmode in ['share','shared','onboard','1',1]:
+            lanmode=1
+        elif lanmode in ['failover','ha','2',2]:
+            lanmode=2
+        if string: #convert to string
+            if lanmode == 0:
                 return 'Dedicated'
-            elif mode == 1:
+            elif lanmode == 1:
                 return 'Shared'
-            elif mode == 2:
+            elif lanmode == 2:
                 return 'Failover'
             else:
                 return 'Unknown'
         else:
-            return mode
+            return lanmode
 
-    def lanmode(self,mode=None):
+    def Lanmode(self,lanmode=None):
         mm,msg=self.get_cmd_module_name('smc')
         if not mm:
             return False,msg
-        if self.lanmode_convert(mode) in [0,1,2]:
-            rc=self.run_cmd(mm.cmd_str("""ipmi oem lani {}""".format(self.lanmode_convert(mode)),passwd=self.passwd),timeout=5)
+        if self.LanmodeConvert(lanmode) in [0,1,2]:
+            rc=self.run_cmd(mm.cmd_str("""ipmi oem lani {}""".format(self.LanmodeConvert(lanmode)),passwd=self.passwd),timeout=5)
             if krc(rc,chk=True):
-                return True,self.lanmode_convert(mode,string=True)
+                return True,self.LanmodeConvert(lanmode,string=True)
             return rc
         else:
             rc=self.run_cmd(mm.cmd_str("""ipmi oem lani""",passwd=self.passwd))
             if krc(rc,chk=True):
-                if mode in ['info','support']:
+                if IsIn(lanmode,['info','support']):
                     return True,Get(Get(rc,1),1)
                 else:
                     a=FIND(rc[1][1]).Find('Current LAN interface is \[ (\w.*) \]')
@@ -4037,6 +4073,7 @@ class kBmc:
         elif not opts.get('cancel_args'):
             opts['cancel_args']=self.cancel_args
         opts['count']=1
+        opts['log_format']='i'
         sping=ping(host,**opts)
         if sping:
             if isinstance(self.error,dict):
@@ -4072,7 +4109,7 @@ class kBmc:
 # bmc.bootorder()
 # bmc.summary()
 # bmc.is_admin_user()
-# bmc.lanmode()
+# bmc.Lanmode()
 # bmc.__dict__
 # bmc.get_mac()
 # bmc.get_eth_mac()
