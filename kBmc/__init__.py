@@ -116,23 +116,26 @@ class Redfish:
                 'PsuCount':'Chassis/1/Power',
                 'BootOption':'Systems/1/BootOptions',
             }
-        self.timeout=opts.get('timeout',1800)
-        self.cancel_func=opts.get('cancel_func',opts.get('stop_func',None))
-        self.cancel_args=opts.get('cancel_args',opts.get('stop_args',{}))
-        if not isinstance(self.cancel_args,dict): self.cancel_args={}
         self.bmc=opts.get('bmc')
-        if self.bmc:
-            self.user=self.bmc.__dict__['user'] 
+        if isinstance(self.bmc,kBmc):
+            self.user=self.bmc.__dict__['user']
             self.passwd=self.bmc.__dict__['passwd']
             self.host=self.bmc.__dict__['ip']
-            self.pxe_boot_mac=self.bmc.__dict__['eth_mac']
-            self.log=opts.get('log',self.bmc.__dict__['log'])
+            self.pxe_boot_mac=self.bmc.__dict__.get('eth_mac',opts.get('pxe_boot_mac',opts.get('eth_mac')))
+            self.log=opts.get('log',self.bmc.__dict__.get('log'))
+            self.timeout=opts.get('timeout',Int(self.bmc.__dict__.get('timeout'),1800))
+            self.cancel_func=opts.get('cancel_func',opts.get('stop_func',self.bmc.__dict__.get('cancel_func',None)))
+            self.cancel_args=opts.get('cancel_args',opts.get('stop_args',self.bmc.__dict__.get('cancel_args',{})))
         else:
             self.user=opts.get('user','ADMIN')
             self.passwd=opts.get('passwd','ADMIN')
             self.host=opts.get('host',opts.get('ip'))
-            self.pxe_boot_mac=opts.get('pxe_boot_mac')
+            self.pxe_boot_mac=opts.get('pxe_boot_mac',opts.get('eth_mac'))
             self.log=opts.get('log',None)
+            self.timeout=Int(opts.get('timeout'),1800)
+            self.cancel_func=opts.get('cancel_func',opts.get('stop_func',None))
+            self.cancel_args=opts.get('cancel_args',opts.get('stop_args',{}))
+        if not isinstance(self.cancel_args,dict): self.cancel_args={}
 
     def Cmd(self,cmd,host=None):
         if not host: host=self.host
@@ -148,14 +151,17 @@ class Redfish:
             return "https://{}/redfish/v1/{}".format(host,cmd)
 
     def Get(self,cmd,host=None):
-        if not isinstance(cmd,str): return False
+        if not isinstance(cmd,str) or not cmd: return False
         if not host: host=self.host
-        if not ping(host,timeout=1800,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log):
-            printf("ERROR: Can not access the ip({}) over 30min.".format(host),log=self.log)
-            return False,"ERROR: Can not access the ip({}) over 30min.".format(host)
+        if not IpV4(host):
+            printf("ERROR: Wrong IP({}) format".format(host),log=self.log)
+            return False,"ERROR: Wrong IP({}) format".format(host)
+        if not ping(host,timeout=600,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log,log_format='d'):
+            printf("ERROR: Can not access the ip({}) over 10min.".format(host),log=self.log)
+            return False,"ERROR: Can not access the ip({}) over 10min.".format(host)
         err_msg='Redfish Request Error'
         for i in range(0,2):
-            data = WEB().Request(self.Cmd(cmd,host=host),auth=(self.user, self.passwd))
+            data = WEB().Request(self.Cmd(cmd,host=host),auth=(self.user, self.passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=self.log)
             if data[0]:
                 if data[1].status_code == 200:
                     try:
@@ -1621,15 +1627,14 @@ class kBmc:
         self.power_get_sensor=opts.get('power_get_sensor',True)
         self.power_get_tools=opts.get('power_get_tools',True)
 
-    def CallRedfish(self,force=False,check=True,no_ipmitool=False,detail_log=False,timeout=None):
+    def CallRedfish(self,force=False,check=True,no_ipmitool=False,detail_log=False,timeout=None,keep_ping=0):
         if self.redfish or force:
             if force or check:
                 # when it called from here and there. So too much logging
                 if detail_log: printf("Check IP Address",log=self.log,log_level=1,dsp='d')
-                ip=self.mac2ip(self.mac) if self.mac2ip and self.checked_ip is False and MacV4(self.mac) else '{}'.format(self.ip)
+                ip=self.mac2ip(self.mac) if IsFunction(self.mac2ip) and self.checked_ip is False and MacV4(self.mac) else '{}'.format(self.ip)
                 if detail_log: printf("Check Ping to the IP({}):".format(ip),log=self.log,log_level=1,dsp='d',end='')
-                #ping_rc=ping(ip,keep_good=0,timeout=timeout if IsInt(timeout) else self.timeout,log=self.log,cancel_func=self.cancel_func)
-                ping_rc=self.Ping(host=ip,keep_good=0,timeout=timeout if IsInt(timeout) else self.timeout,log=self.log)
+                ping_rc=self.Ping(host=ip,keep_good=Int(keep_ping,0),timeout=Int(timeout,self.timeout),log=self.log)
                 if ping_rc is True:
                     self.checked_ip=True
                     cc=False
@@ -1640,20 +1645,21 @@ class kBmc:
                         printf(".",log=self.log,direct=True)
                         time.sleep(3)
                     if cc is False:
-                    #if not IpV4(ip,port=self.port):
                         printf('.',no_intro=True,log=self.log)
                         self.error(_type='ip',msg="{} is not IPMI IP(1)".format(ip))
                         printf("{} is not IPMI IP(1)".format(ip),log=self.log,log_level=1,dsp='e')
                         return False
                     ok=False
                     if not no_ipmitool:
-
+                        if detail_log: printf("Check User/Password with IPMITOOL",log=self.log,log_level=1,dsp='d',end='')
                         ok,user,passwd=self.find_user_pass(ip,no_redfish=True)
                         if ok is False:
                             printf("Can not find working user and password",log=self.log,log_level=1,dsp='e')
                             return False
+                    if detail_log: printf("Call Redfish",log=self.log,log_level=1,dsp='d',end='')
                     rf=Redfish(bmc=self)
-                    if krc(rf.Get('/Systems'),chk=True):
+                    rf_system=rf.Get('/Systems')
+                    if krc(rf_system,chk=True):
                         return rf
                     printf("Maybe not support redfish on this system",log=self.log,log_level=1,dsp='d')
                     return False
@@ -1662,8 +1668,10 @@ class kBmc:
                     self.error(_type='net',msg="Can not ping to {}".format(ip))
                     return False
             else:
+                if detail_log: printf("directly call Redfish without check",log=self.log,log_level=1,dsp='d')
                 return Redfish(bmc=self)
         #Not support redfish
+        if detail_log: printf("Not support redfish and not force check redfish",log=self.log,log_level=1,dsp='d')
         return False
 
     def SystemReadyState(self,cmd_str,name,ipmitoolonly=False):
@@ -2369,16 +2377,17 @@ class kBmc:
                 for uu in test_user:
                     #If user is None then skip
                     if IsNone(uu): continue
-                    for pp in test_pass_sample:
+                    pp=0
+                    while pp < len(test_pass_sample):
                         #If password is None then skip
-                        if IsNone(pp): continue
+                        if IsNone(test_pass_sample[pp]): continue
                         #Check ping first before try password
                         #ping_rc=ping(ip,keep_good=0,timeout=self.timeout,log=self.log,cancel_func=cancel_func) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
-                        ping_rc=self.Ping(host=ip,keep_good=0,timeout=self.timeout,log=self.log,cancel_func=cancel_func,cancel_args=cancel_args) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
+                        ping_rc=self.Ping(host=ip,keep_good=0,timeout=300,log=self.log,cancel_func=cancel_func,cancel_args=cancel_args) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
                         if ping_rc is True:
-                            tested_user_pass.append((uu,pp))
-                            cmd_str=mm.cmd_str(check_cmd,passwd=pp)
-                            full_str=cmd_str[1]['base'].format(ip=ip,user=uu,passwd=pp)+' '+cmd_str[1]['cmd']
+                            tested_user_pass.append((uu,test_pass_sample[pp]))
+                            cmd_str=mm.cmd_str(check_cmd,passwd=test_pass_sample[pp])
+                            full_str=cmd_str[1]['base'].format(ip=ip,user=uu,passwd=test_pass_sample[pp])+' '+cmd_str[1]['cmd']
                             rc=rshell(full_str)
                             chk_user_pass=False
                             if rc[0] in cmd_str[3]['ok']:
@@ -2399,11 +2408,11 @@ class kBmc:
                                     printf('.',log=self.log,no_intro=True)
                                     printf("""[BMC]Found New User({})""".format(uu),log=self.log,log_level=3)
                                     self.user=uu
-                                if self.passwd != pp: #If changed password
+                                if self.passwd != test_pass_sample[pp]: #If changed password
                                     printf('.',log=self.log,no_intro=True)
-                                    printf("""[BMC]Found New Password({})""".format(pp),log=self.log,log_level=3)
-                                    self.passwd=pp
-                                return True,uu,pp
+                                    printf("""[BMC]Found New Password({})""".format(test_pass_sample[pp]),log=self.log,log_level=3)
+                                    self.passwd=test_pass_sample[pp]
+                                return True,uu,test_pass_sample[pp]
                             else:
                                 #If not found current password then try next
                                 if not print_msg:
@@ -2411,19 +2420,26 @@ class kBmc:
                                     print_msg=True
                                 if self.log_level < 7 and not trace:
                                     printf("""p""",log=self.log,direct=True,log_level=3)
-                                    printf("""({}/{})""".format(uu,pp),no_intro=False if dbg_mode > 1 else True,start_newline=True if dbg_mode > 1 else False,log=self.log,mode='d')
+                                    printf("""({}/{})""".format(uu,test_pass_sample[pp]),no_intro=False if dbg_mode > 1 else True,start_newline=True if dbg_mode > 1 else False,log=self.log,mode='d')
                                 else:
                                     printf('.',log=self.log,no_intro=True)
-                                    printf("""Try BMC User({}) and password({}), But failed. test next one""".format(uu,pp),no_intro=True,log=self.log,log_level=3)
+                                    printf("""Try BMC User({}) and password({}), But failed. test next one""".format(uu,test_pass_sample[pp]),no_intro=True,log=self.log,log_level=3)
                                 time.sleep(1) # make to some slow check for BMC locking
                                 #time.sleep(0.4)
                                 dbg_mode+=1
                         else:
+                            printf("""Can not ping to the destination IP({}). So check over 30min to stable ping (over 30seconds)""".format(ip),log=self.log,log_level=1,dsp='d')
+                            ping_rc=self.Ping(host=ip,keep_good=30,timeout=1800,log=self.log,cancel_func=cancel_func,cancel_args=cancel_args) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
+                            if ping_rc:
+                                # Comeback ping
+                                # Try again with same password
+                                continue
                             # Ping error or timeout
                             printf("""WARN: Can not ping to the destination IP({})""".format(ip),log=self.log,log_level=1,dsp='w')
                             if error:
                                 self.error(_type='net',msg="Can not ping to the destination IP({})".format(ip))
                             return False,None,None
+                        pp+=1
                     if self.log_level < 7 and not trace:
                         printf("""u""",log=self.log,direct=True,log_level=3)
                     #maybe reduce affect to BMC
@@ -4074,19 +4090,19 @@ class kBmc:
             opts['cancel_args']=self.cancel_args
         opts['count']=1
         opts['log_format']='i'
-        sping=ping(host,**opts)
-        if sping:
-            if isinstance(self.error,dict):
+        sping=ping(host,**opts) #check simple network (1 time ping check) for speed up check network
+        if sping: 
+            if isinstance(self.error,dict): #pinging now So remove network error when previously it has error
                 if 'net' in self.error:
                     self.error.pop('net')
             return True
-        else:
-            if 'timeout' not in opts: opts['timeout']=1200
-            if 'count' in opts: opts.pop('count')
-            printf(' Check network of IP({}) (timeout:{})'.format(host,opts.get('timeout',1200)),log=self.log,log_level=4,dsp='f')
+        else: # if failed simple network check then 
+            opts['timeout']=Int(opts.get('timeout'),1200)
+            if 'count' in opts: opts.pop('count') # remove count for check timeout
+            printf(' Check network of IP({}) (timeout:{}s)'.format(host,opts.get('timeout',1200)),log=self.log,log_level=4,dsp='f')
             prc=ping(host,**opts)
             if prc:
-                if isinstance(self.error,dict):
+                if isinstance(self.error,dict): #pinging now So remove network error when previously it has error
                     if 'net' in self.error:
                         self.error.pop('net')
             return prc
