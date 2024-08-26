@@ -2371,8 +2371,9 @@ class kBmc:
                     #test_pass_sample=self.test_passwd[:default_range]
                     test_pass_sample=test_passwd[:default_range]
                 else:
-                    #test_pass_sample=self.test_passwd[default_range:]
-                    test_pass_sample=test_passwd[default_range*t:default_range*(t+1)]
+                    # If checkup error right password at initial time, So, keep try again the last possible passwords
+                    # because, OpenBMC case, some slow after power reset. So failed with right password (sometimes)
+                    test_pass_sample=[self.passwd,self.org_passwd,self.default_passwd,self.upasswd]+test_passwd[default_range*t:default_range*(t+1)]
                 # Two times check for uniq,current,temporary password
                 for uu in test_user:
                     #If user is None then skip
