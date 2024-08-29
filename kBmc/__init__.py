@@ -3717,8 +3717,10 @@ class kBmc:
         if _type and (msg or clear):
             if clear:
                 if _type in self.err:
+                    printf('Remove {} ERROR'.format(_type),log=self.log,dsp='d')
                     self.err.pop(_type)
             else:
+                printf('Mark {} ERROR : {}'.format(_type,msg),log=self.log,dsp='d')
                 caller_name=FunctionName(parent=2)
                 caller_name='{}() : '.format(caller_name) if isinstance(caller_name,str) else ''
                 msg='{}{}'.format(caller_name,msg)
