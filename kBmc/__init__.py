@@ -505,6 +505,7 @@ class Redfish:
             mot=TIME()
             ok=None
             for i in range(0,retry):
+                #/redfish/v1/Systems/1 -> Actions -> #ComputerSystem.Reset
                 aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': rf_power_json_cmd(cmd)})
                 if aa is 0: # ERROR. STOP
                     return False
