@@ -507,7 +507,7 @@ class Redfish:
             for i in range(0,retry):
                 #/redfish/v1/Systems/1 -> Actions -> #ComputerSystem.Reset
                 aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': rf_power_json_cmd(cmd)})
-                if aa is 0: # ERROR. STOP
+                if IsInt(aa,mode=int) and aa == 0: # ERROR. STOP
                     return False
                 elif aa is False: # Retry
                     ok=False #error
@@ -1633,41 +1633,46 @@ class kBmc:
             if force or check:
                 # when it called from here and there. So too much logging
                 if detail_log: printf("Check IP Address",log=self.log,log_level=1,dsp='d')
+                # Get IP
                 ip=self.mac2ip(self.mac) if IsFunction(self.mac2ip) and self.checked_ip is False and MacV4(self.mac) else '{}'.format(self.ip)
                 if detail_log: printf("Check Ping to the IP({}):".format(ip),log=self.log,log_level=1,dsp='d',end='')
+                # Check ping
                 ping_rc=self.Ping(host=ip,keep_good=Int(keep_ping,0),timeout=Int(timeout,self.timeout),log=self.log)
-                if ping_rc is True:
-                    self.checked_ip=True
-                    cc=False
-                    for i in range(0,10):
-                        if IpV4(ip,port=self.port):
-                            cc=True
-                            break
-                        printf(".",log=self.log,direct=True)
-                        time.sleep(3)
-                    if cc is False:
-                        printf('.',no_intro=True,log=self.log)
-                        self.error(_type='ip',msg="{} is not IPMI IP(1)".format(ip))
-                        printf("{} is not IPMI IP(1)".format(ip),log=self.log,log_level=1,dsp='e')
+                if not ping_rc:
+                    err_msg="Can not ping to {} from {} over {}sec".format(ip,IpV4('my_ip'),Int(timeout,self.timeout))
+                    printf(err_msg,log=self.log,log_level=1,dsp='e')
+                    self.error(_type='net',msg=err_msg)
+                    return False
+                self.checked_ip=True
+                # Check IP is BMC or not
+                cc=False
+                for i in range(0,10):
+                    if IpV4(ip,port=self.port):
+                        cc=True
+                        break
+                    printf(".",log=self.log,direct=True)
+                    time.sleep(3)
+                if cc is False:
+                    printf('.',no_intro=True,log=self.log)
+                    self.error(_type='ip',msg="{} is not BMC IP".format(ip))
+                    return False
+                ok=False
+                if not no_ipmitool:
+                    # Check BMC User/Password
+                    if detail_log: printf("Check User/Password with IPMITOOL",log=self.log,log_level=1,dsp='d',end='')
+                    ok,user,passwd=self.find_user_pass(ip,no_redfish=True)
+                    if ok is False:
+                        printf("Can not find working user and password",log=self.log,log_level=1,dsp='e')
                         return False
-                    ok=False
-                    if not no_ipmitool:
-                        if detail_log: printf("Check User/Password with IPMITOOL",log=self.log,log_level=1,dsp='d',end='')
-                        ok,user,passwd=self.find_user_pass(ip,no_redfish=True)
-                        if ok is False:
-                            printf("Can not find working user and password",log=self.log,log_level=1,dsp='e')
-                            return False
-                    if detail_log: printf("Call Redfish",log=self.log,log_level=1,dsp='d',end='')
-                    rf=Redfish(bmc=self)
-                    rf_system=rf.Get('/Systems')
-                    if krc(rf_system,chk=True):
-                        return rf
-                    printf("Maybe not support redfish on this system",log=self.log,log_level=1,dsp='d')
-                    return False
-                else:
-                    printf("Can not ping to {}".format(ip),log=self.log,log_level=1,dsp='e')
-                    self.error(_type='net',msg="Can not ping to {}".format(ip))
-                    return False
+                if detail_log: printf("Call Redfish",log=self.log,log_level=1,dsp='d',end='')
+                # Define Redfish
+                rf=Redfish(bmc=self)
+                # Call Simple command of Redfish
+                rf_system=rf.Get('/Systems')
+                if krc(rf_system,chk=True):
+                    return rf
+                printf("Maybe not support redfish on this system",log=self.log,log_level=1,dsp='d')
+                return False
             else:
                 if detail_log: printf("directly call Redfish without check",log=self.log,log_level=1,dsp='d')
                 return Redfish(bmc=self)
@@ -1781,6 +1786,7 @@ class kBmc:
         timeout=Int(opts.get('timeout'),1800)
         reset_after_unknown=Int(opts.get('reset_after_unknown'),0)
         sensor_off_time=Int(opts.get('sensor_off_time',opts.get('sensor_on')),600)
+        wait_on_for_up=Int(opts.get('wait_up'),180)
         mode=opts.get('mode','a')
         info=opts.get('info',False)
         # monitoring_state= list or string with comma (monitoring each state step)
@@ -1914,6 +1920,7 @@ class kBmc:
         before_power_state=None
         right_start_on=20
         right_start_off=20
+        Time.Reset(name='wait_up')
         while True:
             data['count']+=1
             #if started then keep reduce remain_time
@@ -1928,6 +1935,10 @@ class kBmc:
                 if status_log:
                     printf('.',no_intro=True,log=self.log,log_level=1)
                 return
+            if not data.get('start'): # not start tag then wait
+                #printf(',',no_intro=True,log=self.log,mode='d')
+                time.sleep(1)
+                continue
             elif data.get('stop') is True:
                 data['done']={TIME().Int():'Got STOP Signal during monitor {}{}'.format('_'.join(data['monitoring']),ss)}
                 data['done_reason']='stop'
@@ -1939,9 +1950,6 @@ class kBmc:
                 data['symbol']='x'
                 time.sleep(3)
                 continue
-            elif not data.get('start'): # not start tag then wait
-                time.sleep(1)
-                continue
             #elif not 'start' in data.get('init',{}) and data.get('start') is True:
             elif not data.get('init',{}).get('start',{}).get('status'): # not real started then check
                 #Start monitoring initialize data (time, status)
@@ -1952,9 +1960,11 @@ class kBmc:
                 #minimum ipmitool and sensor data is on or off or ipmitool and redfish data is on or off
                 #or all off or on
                 if 'up' in curr_power_status[0:2]: #if up state in temp and redfish
-                    data['symbol']=self.power_up_tag 
-                    time.sleep(3)
-                    continue # wait until right initial state (on/off)
+                    if not Time.Out(wait_on_for_up,name='wait_up'): #waiting (time out) for on when initial state has 'up' 
+                        data['symbol']=self.power_up_tag 
+                        time.sleep(3)
+                        continue # wait until right initial state (on/off)
+                    #Timeout for 'up' state. So, it will keep monitoring with 'up' state in start condition. This will understand to on
                 elif curr_power_status.count('off') == 0:
                     if curr_power_status.count('on') < 3 :
                         if right_start_on < 0: #check keep 60 seconds error/unknown or not
@@ -3704,7 +3714,7 @@ class kBmc:
                         return True,a[0]
             return False,None
 
-    def error(self,_type=None,msg=None,clear=False,_type_output=None):
+    def error(self,_type=None,msg=None,clear=False,_type_output=None,log_mode='d'):
         # _type:
         #  ip : ip address issue (format, port issue)
         #  net : network issue (can't ping, can not access, ...)
@@ -3718,10 +3728,10 @@ class kBmc:
         if _type and (msg or clear):
             if clear:
                 if _type in self.err:
-                    printf('Remove {} ERROR'.format(_type),log=self.log,dsp='d')
+                    printf("Remove '{}' from ERROR".format(_type),log=self.log,dsp=log_mode)
                     self.err.pop(_type)
             else:
-                printf('Mark {} ERROR : {}'.format(_type,msg),log=self.log,dsp='d')
+                printf("Mark '{}' to ERROR : {}".format(_type,msg),log=self.log,dsp=log_mode)
                 caller_name=FunctionName(parent=2)
                 caller_name='{}() : '.format(caller_name) if isinstance(caller_name,str) else ''
                 msg='{}{}'.format(caller_name,msg)
@@ -3741,11 +3751,12 @@ class kBmc:
                     return True,get_msg
                 return False,None
 
-    def warn(self,_type=None,msg=None):
+    def warn(self,_type=None,msg=None,log_mode='d'):
         if _type and msg:
             caller_name=FunctionName(parent=2)
             caller_name='{}() : '.format(caller_name) if isinstance(caller_name,str) else ''
             msg='{}{}'.format(caller_name,msg)
+            printf("Mark '{}' to WARN : {}".format(_type,msg),log=self.log,dsp=log_mode)
             if _type in self.warning:
                 self.warning[_type][TIME().Int()]=msg
             else:
@@ -3759,7 +3770,7 @@ class kBmc:
                 if get_msg: return True,get_msg
                 return False,None
 
-    def cancel(self,cancel_func=None,msg=None,log=None,log_level=1,parent=2,task_all_stop=True,cancel_args={}):
+    def cancel(self,cancel_func=None,msg=None,log=None,log_level=1,log_mode='s',parent=2,task_all_stop=True,cancel_args={}):
         #task_all_stop : True, stop kBMc all, False, Only check current step for cancel() 
         if cancel_func is None: cancel_func=self.cancel_func
         if log is None: log=self.log
@@ -3775,7 +3786,7 @@ class kBmc:
                     msg='{}{}'.format(caller_name,msg)
                 else:
                     msg='{}Got Cancel Signal'.format(caller_name)
-                printf(msg,log=log,log_level=log_level)
+                printf(msg,log=log,log_level=log_level,mode=log_mode)
                 if task_all_stop:
                     self.canceling[TIME().Int()]=msg
                 return True
