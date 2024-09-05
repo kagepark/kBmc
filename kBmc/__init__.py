@@ -504,12 +504,24 @@ class Redfish:
             mt=TIME()
             mot=TIME()
             ok=None
+            rf_cmd=rf_power_json_cmd(cmd)
+            rf_cmd_info=self.Get('/Systems/1/ResetActionInfo')
+            if rf_cmd_info[0] and isinstance(rf_cmd_info[1],dict):
+                parameters=rf_cmd_info[1].get('Parameters')
+                if parameters and isinstance(parameters[0],dict):
+                    if rf_cmd not in parameters[0].get('AllowableValues'):
+                        printf('Command({} from {}) not support on this Redfish'.format(rf_cmd,cmd),log=self.log,mode='d')
+                        return False
             for i in range(0,retry):
                 #/redfish/v1/Systems/1 -> Actions -> #ComputerSystem.Reset
-                aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': rf_power_json_cmd(cmd)})
+                aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': rf_cmd})
                 if IsInt(aa,mode=int) and aa == 0: # ERROR. STOP
-                    return False
-                elif aa is False: # Retry
+                    #Try again without Action parameter (OpenBMC not required???)
+                    printf('Try again {} without Action parameter'.format(rf_cmd),log=self.log,mode='d')
+                    aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'ResetType': rf_cmd})
+                    if IsInt(aa,mode=int) and aa == 0: # ERROR. STOP
+                        return False
+                if aa is False: # Retry
                     ok=False #error
                     printf('.',log=self.log,direct=True,log_level=1)
                     time.sleep(5)
@@ -538,7 +550,14 @@ class Redfish:
                     elif IsIn(cmd,['reset','cycle','reboot','restart','ForceRestart']) and cps == 'off':
                         #If reset command didn't power on after off then manually power on again
                         if mot.Out(60):
-                            self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': rf_power_json_cmd('on')})
+                            rf_on_cmd=rf_power_json_cmd('on')
+                            aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': rf_on_cmd})
+                            if IsInt(aa,mode=int) and aa == 0: # ERROR. STOP
+                                #Try again without Action parameter (OpenBMC not required???)
+                                printf('Try again {} without Action parameter'.format(rf_on_cmd),log=self.log,mode='d')
+                                aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'ResetType': rf_on_cmd})
+                                if IsInt(aa,mode=int) and aa == 0: # ERROR. STOP
+                                    return False
                             mot.Reset()
                     printf('.',log=self.log,direct=True,log_level=1)
                     time.sleep(5)
@@ -1503,7 +1522,7 @@ class Redfish:
     def ConsoleInfo(self):
         aa=self.Get('Systems/1')
         out={}
-        if aa[0] is instance(aa[1],dict):
+        if aa[0] and isinstance(aa[1],dict):
             for ii in Iterable(aa[1].get('SerialConsole')):
                 if ii not in out: out[ii]={}
                 if isinstance(aa[1]['SerialConsole'][ii],(dict,list)):
