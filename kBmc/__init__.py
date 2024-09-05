@@ -1537,14 +1537,16 @@ class Redfish:
         return out
 
     def McResetCold(self,keep_on=30):
+        printf("""Reset BMC by redfish""",log=self.log,dsp='d')
         rc=self.Post('/Managers/1/Actions/Manager.Reset')
         if rc is True:
              time.sleep(5)
-             printf("""Wait until response from BMC""",log=self.log,log_level=1,dsp='d')
+             printf("""Wait until response from BMC""",log=self.log,dsp='d')
              return ping(self.host,keep_good=keep_on,timeout=self.timeout,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log)
         return rc
 
     def FactoryDefault(self,keep_on=30):
+        printf("""Reset BMC to Factory Default by redfish""",log=self.log,dsp='d')
         rc=self.Post('/Managers/1/Actions/Oem/SmcManagerConfig.Reset')
         if rc is True:
             time.sleep(5)
@@ -1552,6 +1554,7 @@ class Redfish:
         return rc
 
     def LoadDefaultBios(self,keep_on=30): #Good
+        printf("""Load Default BIOS by redfish""",log=self.log,dsp='d')
         rc=self.Post('/Systems/1/Bios/Actions/Bios.ResetBios')
         if rc is True:
             time.sleep(5)
@@ -2387,28 +2390,21 @@ class kBmc:
             for i in Iterable(extra_test_user):
                 if i not in test_user: test_user.append(i)
         test_passwd=self.test_passwd[:]
-        if 'ADMIN' in test_passwd:
-            test_passwd=MoveData(test_passwd,'ADMIN',to='first')
-        else:
-            test_passwd=['ADMIN']+test_passwd
-        if extra_test_pass and isinstance(extra_test_pass,list):
-            for i in Iterable(extra_test_pass):
-                if i not in test_passwd: test_passwd.append(i)
-#        test_passwd=MoveData(test_passwd,test_passwd[-1],to='first') # move last one
+        for i in Iterable(extra_test_pass):
+            if i not in test_passwd: test_passwd.append(i)
+        for i in Iterable(failed_passwd): # Append base password
+            test_passwd=MoveData(test_passwd,failed_passwd,to='last') # move failed passwd to last
+        for i in Iterable(self.base_passwd): # Append base password
+            test_passwd=MoveData(test_passwd,i,to='first')
         if self.upasswd: test_passwd=MoveData(test_passwd,self.upasswd,to='first') # move uniq passwd
         if self.org_passwd: test_passwd=MoveData(test_passwd,self.org_passwd,to='first') # move original passwd
         if self.default_passwd:
-            if self.default_passwd not in test_passwd:
-                test_passwd=[self.default_passwd]+test_passwd
-            else:
-                test_passwd=MoveData(test_passwd,self.default_passwd,to='first')
+            test_passwd=MoveData(test_passwd,self.default_passwd,to='first')
         test_passwd=MoveData(test_passwd,self.passwd,to='first') # move current passwd
+        test_passwd=MoveData(test_passwd,'ADMIN',to='first')
         if isinstance(first_passwd,str) and first_passwd:
             test_passwd=MoveData(test_passwd,first_passwd,to='first') # move current passwd
-        for i in Iterable(self.base_passwd): # Append base password
-            if i not in test_passwd: test_passwd.append(i)
-        if failed_passwd:
-            test_passwd=MoveData(test_passwd,failed_passwd,to='last') # move failed passwd to last
+        test_passwd=Uniq(test_passwd)
         tt=1
         #if len(self.test_passwd) > default_range: tt=2
         tt=(len(test_passwd) // default_range) + 1
@@ -2418,14 +2414,15 @@ class kBmc:
 
         for mm in Iterable(self.cmd_module):
             for t in range(0,tt):
-                #printf("""Try with module {} (password section:{})""".format(mm.__name__,t),log=self.log,mode='d',no_intro=True)
                 if t == 0:
-                    #test_pass_sample=self.test_passwd[:default_range]
                     test_pass_sample=test_passwd[:default_range]
                 else:
                     # If checkup error right password at initial time, So, keep try again the last possible passwords
                     # because, OpenBMC case, some slow after power reset. So failed with right password (sometimes)
-                    test_pass_sample=[self.passwd,self.org_passwd,self.default_passwd,self.upasswd]+test_passwd[default_range*t:default_range*(t+1)]
+                    test_pass_sample=MoveData(test_passwd[default_range*t:default_range*(t+1)],self.upasswd,to='first') # move uniq passwd
+                    test_pass_sample=MoveData(test_pass_sample,self.default_passwd,to='first') # move default passwd
+                    test_pass_sample=MoveData(test_pass_sample,self.org_passwd,to='first') # move original passwd
+                    test_pass_sample=MoveData(test_pass_sample,self.passwd,to='first') # move current passwd
                 # Two times check for uniq,current,temporary password
                 for uu in test_user:
                     #If user is None then skip
@@ -2435,7 +2432,6 @@ class kBmc:
                         #If password is None then skip
                         if IsNone(test_pass_sample[pp]): continue
                         #Check ping first before try password
-                        #ping_rc=ping(ip,keep_good=0,timeout=self.timeout,log=self.log,cancel_func=cancel_func) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
                         ping_rc=self.Ping(host=ip,keep_good=0,timeout=300,log=self.log,cancel_func=cancel_func,cancel_args=cancel_args) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
                         if ping_rc is True:
                             tested_user_pass.append((uu,test_pass_sample[pp]))
@@ -2471,8 +2467,8 @@ class kBmc:
                                 if not print_msg:
                                     printf("""Check BMC USER and PASSWORD from the POOL:""",end='',log=self.log,log_level=3)
                                     print_msg=True
-                                printf("""p""",log=self.log,direct=True,log_level=3)
-                                printf("""Try with {} {}""".format(uu,test_pass_sample[pp]),no_intro=None,log=self.log,dsp='d')
+                                printf("""p""",log=self.log,direct=True,log_level=3,dsp='n')
+                                printf('''Try with "{}" and "{}" (Previously result:{})'''.format(uu,test_pass_sample[pp],Get(rc,2)),no_intro=None,log=self.log,dsp='d')
                                 #if self.log_level < 7 and not trace:
                                 #    printf("""p""",log=self.log,direct=True,log_level=3)
                                 #    printf("""({}/{})""".format(uu,test_pass_sample[pp]),no_intro=False if dbg_mode > 1 else True,start_newline=True if dbg_mode > 1 else False,log=self.log,mode='d')
@@ -2500,14 +2496,18 @@ class kBmc:
                     #maybe reduce affect to BMC
                     time.sleep(1)
                 printf("""-Tried with module {} in password section {}/{}""".format(mm.__name__,t,tt),log=self.log,mode='d',no_intro=True)
+        
         #Whole tested but can not find
         # Reset BMC and try again
         printf(""".""",log=self.log,no_intro=True)
         printf("""no_redfish:{}""".format(no_redfish),log=self.log,dsp='d')
-        if not no_redfish:
-            printf("""Try McResetCold and try again, Looks BMC issue""",log=self.log)
+        if not no_redfish and self.redfish:
+            printf("""Try McResetCold by redfish, Looks BMC issue for ipmitool""",log=self.log)
             if self.McResetCold(no_ipmitool=True): # Block Loop
+                printf("""Reset done. Try again searching user/password""",log=self.log)
                 return self.find_user_pass(ip=ip,default_range=default_range,check_cmd=check_cmd,cancel_func=cancel_func,error=error,trace=trace,no_redfish=True)
+            else:
+                printf("""Can not reset the BMC by redfish""",log=self.log)
         printf("""WARN: Can not find working BMC User or password from Password POOL""",log=self.log,log_level=1,dsp='w')
         printf(""" - Password POOL  : {}""".format(test_passwd),log=self.log,dsp='d',no_intro=True)
         printf(""" - Tested Password: {}""".format(tested_user_pass),log=self.log,dsp='d',no_intro=True)
