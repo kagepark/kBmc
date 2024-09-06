@@ -150,31 +150,33 @@ class Redfish:
         else:
             return "https://{}/redfish/v1/{}".format(host,cmd)
 
-    def Get(self,cmd,host=None):
+    def Get(self,cmd,host=None,user=None,passwd=None,auto_search_passwd_in_bmc=True):
         if not isinstance(cmd,str) or not cmd: return False
         if not host: host=self.host
+        if not user: user=self.user
+        if not passwd: passwd=self.passwd
         if not IpV4(host):
             printf("ERROR: Wrong IP({}) format".format(host),log=self.log)
             return False,"ERROR: Wrong IP({}) format".format(host)
         if not ping(host,timeout=600,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log,log_format='d'):
             printf("ERROR: Can not access the ip({}) over 10min.".format(host),log=self.log)
             return False,"ERROR: Can not access the ip({}) over 10min.".format(host)
-        err_msg='Redfish Request Error'
+        #err_msg='Redfish Request Error'
+        data=None
         for i in range(0,2):
-            data = WEB().Request(self.Cmd(cmd,host=host),auth=(self.user, self.passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=self.log)
+            data = WEB().Request(self.Cmd(cmd,host=host),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=self.log)
             if data[0]:
-                if data[1].status_code == 200:
-                    try:
-                        return True,json.loads(data[1].text)
-                    except:
-                        if isinstance(data[1].text,str) and 'unauthorized' in data[1].text:
-                            if self.bmc:
-                                if self.bmc.find_user_pass()[0] is True:
-                                    continue
-                        err_msg=data[1].text
-                        return False,data[1].text
+                #if data[1].status_code == 200:
+                #    try:
+                #        return True,json.loads(data[1].text)
+                #    except:
+                #        if isinstance(data[1].text,str) and 'unauthorized' in data[1].text:
+                #            if auto_search_passwd_in_bmc and self.bmc:
+                #                if self.bmc.find_user_pass()[0] is True:
+                #                    continue
+                #        return False,data[1].text
                 try:
-                    data_dic=json.loads(data[1].text)
+                    data_dic=json.loads(data[1].text) #whatever, it can dictionary then check with dictionary
                     if 'error' in data_dic:
                         err_dic=data_dic.get('error',{})
                         if '@Message.ExtendedInfo' in err_dic:
@@ -184,21 +186,30 @@ class Redfish:
                         else:
                             err_msg=err_dic
                         if isinstance(err_msg,str) and 'unauthorized' in err_msg:
-                            if self.bmc:
+                            if auto_search_passwd_in_bmc and self.bmc:
                                 if self.bmc.find_user_pass()[0] is True:
+                                    user=self.bmc.__dict__.get('user')
+                                    passwd=self.bmc.__dict__.get('passwd')
                                     continue
-                        err_msg=data[1].text
-                        return False, err_msg
+                        return False, data[1].text
+                    if data[1].status_code == 200: #Pass with dictionary
+                        return True, data_dic
+                    return False, data_dic # dictionary but Fail
                 except:
+                    if data[1].status_code == 200: #Pass with string
+                        return True,data[1].text   #return string
                     if isinstance(data[1].text,str) and 'unauthorized' in data[1].text:
-                        if self.bmc:
+                        if auto_search_passwd_in_bmc and self.bmc:
                             if self.bmc.find_user_pass()[0] is True:
+                                user=self.bmc.__dict__.get('user')
+                                passwd=self.bmc.__dict__.get('passwd')
                                 continue
-                    err_msg=data[1].text
-                    return False,err_msg
-        msg='Redfish Request : {}'.format(err_msg)
-        printf(msg,log=self.log,mode='d')
-        return False,msg
+                    return False,data[1].text
+        if data:
+            msg='Redfish Request error:{}'.format(data[1].text)
+            printf(msg,log=self.log,mode='d')
+            return False,msg
+        return False,'Redfish Request ERROR'
 
     def Post(self,cmd,host=None,json=None,data=None,files=None,mode='post',retry=3,patch_reset=False):
         if not host: host=self.host
@@ -1564,6 +1575,42 @@ class Redfish:
     def FactoryDefaultBios(self):
         return LoadDefaultBios()
 
+    def AccountLockoutThreshold(self,count=0): # 0: Not lockout, 3: 3 times failed then lockout account
+        printf("""Set Redfish Account Lockout Threshold""",log=self.log,dsp='d')
+        count_num=Int(count,default=3)
+        account_info=self.Get('AccountService')
+        if account_info[0]:
+            if account_info[1].get('AccountLockoutThreshold') == count_num:
+                printf("""Already same""",log=self.log,dsp='d')
+                return True
+            else:
+                return self.Post('AccountService',json={'AccountLockoutThreshold':count_num},mode='patch')
+        printf("""Not support Account in the Redfish""",log=self.log,dsp='d')
+        return False
+
+    def FindUserPassword(self,test_user=['ADMIN'],test_password=['ADMIN'],split=None): # 0: Not lockout, 3: 3 times failed then lockout account
+        #If you want this function then you should run AccountLockoutThreshold(count=0) before FindUserPassword() for ignore auto locking account
+        test_user=Iterable(test_user,split=split)
+        test_password=Iterable(test_password,split=split)
+        chk=False
+        tested=[]
+        for uu in test_user:
+            for pp in test_password:
+                tested.append((uu,pp))
+                if not chk: printf('Try with "{}" and "{}"'.format(uu,pp),log=self.log,no_intro=None,mode='d')
+                _tmp_=self.Get('Systems/1',user=uu,passwd=pp)
+                chk=True
+                if _tmp_[0]:
+                    printf("Found {}'s new password: {}".format(uu,pp),log=self.log)
+                    return True
+                else:
+                    printf('p',log=self.log,direct=True,mode='n')
+                    printf('Redfish Issue: {}'.format(_tmp_[1]),log=self.log,no_intro=None,mode='d')
+                    time.sleep(1)
+        if tested:
+            printf('Can not found any working user and password in {}'.format(tested),log=self.log)
+            return False
+    
 class kBmc:
     def __init__(self,*inps,**opts):
         self.find_user_passwd_with_redfish=opts.get('find_user_passwd_with_redfish',False)
