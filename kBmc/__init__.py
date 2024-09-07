@@ -528,7 +528,7 @@ class Redfish:
                 aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': rf_cmd})
                 if IsInt(aa,mode=int) and aa == 0: # ERROR. STOP
                     #Try again without Action parameter (OpenBMC not required???)
-                    printf('Try again {} without Action parameter'.format(rf_cmd),log=self.log,mode='d')
+                    printf('Try again({}/{}) {} without Action parameter'.format(i,retry,rf_cmd),log=self.log,mode='d')
                     aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'ResetType': rf_cmd})
                     if IsInt(aa,mode=int) and aa == 0: # ERROR. STOP
                         return False
@@ -1712,35 +1712,29 @@ class kBmc:
                     printf(err_msg,log=self.log,log_level=1,dsp='e')
                     self.error(_type='net',msg=err_msg)
                     return False
-                self.checked_ip=True
-                # Check IP is BMC or not
-                cc=False
-                for i in range(0,10):
-                    if IpV4(ip,port=self.port):
-                        cc=True
-                        break
-                    printf(".",log=self.log,direct=True)
-                    time.sleep(3)
-                if cc is False:
-                    printf('.',no_intro=True,log=self.log)
+                if not IpV4(ip,port=self.port):
+                    printf("{} is not BMC IP".format(ip),log=self.log,log_level=1,dsp='e')
                     self.error(_type='ip',msg="{} is not BMC IP".format(ip))
                     return False
-                ok=False
-                if not no_ipmitool:
-                    # Check BMC User/Password
-                    if detail_log: printf("Check User/Password with IPMITOOL",log=self.log,log_level=1,dsp='d',end='')
+                self.checked_ip=True
+                
+                if detail_log: printf("Call Redfish",log=self.log,log_level=1,dsp='d',end='')
+                for i in range(0,2):
+                    # Define Redfish
+                    rf=Redfish(bmc=self)
+                    # Call Simple command of Redfish
+                    rf_system=rf.Get('/Systems')
+                    if krc(rf_system,chk=True):
+                        return rf
+                    if no_ipmitool: break
+                    # Check BMC User/Password with ipmitool command
+                    if detail_log: printf("Check User/Password with IPMITOOL",log=self.log,log_level=1,dsp='d')
                     ok,user,passwd=self.find_user_pass(ip,no_redfish=True)
                     if ok is False:
                         printf("Can not find working user and password",log=self.log,log_level=1,dsp='e')
                         return False
-                if detail_log: printf("Call Redfish",log=self.log,log_level=1,dsp='d',end='')
-                # Define Redfish
-                rf=Redfish(bmc=self)
-                # Call Simple command of Redfish
-                rf_system=rf.Get('/Systems')
-                if krc(rf_system,chk=True):
-                    return rf
-                printf("Maybe not support redfish on this system",log=self.log,log_level=1,dsp='d')
+                    continue
+                printf("Maybe not support redfish on this system or wrong USER({}) and Password({})".format(self.user,self.passwd),log=self.log,log_level=1,dsp='d')
                 return False
             else:
                 if detail_log: printf("directly call Redfish without check",log=self.log,log_level=1,dsp='d')
@@ -2447,17 +2441,16 @@ class kBmc:
         if self.org_passwd: test_passwd=MoveData(test_passwd,self.org_passwd,to='first') # move original passwd
         if self.default_passwd:
             test_passwd=MoveData(test_passwd,self.default_passwd,to='first')
-        test_passwd=MoveData(test_passwd,self.passwd,to='first') # move current passwd
         test_passwd=MoveData(test_passwd,'ADMIN',to='first')
         if isinstance(first_passwd,str) and first_passwd:
-            test_passwd=MoveData(test_passwd,first_passwd,to='first') # move current passwd
+            test_passwd=MoveData(test_passwd,first_passwd,to='first') # move want first check passwd
         test_passwd=Uniq(test_passwd)
+        test_passwd=MoveData(test_passwd,self.passwd,to='first') # move current passwd
         tt=1
         #if len(self.test_passwd) > default_range: tt=2
         tt=(len(test_passwd) // default_range) + 1
         tested_user_pass=[]
         print_msg=False
-        dbg_mode=0
 
         for mm in Iterable(self.cmd_module):
             for t in range(0,tt):
@@ -2469,7 +2462,7 @@ class kBmc:
                     test_pass_sample=MoveData(test_passwd[default_range*t:default_range*(t+1)],self.upasswd,to='first') # move uniq passwd
                     test_pass_sample=MoveData(test_pass_sample,self.default_passwd,to='first') # move default passwd
                     test_pass_sample=MoveData(test_pass_sample,self.org_passwd,to='first') # move original passwd
-                    test_pass_sample=MoveData(test_pass_sample,self.passwd,to='first') # move current passwd
+                test_pass_sample=MoveData(test_pass_sample,self.passwd,to='first') # move current passwd for make sure
                 # Two times check for uniq,current,temporary password
                 for uu in test_user:
                     #If user is None then skip
@@ -2509,22 +2502,15 @@ class kBmc:
                                     printf("""[BMC]Found New Password({})""".format(test_pass_sample[pp]),log=self.log,log_level=3)
                                     self.passwd=test_pass_sample[pp]
                                 return True,uu,test_pass_sample[pp]
-                            else:
+                            #If it has multi test password then mark to keep testing password
+                            elif len(test_pass_sample) > 1:
                                 #If not found current password then try next
                                 if not print_msg:
                                     printf("""Check BMC USER and PASSWORD from the POOL:""",end='',log=self.log,log_level=3)
                                     print_msg=True
                                 printf("""p""",log=self.log,direct=True,log_level=3,dsp='n')
                                 printf('''Try with "{}" and "{}" (Previously result:{})'''.format(uu,test_pass_sample[pp],Get(rc,2)),no_intro=None,log=self.log,dsp='d')
-                                #if self.log_level < 7 and not trace:
-                                #    printf("""p""",log=self.log,direct=True,log_level=3)
-                                #    printf("""({}/{})""".format(uu,test_pass_sample[pp]),no_intro=False if dbg_mode > 1 else True,start_newline=True if dbg_mode > 1 else False,log=self.log,mode='d')
-                                #else:
-                                #    printf('.',log=self.log,no_intro=True)
-                                #    printf("""Try BMC User({}) and password({}), But failed. test next one""".format(uu,test_pass_sample[pp]),no_intro=True,log=self.log,log_level=3)
                                 time.sleep(1) # make to some slow check for BMC locking
-                                #time.sleep(0.4)
-                                dbg_mode+=1
                         else:
                             printf("""Can not ping to the destination IP({}). So check over 30min to stable ping (over 30seconds)""".format(ip),log=self.log,log_level=1,dsp='d')
                             ping_rc=self.Ping(host=ip,keep_good=30,timeout=1800,log=self.log,cancel_func=cancel_func,cancel_args=cancel_args) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
@@ -2538,10 +2524,12 @@ class kBmc:
                                 self.error(_type='net',msg="Can not ping to the destination IP({})".format(ip))
                             return False,None,None
                         pp+=1
-                    if self.log_level < 7 and not trace:
-                        printf("""u""",log=self.log,direct=True,log_level=3)
-                    #maybe reduce affect to BMC
-                    time.sleep(1)
+                    #If it has multi test user then mark to changed user for testing
+                    if len(test_user) > 1:
+                        if self.log_level < 7 and not trace:
+                            printf("""u""",log=self.log,direct=True,log_level=3)
+                        #maybe reduce affect to BMC
+                        time.sleep(1)
                 printf("""-Tried with module {} in password section {}/{}""".format(mm.__name__,t,tt),log=self.log,mode='d',no_intro=True)
         
         #Whole tested but can not find
@@ -3611,7 +3599,6 @@ class kBmc:
                 #if ok is False:
                 if ok in [False,None]: # Timeout(None) or Error(False) then try with ipmitool command instead Redfish
                     _cc_=True
-                    #if _cc_: printf('{} : Try again {}'.format(mm.__name__,verify_status),log=self.log,no_intro=None,mode='d')
                     if  self.redfish and rf:
                         printf('{} : Try again {}'.format(mm.__name__,verify_status),log=self.log,no_intro=None,mode='d')
                     else:
