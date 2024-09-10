@@ -150,6 +150,40 @@ class Redfish:
         else:
             return "https://{}/redfish/v1/{}".format(host,cmd)
 
+    def _RfResult_(self,data,dbg=False):
+        if isinstance(data,(list,tuple)):
+            if dbg: printf(' - code:{}\n - msg:{}'.format(data[1].status_code,data[1].text),no_intro=None,log=self.log,mode='d')
+            if data[0]:
+                try:
+                    data_dic=json.loads(data[1].text) #whatever, it can dictionary then check with dictionary
+                    if 'error' in data_dic:
+                        err_dic=data_dic.get('error',{})
+                        err_msg=None
+                        if isinstance(err_dic,dict) and err_dic:
+                            if '@Message.ExtendedInfo' in err_dic:
+                                err_info=err_dic.get('@Message.ExtendedInfo',[])
+                                if isinstance(err_info,(list,tuple)) and err_info:
+                                    if isinstance(err_info[0],dict):
+                                        err_msg=err_info[0].get('Message')
+                            if not err_msg and 'Message' in err_dic:
+                                err_msg=err_dic.get('Message')
+                        if not err_msg:
+                            err_msg=err_dic
+                        if isinstance(err_msg,str) and 'unauthorized' in err_msg.lower():
+                            return False,'unauthorized'
+                    if data[1].status_code == 200: #Pass with dictionary
+                        return True, data_dic
+                    return False, data_dic # dictionary but Fail
+                except:
+                    if data[1].status_code == 200: #Pass with string
+                        return True,data[1].text   #return string
+                    if isinstance(data[1].text,str) and 'unauthorized' in data[1].text.lower():
+                        return False,'unauthorized'
+                    return False,data[1].text
+            msg='Redfish Request error:{}'.format(data[1].text)
+            printf(msg,log=self.log,mode='d')
+            return False,msg
+
     def Get(self,cmd,host=None,user=None,passwd=None,auto_search_passwd_in_bmc=True):
         if not isinstance(cmd,str) or not cmd: return False
         if not host: host=self.host
@@ -162,56 +196,24 @@ class Redfish:
             printf("ERROR: Can not access the ip({}) over 10min.".format(host),log=self.log)
             return False,"ERROR: Can not access the ip({}) over 10min.".format(host)
         #err_msg='Redfish Request Error'
-        data=None
+        ok=False
+        msg='Redfish Request Error'
         for i in range(0,2):
             data = WEB().Request(self.Cmd(cmd,host=host),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=self.log)
-            if data[0]:
-                #if data[1].status_code == 200:
-                #    try:
-                #        return True,json.loads(data[1].text)
-                #    except:
-                #        if isinstance(data[1].text,str) and 'unauthorized' in data[1].text:
-                #            if auto_search_passwd_in_bmc and self.bmc:
-                #                if self.bmc.find_user_pass()[0] is True:
-                #                    continue
-                #        return False,data[1].text
-                try:
-                    data_dic=json.loads(data[1].text) #whatever, it can dictionary then check with dictionary
-                    if 'error' in data_dic:
-                        err_dic=data_dic.get('error',{})
-                        if '@Message.ExtendedInfo' in err_dic:
-                            err_msg=err_dic.get('@Message.ExtendedInfo',{})[0].get('Message')
-                        elif 'Message' in err_dic:
-                            err_msg=err_dic.get('Message')
-                        else:
-                            err_msg=err_dic
-                        if isinstance(err_msg,str) and 'unauthorized' in err_msg:
-                            if auto_search_passwd_in_bmc and self.bmc:
-                                if self.bmc.find_user_pass()[0] is True:
-                                    user=self.bmc.__dict__.get('user')
-                                    passwd=self.bmc.__dict__.get('passwd')
-                                    continue
-                        return False, data[1].text
-                    if data[1].status_code == 200: #Pass with dictionary
-                        return True, data_dic
-                    return False, data_dic # dictionary but Fail
-                except:
-                    if data[1].status_code == 200: #Pass with string
-                        return True,data[1].text   #return string
-                    if isinstance(data[1].text,str) and 'unauthorized' in data[1].text:
-                        if auto_search_passwd_in_bmc and self.bmc:
-                            if self.bmc.find_user_pass()[0] is True:
-                                user=self.bmc.__dict__.get('user')
-                                passwd=self.bmc.__dict__.get('passwd')
-                                continue
-                    return False,data[1].text
-        if data:
-            msg='Redfish Request error:{}'.format(data[1].text)
-            printf(msg,log=self.log,mode='d')
-            return False,msg
-        return False,'Redfish Request ERROR'
+            ok,msg=self._RfResult_(data)
+            if not ok:
+                if msg == 'unauthorized':
+                    if auto_search_passwd_in_bmc and self.bmc:
+                        ok,uu,pp=self.bmc.find_user_pass()
+                        if ok is True:
+                            user=uu
+                            passwd=pp
+                            continue # Try again with new password
+                return False,msg
+            return ok,msg
+        return ok,msg
 
-    def Post(self,cmd,host=None,json=None,data=None,files=None,mode='post',retry=3,patch_reset=False):
+    def Post(self,cmd,host=None,json=None,data=None,files=None,mode='post',retry=3,patch_reset=False,auto_search_passwd_in_bmc=True):
         if not host: host=self.host
         if not ping(host,timeout=1800,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log):
             printf("ERROR: Can not access the ip({}) over 30min.".format(host),log=self.log)
@@ -231,84 +233,62 @@ class Redfish:
         printf('Redfish.Post:\n - url:{}\n - mode:{}\n - data:{}\n - json:{}\n - file:{}'.format(url,mode,data,json,files),log=self.log,mode='d',no_intro=None)
         for i in range(0,retry):
             data = WEB().Request(url,auth=(self.user, self.passwd),mode=mode,json=json,data=data,files=files)
-            printf(' - code:{}\n - msg:{}'.format(data[1].status_code,data[1].text),no_intro=None,log=self.log,mode='d')
-            #Password Error then....
-            if isinstance(data[1].text,str) and 'unauthorized' in data[1].text:
-                if self.bmc:
-                    if self.bmc.find_user_pass()[0] is True:
-                        continue
-            if data[0]:
-                try:
-                    tmp=FormData(data[1].text)
-                except:
-                    pass
-                if isinstance(tmp,dict):
-                    answer_tag=next(iter(tmp))
-                    # sometimes, success with 202 code or maybe others(??)
-                    if IsIn(answer_tag,['Success','Accepted']): #OK
-                        if patch_reset:
-                            if mode == 'patch':# if patch command then reset the power to apply
-                                time.sleep(5)
-                                return self.Power('reset',up=30,sensor=True)
-                        return True #OK
-                    if IsIn(answer_tag,['error','Action@Message.ExtendedInfo']): #Error
-                        _mm_= tmp.get(answer_tag)
-                        if isinstance(_mm_,list):
-                            if _mm_:
-                                _mm_=_mm_[0]
-                            else: 
-                                printf(' - Error: Missing DATA for {} command : {}'.format(mode,tmp),log=self.log,no_intro=None,mode='d')
-                                return False
-                        if 'message' in _mm_:
-                            mm=_mm_.get('message')
-                        elif 'Message' in _mm_:
-                            mm=_mm_.get('Message')
-                        elif '@Message.ExtendedInfo' in _mm_:
-                            mm=_mm_.get('@Message.ExtendedInfo',[{}])[-1].get('Message')
-                        else:
-                            printf(' - Error: Unknown : {}'.format(_mm_),log=self.log,no_intro=None,mode='d')
+            ok,msg=self._RfResult_(data,dbg=True)
+            if not ok:
+                if msg == 'unauthorized':
+                    if auto_search_passwd_in_bmc and self.bmc:
+                        ok,uu,pp=self.bmc.find_user_pass()
+                        if ok is True:
+                            self.user=uu
+                            self.passwd=pp
+                            continue
+            if isinstance(msg,dict):
+                answer_tag=next(iter(msg))
+                # sometimes, success with 202 code or maybe others(??)
+                if IsIn(answer_tag,['Success','Accepted']): #OK
+                    if patch_reset:
+                        if mode == 'patch':# if patch command then reset the power to apply
+                            time.sleep(5)
+                            return self.Power('reset',up=30,sensor=True)
+                    return True #OK
+                if IsIn(answer_tag,['error','Action@Message.ExtendedInfo']): #Error
+                    _mm_= msg.get(answer_tag)
+                    if isinstance(_mm_,list):
+                        if _mm_:
+                            _mm_=_mm_[0]
+                        else: 
+                            printf(' - Error: Missing DATA for {} command : {}'.format(mode,msg),log=self.log,no_intro=None,mode='d')
                             return False
-                            #print('Unknown error:{}'.format(_mm_))
-                            #self.Power('reset',up=10,sensor=True)
-                            #continue
-                        if isinstance(mm,str):
-                            if ('temporarily unavailable' in mm and 'Retry in  seconds' in mm) or ('Bios setting file already exists' in mm):
-                                #Retry
-                                # This error message required reset the power to flushing the redfish's garbage configuration
-                                self.Power('reset',up=30,sensor=True)
-                                printf('.',direct=True,log=self.log)
-                                continue 
-                            elif ('general error has occurred' in mm):
-                                printf(' - Error : {} command : {}'.format(mode,mm),log=self.log,no_intro=None,mode='d')
-                                return False
-                                #for _ in range(0,200):
-                                #    data = WEB().Request(url,auth=(self.user, self.passwd),mode=mode,json=json,data=data,files=files)
-                                #    tmp=FormData(data[1].text)
-                                #    print('>>tmp:',tmp)
-                                #    if IsIn(next(iter(tmp)),['error']): #Error
-                                #        _mm_= tmp.get('error',{})
-                                #        if 'message' in _mm_:
-                                #            mm=_mm_.get('message')
-                                #        elif '@Message.ExtendedInfo' in _mm_:
-                                #            mm=_mm_.get('@Message.ExtendedInfo',[{}])[-1].get('Message')
-                                #        print('>>mm:',mm)
-                                #        if 'general error has occurred' not in mm:
-                                #            break
-                                #    else:
-                                #        break
-                                #    printf('.',direct=True,log=self.log)
-                                #    time.sleep(3)
-                            elif ('property Action is not in the list' in mm):
-                                printf(' - Error: Remove the unknown property from the request body and resubmit the request if the operation failed',log=self.log,no_intro=None,mode='d')
-                                return 0
-                if data[1].status_code == 200: #OK
-                    if mode == 'patch': # if patch command then reset the power to apply
-                        time.sleep(5)
-                        return self.Power('reset',up=30,sensor=True)
-                    return True
-                #Fail
-                printf(' - Error: ({}:{}):{}'.format(mode,data[1].status_code,data[1].text),log=self.log,no_intro=None,mode='d')
-                break
+                    if 'message' in _mm_:
+                        mm=_mm_.get('message')
+                    elif 'Message' in _mm_:
+                        mm=_mm_.get('Message')
+                    elif '@Message.ExtendedInfo' in _mm_:
+                        mm=_mm_.get('@Message.ExtendedInfo',[{}])[-1].get('Message')
+                    else:
+                        printf(' - Error: Unknown : {}'.format(_mm_),log=self.log,no_intro=None,mode='d')
+                        return False
+                    if isinstance(mm,str):
+                        if ('temporarily unavailable' in mm and 'Retry in  seconds' in mm) or ('Bios setting file already exists' in mm):
+                            #Retry
+                            # This error message required reset the power to flushing the redfish's garbage configuration
+                            self.Power('reset',up=30,sensor=True)
+                            printf('.',direct=True,log=self.log)
+                            continue 
+                        elif ('general error has occurred' in mm):
+                            printf(' - Error : {} command : {}'.format(mode,mm),log=self.log,no_intro=None,mode='d')
+                            return False
+                        elif ('property Action is not in the list' in mm):
+                            printf(' - Error: Remove the unknown property from the request body and resubmit the request if the operation failed',log=self.log,no_intro=None,mode='d')
+                            return 0
+            if data[1].status_code == 200: #OK
+                if mode == 'patch': # if patch command then reset the power to apply
+                    time.sleep(5)
+                    return self.Power('reset',up=30,sensor=True)
+                return True
+            #Fail
+            printf(' - Error: ({}:{}):{}'.format(mode,data[1].status_code,data[1].text),log=self.log,no_intro=None,mode='d')
+            break
         return 0
 
     def Data(self,data):
@@ -334,36 +314,63 @@ class Redfish:
                         ndata[xx]=data[xx].get('@odata.id')
         return ndata
 
-    def SystemReadyState(self,thermal=False):
+    def SystemReadyState(self,thermal=None,before=None):
+        up_state=False
+        thermal_value=''
+        boot_progress=None
         #it can read the Redfish's Thermal data when OS is running
         #ipmitool's sensor data can read when the system's CPU is ready
-        if thermal:
-            ok,aa=self.Get('Chassis/1/Thermal')
-            if isinstance(aa,dict):
-                if isinstance(aa.get('Temperatures'),dict):
-                    for ii in aa.get('Temperatures'):
-                        if isinstance(ii,dict) and ii.get('PhysicalContext') == 'CPU':
-                            try:
-                                return int(ii.get('ReadingCelsius')) #ON
-                            except:
-                                pass
-                    return None # power off state
-        else:
+        if IsIn(thermal,[False,None]):
             ok,aa=self.Get('Systems/1')
             if isinstance(aa,dict):
                 #The hardware initialization finish / ready state
                 #Same as ipmitool's sensor data readable step
                 physical_power=aa.get('PowerState')
                 if IsIn(physical_power,['Off']):
-                    return None # Off state
+                    #return None # Off state
+                    return 'off' # Off state
                 elif IsIn(physical_power,['On']) and isinstance(aa.get('BootProgress'),dict):
-                    support=aa.get('BootProgress').get('LastState')
-                    if support:
+                    boot_progress=aa.get('BootProgress').get('LastState')
+                    if boot_progress:
                         #if support == 'None':
                         #    return 'up' # Power state is on. but not ready. So going up
-                        if IsIn(support,['SystemHardwareInitializationComplete']):
+                        if IsIn(boot_progress,['SystemHardwareInitializationComplete']):
                             return 'on' #ON state
-                        return 'up' # Power state is on. but not ready. So going up
+                        #return 'up' # Power state is on. but not ready. So going up
+                        up_state=True
+        if IsIn(thermal,[True,None]) or boot_progress == 'OEM':
+            ok,aa=self.Get('Chassis/1/Thermal')
+            if isinstance(aa,dict):
+                if isinstance(aa.get('Temperatures'),dict):
+                    for ii in aa.get('Temperatures'):
+                        if isinstance(ii,dict) and ii.get('PhysicalContext') == 'CPU':
+                            if IsIn(ii.get('ReadingCelsius')):
+                                if thermal is None:
+                                    return 'on'
+                                else:
+                                    return int(ii.get('ReadingCelsius')) #ON
+                            else:
+                                thermal_value=ii.get('ReadingCelsius')
+                    if thermal is True:
+                        return None # power off state
+                elif isinstance(aa.get('Temperatures'),list):
+                    for i in aa.get('Temperatures'):
+                        if isinstance(i,dict):
+                            if i.get('PhysicalContext') == 'CPU':
+                                if IsInt(i.get('ReadingCelsius')):
+                                    if thermal is None:
+                                        return 'on'
+                                    else:
+                                        return i.get('ReadingCelsius')
+                                else:
+                                    thermal_value=i.get('ReadingCelsius')
+                    if thermal is True:
+                        return None # power off state
+        if up_state:
+            if thermal_value == 'None':
+                if IsIn(before,['up','on']):
+                    return 'off'
+            return 'up'
         return False # Error with status(Not support BootProgress or Temperature sensor
 
     def onoff_state(self,cmd):
@@ -389,9 +396,10 @@ class Redfish:
 
     def IsUp(self,**opts):
         sensor=opts.get('sensor',False)
-        sensor_temp=opts.get('sensor_temp',False)
+        sensor_temp=opts.get('sensor_temp',None)
         timeout=Int(opts.get('timeout'),600)
         keep_on=Int(opts.get('keep_up',opts.get('keep_on')),0)
+        up_state_timeout=Int(opts.get('up_state_timeout'),120) # if keep up to 120seconds then change to on
         keep_off=Int(opts.get('keep_down',opts.get('keep_off',opts.get('power_down'))),0)
         keep_uknown=Int(opts.get('keep_unknown'),0)
         up_init=None
@@ -399,6 +407,7 @@ class Redfish:
         UTime=TIME()
         DTime=TIME()
         UNTime=TIME()
+        UPSTATETime=TIME()
         while not Time.Out(timeout):
             stat=self.power_unknown_tag
             if sensor:
@@ -407,9 +416,10 @@ class Redfish:
                 mon=self.get_current_power_state()
             if mon is False:
                 return False
-            elif mon in ['on']:
+            elif IsIn(mon,['on']):
                 DTime.Reset()
                 UNTime.Reset()
+                UPSTATETime.Reset()
                 stat=self.power_on_tag
                 if keep_on > 0:
                     if UTime.Out(keep_on): return True
@@ -417,17 +427,28 @@ class Redfish:
                     return True
             else:
                 UTime.Reset()
-                if mon in ['up']:
-                    DTime.Reset()
+                if IsIn(mon,['up']):
+                    if UPSTATETime.Out(up_state_timeout):
+                        DTime.Reset()
+                        UNTime.Reset()
+                        stat=self.power_on_tag
+                        if keep_on > 0:
+                            if UTime.Out(keep_on): return True
+                        else:
+                            return True
+                    else:
+                        DTime.Reset()
+                        UNTime.Reset()
+                        stat=self.power_up_tag
+                elif IsIn(mon,[None,'off']):
                     UNTime.Reset()
-                    stat=self.power_up_tag
-                elif mon in [None,'off']:
-                    UNTime.Reset()
+                    UPSTATETime.Reset()
                     stat=self.power_off_tag
                     if keep_off > 0:
                         if DTime.Out(keep_off): return None
                 else: #Unknown 
                     DTime.Reset()
+                    UPSTATETime.Reset()
                     stat=self.power_unknown_tag
                     if keep_unknown > 0:
                         if UNTime.Out(keep_unkown): return None
@@ -437,7 +458,7 @@ class Redfish:
 
     def IsDown(self,**opts):
         sensor=opts.get('sensor',False)
-        sensor_temp=opts.get('sensor_temp',False)
+        sensor_temp=opts.get('sensor_temp',None)
         timeout=Int(opts.get('timeout'),300)
         keep_on=Int(opts.get('keep_up',opts.get('keep_on')),0)
         keep_off=Int(opts.get('keep_down',opts.get('keep_off')),0)
@@ -489,9 +510,10 @@ class Redfish:
         up=Int(opts.get('up',opts.get('sensor_up')),0)
         down=Int(opts.get('down',opts.get('sensor_down')),0)
         sensor=opts.get('sensor',False)
-        sensor_temp=opts.get('sensor_temp',False)
+        sensor_temp=opts.get('sensor_temp',None)
         timeout=Int(opts.get('timeout'),1800)
         silent_status_log=opts.get('silent_status_log',True)
+        up_state_timeout=Int(opts.get('up_state_timeout'),60) # if keep up to 60seconds then change to on
         def cmd_result(cmd):
             if IsIn(cmd, ['on','up','reboot','reset','off_on','ForceRestart','GracefulRestart','restart','cycle']):
                 return 'on'
@@ -510,10 +532,10 @@ class Redfish:
             elif IsIn(cmd,['reboot','GracefulRestart','restart']):
                 return 'GracefulRestart'
 
-        def _power_(cmd,retry=4,monitor_timeout=300):
+        def _power_(cmd,retry=2,monitor_timeout=300,up_state_timeout=120):
             #return None(Timeout),False(Error),True(OK)
-            mt=TIME()
-            mot=TIME()
+            Time=TIME()
+            Time.Reset(name='up_state_timeout')
             ok=None
             rf_cmd=rf_power_json_cmd(cmd)
             rf_cmd_info=self.Get('/Systems/1/ResetActionInfo')
@@ -523,7 +545,18 @@ class Redfish:
                     if rf_cmd not in parameters[0].get('AllowableValues'):
                         printf('Command({} from {}) not support on this Redfish'.format(rf_cmd,cmd),log=self.log,mode='d')
                         return False
+            init_power_state=self.SystemReadyState()
+            if IsIn(init_power_state,['on']):
+                printf(self.power_on_tag,log=self.log,direct=True,log_level=1)
+            elif IsIn(init_power_state,['off']):
+                printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
+            elif IsIn(init_power_state,['up']):
+                printf(self.power_up_tag,log=self.log,direct=True,log_level=1)
+            else:
+                printf(self.power_unknown_tag,log=self.log,direct=True,log_level=1)
+            xxx=init_power_state
             for i in range(0,retry):
+                off_state=False
                 #/redfish/v1/Systems/1 -> Actions -> #ComputerSystem.Reset
                 aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': rf_cmd})
                 if IsInt(aa,mode=int) and aa == 0: # ERROR. STOP
@@ -540,38 +573,59 @@ class Redfish:
                 # reset group command
                 if IsIn(cmd,['reset','cycle','reboot','restart','ForceRestart']):
                     #check off state
-                    off_state=False
-                    for x in range(0,20):
-                        xxx=self.SystemReadyState()
-                        if xxx is None:
+                    #for x in range(0,20): #check 20 times for make sure, if not then just check status
+                    while not Time.Out(up_state_timeout+30):# x in range(0,20): #check 20 times for make sure, if not then just check status
+                        # if initial up and now up then just keep monitor after 20 times check
+                        xxx=self.SystemReadyState(before=xxx)
+                        if IsIn(init_power_state,['on']) and IsIn(xxx,['up']):
+                            Time.Reset(name='up_state_timeout')
                             off_state=True
+                            printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
+                            break
+                        elif IsIn(xxx,[None,'off']):
+                            Time.Reset(name='up_state_timeout')
+                            off_state=True
+                            printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
                             break
                         elif xxx is False:
+                            Time.Reset(name='up_state_timeout')
+                            printf('.',log=self.log,direct=True,log_level=1)
                             return False
-                        printf('.',log=self.log,direct=True,log_level=1)
+                        elif IsIn(xxx,['up']):
+                            if Time.Out(up_state_timeout,name='up_state_timeout'):
+                                off_state=True
+                                printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
+                                break
+                        if IsIn(xxx,['on']):
+                            printf(self.power_on_tag,log=self.log,direct=True,log_level=1)
+                        elif IsIn(xxx,['off']):
+                            printf(xxx.power_off_tag,log=self.log,direct=True,log_level=1)
+                        elif IsIn(xxx,['up']):
+                            printf(self.power_up_tag,log=self.log,direct=True,log_level=1)
+                        else:
+                            printf(self.power_unknown_tag,log=self.log,direct=True,log_level=1)
+                        #printf('.',log=self.log,direct=True,log_level=1)
                         time.sleep(3)
-                    if not off_state:
-                        continue # retry
-                mt.Reset()
-                mot.Reset()
-                while not mt.Out(monitor_timeout):
-                    cps=self.get_current_power_state()
+                #    if not off_state:
+                #        print('>>>xxx:not detected down, continue')
+                #        continue # retry
+                Time.Reset(name='monitor')
+                while not Time.Out(monitor_timeout,name='monitor'):
+                    if sensor:
+                        cps=self.SystemReadyState()
+                    else:
+                        cps=self.get_current_power_state()
                     if cps == cmd_result(cmd):
+                        if IsIn(cmd,['reset','cycle','reboot','restart','ForceRestart']):
+                            if IsIn(init_power_state,['on']) and not off_state:
+                                #for retry again
+                                break
                         return True
-                    elif IsIn(cmd,['reset','cycle','reboot','restart','ForceRestart']) and cps == 'off':
-                        #If reset command didn't power on after off then manually power on again
-                        if mot.Out(60):
-                            rf_on_cmd=rf_power_json_cmd('on')
-                            aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': rf_on_cmd})
-                            if IsInt(aa,mode=int) and aa == 0: # ERROR. STOP
-                                #Try again without Action parameter (OpenBMC not required???)
-                                printf('Try again {} without Action parameter'.format(rf_on_cmd),log=self.log,mode='d')
-                                aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'ResetType': rf_on_cmd})
-                                if IsInt(aa,mode=int) and aa == 0: # ERROR. STOP
-                                    return False
-                            mot.Reset()
                     printf('.',log=self.log,direct=True,log_level=1)
                     time.sleep(5)
+                #Retry cmmand (for i in range(0,retry):)
+                printf('.',log=self.log,direct=True,log_level=1)
+                time.sleep(5)
             return ok
         if sensor:
             current_power=self.SystemReadyState()
@@ -597,12 +651,12 @@ class Redfish:
                 #else:
                 #    self.Boot(boot=pxe_str)
             # do power cmd
-            rt=_power_(cmd)
+            rt=_power_(cmd,up_state_timeout=up_state_timeout)
             if rt:
                 if cmd_result(cmd) == 'on':
                     if up >0:
                         #True: up, None: down, False: Error
-                        return self.IsUp(timeout=timeout,keep_up=up,sensor=sensor,sensor_temp=sensor_temp)
+                        return self.IsUp(timeout=timeout,keep_up=up,sensor=sensor,sensor_temp=sensor_temp,up_state_timeout=up_state_timeout)
                 else:
                     if down > 0:
                         #True: down, None: up, False: Error
@@ -2013,6 +2067,8 @@ class kBmc:
                 data['symbol']='x'
                 time.sleep(3)
                 continue
+            elif isinstance(data.get('init_power_state'),dict) and 'time' in data['init_power_state'] and 'status' in data['init_power_state'] :
+                data['init']['start']=data['init_power_state']
             #elif not 'start' in data.get('init',{}) and data.get('start') is True:
             elif not data.get('init',{}).get('start',{}).get('status'): # not real started then check
                 #Start monitoring initialize data (time, status)
@@ -2025,6 +2081,7 @@ class kBmc:
                 if 'up' in curr_power_status[0:2]: #if up state in temp and redfish
                     if not Time.Out(wait_on_for_up,name='wait_up'): #waiting (time out) for on when initial state has 'up' 
                         data['symbol']=self.power_up_tag 
+                        if status_log: printf(data['symbol'],log=self.log,direct=True,log_level=1)
                         time.sleep(3)
                         continue # wait until right initial state (on/off)
                     #Timeout for 'up' state. So, it will keep monitoring with 'up' state in start condition. This will understand to on
@@ -2034,6 +2091,7 @@ class kBmc:
                             right_start_on-=1
                             right_start_off-=20
                             data['symbol']='.'
+                            if status_log: printf(data['symbol'],log=self.log,direct=True,log_level=1)
                             time.sleep(3)
                             continue # 
                 elif curr_power_status.count('on') == 0:
@@ -2042,6 +2100,7 @@ class kBmc:
                             right_start_off-=1
                             right_start_on-=20
                             data['symbol']='.'
+                            if status_log: printf(data['symbol'],log=self.log,direct=True,log_level=1)
                             time.sleep(3)
                             continue
                 data['init']['start']={'time':TIME().Int(),'status':curr_power_status}
@@ -2200,8 +2259,8 @@ class kBmc:
 
         if 'worker' in data: data.pop('worker')
         # end of status printing condition
-        if status_log:
-            printf('',log=self.log,no_intro=True,ignore_empty=False)
+        #if status_log:
+        #    printf('',log=self.log,no_intro=True,ignore_empty=False)
         # convert monitored_status to searial ordering
         A={}
         for i in Iterable(data['monitored_status']):
@@ -2261,7 +2320,7 @@ class kBmc:
         else:
             #foreground should be different
             #act foreground then immediately start monitoring and return the output
-            fgpm={'status':{},'repeat':0,'stop':False,'count':0,'start':True,'timeout':timeout,'cancel_func':self.cancel_func}
+            fgpm={'status':{},'repeat':0,'stop':False,'count':0,'start':True,'timeout':timeout,'cancel_func':self.cancel_func,'init_power_state':opts.get('init_power_state')}
             self.power_status_monitor(monitor_status,fgpm,keep_off=keep_off,keep_on=keep_on,sensor_monitor=sensor_on_monitor,sensor_off_monitor=sensor_off_monitor,status_log=status_log,monitor_interval=monitor_interval,timeout=timeout,reset_after_unknown=reset_after_unknown,mode=opts.get('mode','a'))
             return fgpm
 
@@ -3360,15 +3419,19 @@ class kBmc:
         timeout=Int(timeout,default=1200)
         keep_on=Int(Pop(opts,'keep_up',Pop(opts,'keep_on')),default=30)
         keep_off=Int(Pop(opts,'keep_down',Pop(opts,'keep_off',Pop(opts,'power_down'))),default=30)
+        rf_only=opts.get('rf_only',opts.get('redfish_only',False))
         if 'mode' not in opts: opts['mode']='s'
-        rf=self.CallRedfish()
-        if self.redfish and rf:
-            rfp=rf.IsUp(timeout=timeout,keep_up=keep_on,keep_down=keep_off,sensor=True if opts.get('mode','s') in ['s','a'] else False)
-            if rfp is True:
-                return True,'Node is UP' 
-            elif rfp is None:
-                return False,'Node is DOWN'
-            #Error then try next
+        # Looks duplicated function between power_monitor(), power_monitor() also monitoring Redfish's power status
+        # So, adding option to redfish only option. if somebody want check only redfishonly data then check here
+        if rf_only:
+            rf=self.CallRedfish()
+            if self.redfish and rf:
+                rfp=rf.IsUp(timeout=timeout,keep_up=keep_on,keep_down=keep_off,sensor=True if opts.get('mode','s') in ['s','a'] else False)
+                if rfp is True:
+                    return True,'Node is UP' 
+                elif rfp is None:
+                    return False,'Node is DOWN'
+                #Error then try next
  
         rt=self.power_monitor(timeout,monitor_status=['on'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=0,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
         out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
@@ -3382,33 +3445,40 @@ class kBmc:
                 return True,out
         return False,out
 
-    def is_down_up(self,timeout=1200,sensor_on_monitor=600,sensor_off_monitor=0,interval=8,status_log=True,reset_after_unknown=0,**opts): # Node state
-        timeout=Int(timeout,default=1200)
-        keep_on=Int(Pop(opts,'keep_up',Pop(opts,'keep_on')),default=30)
-        keep_off=Int(Pop(opts,'keep_down',Pop(opts,'keep_off')),default=0)
-        if 'mode' not in opts: opts['mode']='s'
-        rt=self.power_monitor(timeout,monitor_status=['off','on'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
-        out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
-        if isinstance(rt.get('monitored_order'),list):
-            if out == 'on' and 'off' in rt.get('monitored_order'):
-                if rt.get('repeat',0) > 0:
-                    return True,'{} but repeated down and up to {}'.format(out,rt.get('repeat',0))
-                return True,out
-        return False,out
+    def is_down_up(self,timeout=1200,sensor_on_monitor=600,sensor_off_monitor=0,interval=8,status_log=True,reset_after_unknown=0,full_state=True,**opts): # Node state
+        dn,dn_msg=self.is_down(timeout=timeout,interval=interval,sensor_off_monitor=sensor_off_monitor,status_log=status_log,reset_after_unknown=reset_after_unknown,full_state=full_state,**opts)
+        if dn:
+            return self.is_up(timeout=timeout,interval=interval,sensor_on_monitor=sensor_on_monitor,reset_after_unknown=reset_after_unknown,full_state=full_state,status_log=status_log,**opts)
+        return dn,dn_msg
+        #timeout=Int(timeout,default=1200)
+        #keep_on=Int(Pop(opts,'keep_up',Pop(opts,'keep_on')),default=30)
+        #keep_off=Int(Pop(opts,'keep_down',Pop(opts,'keep_off')),default=0)
+        #rf_only=opts.get('rf_only',opts.get('redfish_only',False))
+        #if 'mode' not in opts: opts['mode']='s'
+        #rt=self.power_monitor(timeout,monitor_status=['off','on'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=sensor_on_monitor,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
+        #out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
+        #if isinstance(rt.get('monitored_order'),list):
+        #    if out == 'on' and 'off' in rt.get('monitored_order'):
+        #        if rt.get('repeat',0) > 0:
+        #            return True,'{} but repeated down and up to {}'.format(out,rt.get('repeat',0))
+        #        return True,out
+        #return False,out
 
     def is_down(self,timeout=1200,interval=8,sensor_off_monitor=0,full_state=True,status_log=True,reset_after_unknown=0,**opts): # Node state
         timeout=Int(timeout,default=1200)
         keep_on=Int(Pop(opts,'keep_up',Pop(opts,'keep_on')),default=30)
         keep_off=Int(Pop(opts,'keep_down',Pop(opts,'keep_off')),default=30)
+        rf_only=opts.get('rf_only',opts.get('redfish_only',False))
         if 'mode' not in opts: opts['mode']='s'
-        rf=self.CallRedfish()
-        if self.redfish and rf:
-            rfp=rf.IsDown(timeout=timeout,keep_up=keep_on,keep_down=keep_off,sensor=True if opts.get('mode','s') in ['s','a'] else False)
-            if rfp is True:
-                return True,'Node is DOWN' 
-            elif rfp is None:
-                return False,'Node is UP'
-            #Error then try next
+        if rf_only:
+            rf=self.CallRedfish()
+            if self.redfish and rf:
+                rfp=rf.IsDown(timeout=timeout,keep_up=keep_on,keep_down=keep_off,sensor=True if opts.get('mode','s') in ['s','a'] else False)
+                if rfp is True:
+                    return True,'Node is DOWN' 
+                elif rfp is None:
+                    return False,'Node is UP'
+                #Error then try next
 
         rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['off'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=0,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
         out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
@@ -3504,6 +3574,10 @@ class kBmc:
                         printf(' Can not set to {}'.format(self.LanmodeConvert(lanmode,string=True)),log=self.log,log_level=1)
         chkd=False
         _cc_=False
+
+        curr_power_status,checked_redfish=self.power_get_status(checked_redfish=False)
+        init_power_state={'time':TIME().Int(),'status':curr_power_status}
+
         for mm in Iterable(self.cmd_module):
             name=mm.__name__
             if cmd not in ['status','off_on'] + list(mm.power_mode):
@@ -3556,7 +3630,7 @@ class kBmc:
                     cmd='on'
                 # Check Pre-Keep up time
                 if pre_keep_up > 0:
-                    chk_pre_keep_up=self.is_up(timeout=pre_keep_up+fail_down_time+300,keep_up=pre_keep_up,cancel_func=cancel_func,keep_down=fail_down_time,mode=mode)
+                    chk_pre_keep_up=self.is_up(timeout=pre_keep_up+fail_down_time+300,keep_up=pre_keep_up,cancel_func=cancel_func,keep_down=fail_down_time,mode=mode,init_power_state=init_power_state)
                     if chk_pre_keep_up[0] is False:
                         return False,chk_pre_keep_up[-1] # pre-keep up condition fail
             #Everything OK then do power 
@@ -3625,7 +3699,7 @@ class kBmc:
                 if verify:
                     if verify_status in ['on','up']:
                         cc=TIME().Int()
-                        is_up=self.is_up(timeout=timeout,keep_up=post_keep_up,cancel_func=cancel_func,keep_down=60,mode=mode)
+                        is_up=self.is_up(timeout=timeout,keep_up=post_keep_up,cancel_func=cancel_func,keep_down=60,mode=mode,init_power_state=init_power_state)
                         if is_up[0]:
                             kfdt=TIME().Int() # keep fail down time
                             if chk < verify_num:
@@ -3679,7 +3753,7 @@ class kBmc:
                             continue
                     elif verify_status in ['off','down']:
                         cc=TIME().Int()
-                        is_down=self.is_down(timeout=timeout,keep_down=post_keep_down,keep_on=40,cancel_func=cancel_func,mode=mode)
+                        is_down=self.is_down(timeout=timeout,keep_down=post_keep_down,keep_on=40,cancel_func=cancel_func,mode=mode,init_power_state=init_power_state)
                         if is_down[0]:
                             kfut=TIME().Int() # keep fail up time
                             if chk == len(mm.power_mode[cmd]):
