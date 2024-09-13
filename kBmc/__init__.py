@@ -315,9 +315,9 @@ class Redfish:
         return ndata
 
     def SystemReadyState(self,thermal=None,before=None):
-        up_state=False
         thermal_value=''
-        boot_progress=None
+        boot_progress='_NA_'
+        up_state=False
         #it can read the Redfish's Thermal data when OS is running
         #ipmitool's sensor data can read when the system's CPU is ready
         if IsIn(thermal,[False,None]):
@@ -331,14 +331,14 @@ class Redfish:
                     return 'off' # Off state
                 elif IsIn(physical_power,['On']) and isinstance(aa.get('BootProgress'),dict):
                     boot_progress=aa.get('BootProgress').get('LastState')
-                    if boot_progress:
-                        #if support == 'None':
-                        #    return 'up' # Power state is on. but not ready. So going up
-                        if IsIn(boot_progress,['SystemHardwareInitializationComplete']):
-                            return 'on' #ON state
-                        #return 'up' # Power state is on. but not ready. So going up
-                        up_state=True
-        if IsIn(thermal,[True,None]) or boot_progress == 'OEM':
+                    if IsIn(boot_progress,[None,'None']):
+                        return 'off' # Power state is on. but not ready. So going up
+                    elif IsIn(boot_progress,['SystemHardwareInitializationComplete']):
+                        return 'on' #ON state
+                    elif not IsIn(boot_progress,['OEM']):
+                        return 'up' # Power state is on. but not ready. So going up
+                    up_state=True
+        if IsIn(thermal,[True,None]) or IsIn(boot_progress,['OEM']):
             ok,aa=self.Get('Chassis/1/Thermal')
             if isinstance(aa,dict):
                 if isinstance(aa.get('Temperatures'),dict):
@@ -366,12 +366,13 @@ class Redfish:
                                     thermal_value=i.get('ReadingCelsius')
                     if thermal is True:
                         return None # power off state
-        if up_state:
-            if thermal_value == 'None':
-                if IsIn(before,['up','on']):
-                    return 'off'
-            return 'up'
-        return False # Error with status(Not support BootProgress or Temperature sensor
+        if IsIn(thermal_value,[None,'None']): # Thermal value is None is off state
+            if up_state: # boot progress has up_state
+                if IsIn(before,['up','on']): # before up or on then off state
+                    return 'off' # off
+                return 'up' #before was off then up state
+            return 'off' # nothing then off state
+        return False # Error with status(Not support BootProgress or Temperature sensor : Not thermal and not boot progress
 
     def onoff_state(self,cmd):
         if IsIn(cmd,['on']):
