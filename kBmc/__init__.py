@@ -345,7 +345,7 @@ class Redfish:
                     for ii in aa.get('Temperatures'):
                         if isinstance(ii,dict) and ii.get('PhysicalContext') == 'CPU':
                             if IsIn(ii.get('ReadingCelsius')):
-                                if thermal is None:
+                                if IsIn(thermal,[None,False]):
                                     return 'on'
                                 else:
                                     return int(ii.get('ReadingCelsius')) #ON
@@ -358,7 +358,7 @@ class Redfish:
                         if isinstance(i,dict):
                             if i.get('PhysicalContext') == 'CPU':
                                 if IsInt(i.get('ReadingCelsius')):
-                                    if thermal is None:
+                                    if IsIn(thermal,[None,False]):
                                         return 'on'
                                     else:
                                         return i.get('ReadingCelsius')
