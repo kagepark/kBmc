@@ -401,8 +401,8 @@ class Redfish:
         timeout=Int(opts.get('timeout'),600)
         keep_on=Int(opts.get('keep_up',opts.get('keep_on')),0)
         up_state_timeout=Int(opts.get('up_state_timeout'),120) # if keep up to 120seconds then change to on
-        keep_off=Int(opts.get('keep_down',opts.get('keep_off',opts.get('power_down'))),0)
-        keep_uknown=Int(opts.get('keep_unknown'),0)
+        keep_off=Int(opts.get('keep_down',opts.get('keep_off',opts.get('power_down'))),30) # keep off 30 seconds
+        keep_uknown=Int(opts.get('keep_unknown'),300) # keep unknown 5min
         up_init=None
         Time=TIME()
         UTime=TIME()
@@ -410,6 +410,7 @@ class Redfish:
         UNTime=TIME()
         UPSTATETime=TIME()
         while not Time.Out(timeout):
+            if Time.Out(timeout): return False #Timeout
             stat=self.power_unknown_tag
             if sensor:
                 mon=self.SystemReadyState(thermal=sensor_temp)
@@ -446,13 +447,13 @@ class Redfish:
                     UPSTATETime.Reset()
                     stat=self.power_off_tag
                     if keep_off > 0:
-                        if DTime.Out(keep_off): return None
+                        if DTime.Out(keep_off): return False # Off
                 else: #Unknown 
                     DTime.Reset()
                     UPSTATETime.Reset()
                     stat=self.power_unknown_tag
                     if keep_unknown > 0:
-                        if UNTime.Out(keep_unkown): return None
+                        if UNTime.Out(keep_unkown): return None # Unknown
             printf(stat,direct=True,log=self.log,log_level=1)
             time.sleep(3)
         return None
@@ -469,6 +470,7 @@ class Redfish:
         UTime=TIME()
         UNTime=TIME()
         while not Time.Out(timeout):
+            if Time.Out(timeout): return False #Timeout
             stat=self.power_unknown_tag
             if sensor:
                 mon=self.SystemReadyState(thermal=sensor_temp)
@@ -494,7 +496,7 @@ class Redfish:
                     UNTime.Reset()
                     stat=self.power_on_tag
                     if keep_on > 0:
-                        if UTime.Out(keep_on): return None
+                        if UTime.Out(keep_on): return False
                 else:
                     UTime.Reset()
                     stat=self.power_unknown_tag
@@ -515,6 +517,8 @@ class Redfish:
         timeout=Int(opts.get('timeout'),1800)
         silent_status_log=opts.get('silent_status_log',True)
         up_state_timeout=Int(opts.get('up_state_timeout'),60) # if keep up to 60seconds then change to on
+        monitor_timeout=Int(opts.get('monitor_timeout'),300) # keep not want state then stop monitoring
+        keep_init_state_timeout=Int(opts.get('keep_init_state_timeout'),60) # if keep not change state from init state then monitoring stop
         def cmd_result(cmd):
             if IsIn(cmd, ['on','up','reboot','reset','off_on','ForceRestart','GracefulRestart','restart','cycle']):
                 return 'on'
@@ -533,7 +537,7 @@ class Redfish:
             elif IsIn(cmd,['reboot','GracefulRestart','restart']):
                 return 'GracefulRestart'
 
-        def _power_(cmd,retry=2,monitor_timeout=300,up_state_timeout=120):
+        def _power_(cmd,retry=2,monitor_timeout=300,keep_init_state_timeout=60,up_state_timeout=120):
             #return None(Timeout),False(Error),True(OK)
             Time=TIME()
             Time.Reset(name='up_state_timeout')
@@ -556,6 +560,7 @@ class Redfish:
             else:
                 printf(self.power_unknown_tag,log=self.log,direct=True,log_level=1)
             xxx=init_power_state
+            changed=False
             for i in range(0,retry):
                 off_state=False
                 #/redfish/v1/Systems/1 -> Actions -> #ComputerSystem.Reset
@@ -600,7 +605,7 @@ class Redfish:
                         if IsIn(xxx,['on']):
                             printf(self.power_on_tag,log=self.log,direct=True,log_level=1)
                         elif IsIn(xxx,['off']):
-                            printf(xxx.power_off_tag,log=self.log,direct=True,log_level=1)
+                            printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
                         elif IsIn(xxx,['up']):
                             printf(self.power_up_tag,log=self.log,direct=True,log_level=1)
                         else:
@@ -610,22 +615,47 @@ class Redfish:
                 #    if not off_state:
                 #        print('>>>xxx:not detected down, continue')
                 #        continue # retry
+
+                # Monitor after power command
                 Time.Reset(name='monitor')
+                Time.Reset(name='init_state')
+                cst=self.power_unknown_tag
                 while not Time.Out(monitor_timeout,name='monitor'):
                     if sensor:
                         cps=self.SystemReadyState()
                     else:
                         cps=self.get_current_power_state()
+                    if not IsIn(init_power_state,[cps]):  changed=True
                     if cps == cmd_result(cmd):
                         if IsIn(cmd,['reset','cycle','reboot','restart','ForceRestart']):
                             if IsIn(init_power_state,['on']) and not off_state:
+                                printf('Keep ON state after power action({}). So try again'.format(cmd),log=self.log,mode='d')
                                 #for retry again
                                 break
                         return True
-                    printf('.',log=self.log,direct=True,log_level=1)
+                    elif not changed:
+                        # keep same state after power acition and over time then timeout.
+                        if Time.Out(keep_init_state_timeout,name='init_state'):
+                            printf('Did not changed state after power action({}) over {}s'.format(cmd,keep_init_state_timeout),log=self.log,mode='d')
+                            return False
+                    if IsIn(cps,['on']):
+                        #printf(self.power_on_tag,log=self.log,direct=True,log_level=1)
+                        cst=self.power_on_tag
+                    elif IsIn(cps,['off']):
+                        cst=self.power_off_tag
+                        #printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
+                    elif IsIn(cps,['up']):
+                        #printf(self.power_up_tag,log=self.log,direct=True,log_level=1)
+                        cst=self.power_up_tag
+                    else:
+                        #printf(self.power_unknown_tag,log=self.log,direct=True,log_level=1)
+                        cst=self.power_unknown_tag
+                    #printf('.',log=self.log,direct=True,log_level=1)
+                    printf(cst,log=self.log,direct=True,log_level=1)
                     time.sleep(5)
                 #Retry cmmand (for i in range(0,retry):)
-                printf('.',log=self.log,direct=True,log_level=1)
+                #printf('.',log=self.log,direct=True,log_level=1)
+                printf(cst,log=self.log,direct=True,log_level=1)
                 time.sleep(5)
             return ok
         if sensor:
@@ -639,7 +669,7 @@ class Redfish:
             if not pxe and self.onoff_state(cmd) == current_power: return True
             #Do Power command
             if cmd == 'off_on': #special command
-                off_s=_power_('off')
+                off_s=_power_('off',up_state_timeout=up_state_timeout,keep_init_state_timeout=keep_init_state_timeout,monitor_timeout=monitor_timeout)
                 if not off_s:
                     return off_s # False:Error, None: fail command
                 cmd='on'
@@ -652,7 +682,7 @@ class Redfish:
                 #else:
                 #    self.Boot(boot=pxe_str)
             # do power cmd
-            rt=_power_(cmd,up_state_timeout=up_state_timeout)
+            rt=_power_(cmd,up_state_timeout=up_state_timeout,keep_init_state_timeout=keep_init_state_timeout,monitor_timeout=monitor_timeout)
             if rt:
                 if cmd_result(cmd) == 'on':
                     if up >0:
@@ -3496,7 +3526,7 @@ class kBmc:
     def get_boot_mode(self):
         return self.bootorder(mode='status')
 
-    def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,post_keep_down=0,timeout=1800,lanmode=None,fail_down_time=240,cancel_func=None,set_bios_uefi_mode=False,monitor_mode='a',command_gap=5,error=False,mc_reset=False,off_on_interval=0,sensor=None):
+    def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,post_keep_down=0,timeout=1800,lanmode=None,fail_down_time=240,cancel_func=None,set_bios_uefi_mode=False,monitor_mode='a',command_gap=5,error=True,mc_reset=False,off_on_interval=0,sensor=None,keep_init_state_timeout_rf=60,monitor_timeout_rf=300):
         # verify=False
         #  - just send a command 
         #  - if off_on command then check off mode without sensor monitor
@@ -3545,9 +3575,9 @@ class kBmc:
                     return False,rc[1],-1
                 printf('Set BootOrder output: {}'.format(rc),log=self.log,mode='d')
                 time.sleep(10)
-        return self.do_power(cmd,retry=retry,verify=verify,timeout=timeout,post_keep_up=post_keep_up,post_keep_down=post_keep_down,lanmode=lanmode,fail_down_time=fail_down_time,mode=monitor_mode,command_gap=command_gap,error=error,mc_reset=mc_reset,off_on_interval=off_on_interval,sensor=sensor)
+        return self.do_power(cmd,retry=retry,verify=verify,timeout=timeout,post_keep_up=post_keep_up,post_keep_down=post_keep_down,lanmode=lanmode,fail_down_time=fail_down_time,mode=monitor_mode,command_gap=command_gap,error=error,mc_reset=mc_reset,off_on_interval=off_on_interval,sensor=sensor,keep_init_state_timeout_rf=keep_init_state_timeout_rf,monitor_timeout_rf=monitor_timeout_rf)
 
-    def do_power(self,cmd,retry=0,verify=False,timeout=1200,post_keep_up=40,post_keep_down=0,pre_keep_up=0,lanmode=None,cancel_func=None,fail_down_time=300,fail_up_time=300,mode=None,command_gap=5,error=False,mc_reset=False,off_on_interval=0,sensor=None,end_newline=True):
+    def do_power(self,cmd,retry=0,verify=False,timeout=1200,post_keep_up=40,post_keep_down=0,pre_keep_up=0,lanmode=None,cancel_func=None,fail_down_time=300,fail_up_time=300,mode=None,command_gap=5,error=True,mc_reset=False,off_on_interval=0,sensor=None,end_newline=True,keep_init_state_timeout_rf=60,monitor_timeout_rf=300):
         timeout=Int(timeout,default=1200)
         command_gap=Int(command_gap,default=5)
         kfdt=TIME().Int() # keep fail down time
@@ -3592,10 +3622,10 @@ class kBmc:
             checked_lanmode=None
             if verify or cmd == 'status':
                 rfp=None
+                ok=True
+                err=None
                 if self.redfish and rf:
                     rfp=rf.Power('status')
-                    ok=True
-                    err=None
                 if not IsIn(rfp,['on','off']):
                     init_rc=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
                     rfp=init_rc[1][1]
@@ -3664,11 +3694,12 @@ class kBmc:
                              verify_status='on'
                 printf('* Turn power {}{} '.format(verify_status,'({})'.format(fail_down) if fail_down > 0 else ''),start_newline='auto',end='',log=self.log,log_level=3,scr_dbg=False)
                 ok=False
+                err_msg=''
                 #_cc_=False
                 if not _cc_ and self.redfish and rf:
                     printf('redfish : Try {}'.format(verify_status),log=self.log,no_intro=None,mode='d')
                     #_cc_=True
-                    ok=rf.Power(verify_status,keep_up=0,keep_down=0,retry=2,timeout=60)
+                    ok=rf.Power(verify_status,keep_up=0,keep_down=0,retry=2,timeout=60,keep_init_state_timeout=keep_init_state_timeout_rf,monitor_timeout=monitor_timeout_rf)
                     err_msg=''
                     rc_msg=verify_status
                 #if ok is False:
@@ -3710,6 +3741,7 @@ class kBmc:
                                 if end_newline: printf(self.power_on_tag,no_intro=True,log=self.log,log_level=1)
                                 return True,'on'
                         elif IsIn(Get(Split(is_up[1],'-'),-1),['down','off']) and not chkd:
+                            msg=''
                             high_temp=None
                             sensor_temp=self.run_cmd(mm.cmd_str('sensor',passwd=self.passwd),retry=2)
                             if sensor_temp[0]:
@@ -3736,8 +3768,8 @@ class kBmc:
                                 if fail_down_time > 0 and not high_temp:
                                     if  TIME().Int() - kfdt  > fail_down_time or (TIME().Int() - total_time / fail_down_time) > 1:
                                         if error:
-                                            self.error(_type='power',msg='Defined keep down(off) time({}sec) over. Maybe Stuck BMC (Try reset power for BMC)'.format(fail_down_time))
-                                        return False,'Defined keep down(off) time({}sec) over. Maybe Stuck BMC (Try reset power for BMC)'.format(fail_down_time)
+                                            self.error(_type='power',msg='Defined keep down(off) time({}sec) over. Maybe Stuck BMC (Try unplug and replug physical AC power for reset BMC)'.format(fail_down_time))
+                                        return False,'Defined keep down(off) time({}sec) over. Maybe Stuck BMC (Try unplug and replug physical AC power for reset BMC)'.format(fail_down_time)
                                 else: 
                                     if error:
                                         self.error(_type='power',msg=msg)
@@ -3776,8 +3808,8 @@ class kBmc:
                                 if fail_up_time > 0:
                                     if  TIME().Int() - kfut  > fail_up_time or (TIME().Int() - total_time / fail_up_time) > 1:
                                         if error:
-                                             self.error(_type='power',msg='Defined keep up(on) time({}sec) over. Maybe Stuck BMC (Try reset power for BMC)'.format(fail_up_time))
-                                        return False,'Defined keep up(on) time({}sec) over. Maybe Stuck BMC (Try reset power for BMC)'.format(fail_up_time)
+                                            self.error(_type='power',msg='Defined keep up(on) time({}sec) over. Maybe Stuck BMC (Try unplug and replug physical AC power for reset BMC)'.format(fail_up_time))
+                                        return False,'Defined keep up(on) time({}sec) over. Maybe Stuck BMC (Try unplug and replug physical AC power for reset BMC)'.format(fail_up_time)
                                 else:
                                     if error:
                                         self.error(_type='power',msg='{} and Can not make to power DOWN'.format(pre_msg))
