@@ -104,6 +104,7 @@ class Redfish:
         self.power_down_tag='⨪'
         self.power_unknown_tag='·'
         self.__name__='redfish'
+        self.bootprogress_wait=0
         if isinstance(opts.get('path'),dict):
             self.path=opts['path']
         else:
@@ -333,16 +334,26 @@ class Redfish:
                     if isinstance(aa.get('BootProgress'),dict):
                         boot_progress=aa.get('BootProgress').get('LastState')
                         if IsIn(boot_progress,[None,'None']):
+                            self.bootprogress_wait=0
                             #if IsIn(before,['on']):
                             #    return 'off' # Power state is on. but not ready. So going up
                             if IsIn(before,['on',None]):
                                return 'off' # Power state is on. but not ready. So going up
                             return 'up' # Power state is on. but not ready. So going up
                         elif IsIn(boot_progress,['SystemHardwareInitializationComplete']):
+                            self.bootprogress_wait=0
                             return 'on' #ON state
-                        elif not IsIn(boot_progress,['OEM']): # OEM made some issue on some strange BMC
+                        elif IsIn(boot_progress,['OEM']):  # OEM made some issue on some strange BMC
+                            printf('WARN: The BootProgress in Redfish shows "OEM" instead of the BIOS initialization state.',log=self.log,no_intro=None,mode='d')
+                            if self.bootprogress_wait > 0:
+                                self.bootprogress_wait-=1
+                                return 'up'
+                            else:
+                                up_state=True
+                                # goto next step (Thermal check)
+                        else: #Keep changing boot_progress for BIOS initialization
+                            self.bootprogress_wait=20
                             return 'up' # Power state is on. but not ready. So going up
-                    up_state=True
         if IsIn(thermal,[True,None]) or IsIn(boot_progress,['OEM']):
             ok,aa=self.Get('Chassis/1/Thermal')
             if isinstance(aa,dict):
@@ -350,32 +361,44 @@ class Redfish:
                     for ii in aa.get('Temperatures'):
                         if isinstance(ii,dict) and ii.get('PhysicalContext') == 'CPU':
                             if IsIn(ii.get('ReadingCelsius')):
+                                self.bootprogress_wait=0
                                 if IsIn(thermal,[None,False]):
                                     return 'on'
                                 else:
                                     return int(ii.get('ReadingCelsius')) #ON
                             else:
                                 thermal_value=ii.get('ReadingCelsius')
-                    if thermal is True:
+                    if IsIn(thermal,[None,False]):
+                        self.bootprogress_wait=0
+                        return 'off' # power off state
+                    else:
+                        self.bootprogress_wait=0
                         return None # power off state
                 elif isinstance(aa.get('Temperatures'),list):
                     for i in aa.get('Temperatures'):
                         if isinstance(i,dict):
                             if i.get('PhysicalContext') == 'CPU':
                                 if IsInt(i.get('ReadingCelsius')):
+                                    self.bootprogress_wait=0
                                     if IsIn(thermal,[None,False]):
                                         return 'on'
                                     else:
                                         return i.get('ReadingCelsius')
                                 else:
                                     thermal_value=i.get('ReadingCelsius')
-                    if thermal is True:
+                    if IsIn(thermal,[None,False]):
+                        self.bootprogress_wait=0
+                        return 'off' # power off state
+                    else:
+                        self.bootprogress_wait=0
                         return None # power off state
         if IsIn(thermal_value,[None,'None']): # Thermal value is None is off state
             if up_state: # boot progress has up_state
                 if IsIn(before,['up','on']): # before up or on then off state
+                    self.bootprogress_wait=0
                     return 'off' # off
-                return 'up' #before was off then up state
+                return 'up' #before was off then up state. up state is not completed state. So not initialize bootprogress_wait
+            self.bootprogress_wait=0
             return 'off' # nothing then off state
         return False # Error with status(Not support BootProgress or Temperature sensor : Not thermal and not boot progress
 
@@ -1145,7 +1168,6 @@ class Redfish:
                     _b_=BiosBootInfo()
                     if chk in _b_.get('support'):
                         return _b_ #Setup
-                #printf('.',no_intro=True,log=self.log,log_level=1)
                 printf('.',direct=True,log=self.log,log_level=1)
                 time.sleep(10)
             return False # Not setup
@@ -1225,8 +1247,6 @@ class Redfish:
 #                    binfo=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
 #                    if binfo.get('pxe_boot_id') == 0:
                        return True,'Set {} Boot with {}'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE',pxe_boot_mac)
-                #printf('.',no_intro=True,log=self.log,log_level=1)
-                #printf('.',no_intro=True,log=self.log,log_level=1)
                 time.sleep(10)
             return False,'Can not set {} Boot at BIOS'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE')
         return None,'Not found any updating parameters'
@@ -4035,21 +4055,23 @@ class kBmc:
 
     def cancel(self,cancel_func=None,msg=None,log=None,log_level=1,log_mode='s',parent=2,task_all_stop=True,cancel_args={}):
         #task_all_stop : True, stop kBMc all, False, Only check current step for cancel() 
-        if cancel_func is None: cancel_func=self.cancel_func
         if log is None: log=self.log
         if self.canceling:
+            printf('Already Canceled from somewhere!',log=log,mode='d')
             return self.canceling
         else:
+            if cancel_func is None: cancel_func=self.cancel_func
             if not cancel_args: cancel_args=self.cancel_args
             if not isinstance(cancel_args,dict): cancel_args={}
             if IsBreak(cancel_func,log=log,log_level=log_level,**cancel_args):
                 caller_name=FunctionName(parent=parent)
-                caller_name='{}() : '.format(caller_name) if isinstance(caller_name,str) else ''
+                caller_name='{}()'.format(caller_name) if isinstance(caller_name,str) else ''
                 if msg :
-                    msg='{}{}'.format(caller_name,msg)
+                    msg='{} : {}'.format(caller_name,msg)
                 else:
-                    msg='{}Got Cancel Signal'.format(caller_name)
+                    msg='{} : Got Cancel Signal'.format(caller_name)
                 printf(msg,log=log,log_level=log_level,mode=log_mode)
+                printf('It canceled by cancel method "{}"'.format(cancel_func),log=log,mode='d')
                 if task_all_stop:
                     self.canceling[TIME().Int()]=msg
                 return True
@@ -4252,7 +4274,7 @@ class kBmc:
                     tmp_a=tmp.split('\n')
                 tmp_n=len(tmp_a)
                 # Time Out
-                if self.cancel():
+                if self.cancel(task_all_stop=False):
                     if old_end_line:
                         return 0,old_end_line
                     return 0,tmp_a[mon_line-1]
