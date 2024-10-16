@@ -1995,9 +1995,9 @@ class kBmc:
             if data.count('off') == 3 or data.count('on') == 3: # All same data then return without any condition
                 return data[0],sensor_time
             if mode == 'r':
-                if data[1] in ['on','off','up']: return data[1],0 # redfish output
+                if IsIn(data[1],['on','off','up']): return data[1],0 # redfish output
             elif mode == 't':
-                if data[2] in ['on','off']: return data[2],0 # cmd/ipmitool output
+                if IsIn(data[2],['on','off']): return data[2],0 # cmd/ipmitool output
             # Other mode case
             #if mode == 's':
             #For mode a and s
@@ -2007,35 +2007,41 @@ class kBmc:
                 return 'off',sensor_time
             elif data.count('on') >= 2: # right on
                 return 'on',sensor_time
-            elif data[0] == 'off' and data[1] == 'up' and data[2] == 'on': #right up
+            elif IsIn(data[0],['off']) and IsIn(data[1],['up']) and IsIn(data[2],['on']): #right up
+                if IsIn(before,['on']):
+                    return 'off',sensor_time
                 return 'up',sensor_time
             #Only single data case
             if checked_redfish: # Only working on redfish
-                if data[0] in [None,False,'none'] and data[2] in [None,False,'none']:
-                    if data[1] in ['on','off','up']:
+                if IsIn(data[0],[None,False,'none']) and IsIn(data[2],[None,False,'none']):
+                    if IsIn(data[1],['on','off','up']):
+                        if IsIn(data[1],['up']) and IsIn(before,['on']):
+                            return 'off',sensor_time
                         return data[1],sensor_time
             # after sensor time
             if isinstance(sensor_time,int) and sensor_time:
                 if TIME().Int()-sensor_time > sensor_off_time: #over the sensor off time
                     if checked_redfish:
-                        if data[1] in ['on','off','up']:
+                        if IsIn(data[1],['on','off','up']):
                             if IsIn(before,['on']):
-                                if 'up' == data[1]:
+                                if IsIn(data[1],['up']):
                                     return 'off',sensor_time
                             return data[1],sensor_time
                     else:
-                        if data[0] in ['on','off','up']:
+                        if IsIn(data[0],['on','off','up']):
                             if IsIn(before,['on']):
-                                if 'up' == data[0]:
+                                if IsIn(data[0],['up']):
                                     return 'off',sensor_time
                             elif data[2] == data[0]:
                                 return data[0],sensor_time
-                            elif data[2] == 'off':
+                            elif IsIn(data[2],['off']):
                                 return 'off',sensor_time
                             elif data[2] == 'on':
-                                if data[0] == 'off':
+                                if IsIn(data[0],['off']):
                                     return 'up',sensor_time
-                            elif data[0] in ['up']:
+                            elif IsIn(data[0],['up']):
+                                if IsIn(before,['on']):
+                                    return 'off',sensor_time
                                 return 'up',sensor_time
                         elif mode == 'a':
                             if data[2] in ['on','off']:
@@ -2096,7 +2102,7 @@ class kBmc:
             #    return 'up',0 # Something changing : up
 #                if 'on' in data[1:]: return 'on',0 # anyone on then on 
 #                if 'off' in data[1:]: return 'off',0  # anyone off then off
-            print('<<<<<<<unknonwn')
+#            print('<<<<<<<unknonwn')
             return 'unknown',sensor_time
 
         def mark_on_off(a):
@@ -2246,8 +2252,7 @@ class kBmc:
                     B.append(next(iter(i[1])))
 
                 a='-'.join(B)
-                if a: a='-{}'.format(a)
-                data['done']={TIME().Int():'Monitoring timeout({}sec){}'.format(data['timeout'],a)}
+                data['done']={TIME().Int():'Monitoring timeout({}sec) for {} but monitered state is {}'.format(data['timeout'],'-'.join(data['monitoring']),a)}
                 data['done_reason']='timeout'
                 if B:
                     if B[-1] == 'on':
