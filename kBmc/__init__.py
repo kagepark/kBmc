@@ -1808,7 +1808,7 @@ class kBmc:
         self.power_get_sensor=opts.get('power_get_sensor',True)
         self.power_get_tools=opts.get('power_get_tools',True)
 
-    def CallRedfish(self,force=False,check=True,no_ipmitool=False,detail_log=False,timeout=None,keep_ping=0):
+    def CallRedfish(self,force=False,check=True,no_ipmitool=True,detail_log=False,timeout=None,keep_ping=0):
         if self.redfish or force:
             if force or check:
                 # when it called from here and there. So too much logging
@@ -2595,7 +2595,7 @@ class kBmc:
                 return True,found
         return False,('','','','')
 
-    def find_user_pass(self,ip=None,default_range=12,check_cmd='ipmi power status',cancel_func=None,cancel_args=None,error=True,trace=False,extra_test_user=[],extra_test_pass=[],no_redfish=False,first_user=None,first_passwd=None,failed_passwd=None):
+    def find_user_pass(self,ip=None,default_range=12,check_cmd='ipmi power status',cancel_func=None,cancel_args=None,error=True,trace=False,extra_test_user=[],extra_test_pass=[],no_redfish=False,first_user=None,first_passwd=None,failed_passwd=None,mc_reset=False):
         # Check Network
         chk_err=self.error(_type='net')
         if chk_err[0]: return False,None,None
@@ -2715,13 +2715,14 @@ class kBmc:
         # Reset BMC and try again
         printf(""".""",log=self.log,no_intro=True)
         printf("""no_redfish:{}""".format(no_redfish),log=self.log,dsp='d')
-        if not no_redfish and self.redfish:
-            printf("""Try McResetCold by redfish, Looks BMC issue for ipmitool""",log=self.log)
-            if self.McResetCold(no_ipmitool=True): # Block Loop
-                printf("""Reset done. Try again searching user/password""",log=self.log)
-                return self.find_user_pass(ip=ip,default_range=default_range,check_cmd=check_cmd,cancel_func=cancel_func,error=error,trace=trace,no_redfish=True)
-            else:
-                printf("""Can not reset the BMC by redfish""",log=self.log)
+        if mc_reset:
+            if not no_redfish and self.redfish:
+                printf("""Try McResetCold by redfish, Looks BMC issue for ipmitool""",log=self.log)
+                if self.McResetCold(no_ipmitool=True): # Block Loop
+                    printf("""Reset done. Try again searching user/password""",log=self.log)
+                    return self.find_user_pass(ip=ip,default_range=default_range,check_cmd=check_cmd,cancel_func=cancel_func,error=error,trace=trace,no_redfish=True)
+                else:
+                    printf("""Can not reset the BMC by redfish""",log=self.log)
         printf("""WARN: Can not find working BMC User or password from Password POOL""",log=self.log,log_level=1,dsp='w')
         printf(""" - Password POOL  : {}""".format(test_passwd),log=self.log,dsp='d',no_intro=True)
         printf(""" - Tested Password: {}""".format(tested_user_pass),log=self.log,dsp='d',no_intro=True)
