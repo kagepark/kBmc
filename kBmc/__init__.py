@@ -2429,9 +2429,14 @@ class kBmc:
             #self.bgpm['timeout']=timeout
             #self.bgpm['start']=start
             # Block duplicated running
-            if self.bgpm.get('worker') and self.bgpm['worker'].isAlive():
-                printf('Already running',log=self.log)
-                return self.bgpm
+            if self.bgpm.get('worker'):
+                if PyVer('3.2','<'):
+                    running=self.bgpm['worker'].isAlive()
+                else:
+                    running=self.bgpm['worker'].isAlive():
+                if running:
+                    printf('Already running',log=self.log)
+                    return self.bgpm
             # if new monitoring then initialize data
             self.bgpm={'status':{},'repeat':0,'stop':False,'count':0,'start':start,'timeout':timeout,'cancel_func':self.cancel_func}
             self.bgpm['worker']=threading.Thread(target=self.power_status_monitor_t,args=(monitor_status,self.bgpm,keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,monitor_interval,timeout,0,opts.get('mode','a')))
