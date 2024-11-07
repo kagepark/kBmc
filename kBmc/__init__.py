@@ -2829,7 +2829,8 @@ class kBmc:
         printf("""BMC Password: Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.""",log=self.log,log_level=1)
         return False,self.user,self.passwd
 
-    def run_cmd(self,cmd,append=None,path=None,retry=0,timeout=None,return_code={'ok':[0,True],'fail':[]},show_str=False,dbg=False,mode='app',cancel_func=None,peeling=False,progress=False,ip=None,user=None,passwd=None,cd=False,keep_cwd=False,check_password_rc=[],trace_passwd=False):
+    def run_cmd(self,cmd,append=None,path=None,retry=0,timeout=None,return_code={'ok':[0,True],'fail':[]},show_str=False,dbg=False,mode='app',cancel_func=None,peeling=False,progress=False,ip=None,user=None,passwd=None,cd=False,keep_cwd=False,check_password_rc=[],trace_passwd=False,output_log_size=0):
+        #output_log_size=0 # print full
         if cancel_func is None: cancel_func=self.cancel_func
         error=self.error()
         if error[0]:
@@ -2895,9 +2896,9 @@ class kBmc:
                              cmd_str_a[0]=os.path.basename(cmd_str_a[0])
                              cmd_str=' '.join(cmd_str_a)
                     printf('''** Do CMD   : %s
- - Path         : %s
- - Timeout      : %-15s  - Progress : %s
- - Check_RC     : %s'''%(cmd_str,path,timeout,progress,return_code),log=self.log,log_level=1,dsp=cmd_show)
+ - Path     : %s
+ - Timeout  : %-15s  - Progress : %s
+ - Check_RC : %s'''%(cmd_str,path,timeout,progress,return_code),log=self.log,log_level=1,dsp=cmd_show)
                 if self.cancel(cancel_func=cancel_func):
                     printf(' !! Canceling Job',start_newline=True,log=self.log,log_level=1,dsp='d')
                     self.warn(_type='cancel',msg="Canceling")
@@ -2922,7 +2923,11 @@ class kBmc:
 
                 rc_0=Int(Get(rc,0))
                 if Get(rc,0) == 0:
-                    printf(' - RT_CODE : {}\n - Spend   : {}\n - Output  : {}'.format(rc_0,Human_Unit(Int(Get(rc,4),0)-Int(Get(rc,3),0),unit='S'),Get(rc,1)),log=self.log,log_level=1, dsp=cmd_show,no_intro=None)
+                    output_log=Get(rc,1)
+                    if output_log and isinstance(output_log_size,int) and output_log_size > 10 and isinstance(output_log,str) and len(output_log) > output_log_size:
+                        output_log=output_log[:output_log_size]+f'\n\n* Reduced Big log size to under {output_log_size} on this printing'
+
+                    printf(' - RT_CODE : {}\n - Spend   : {}\n - Output  : {}'.format(rc_0,Human_Unit(Int(Get(rc,4),0)-Int(Get(rc,3),0),unit='S'),output_log),log=self.log,log_level=1, dsp=cmd_show,no_intro=None)
                 else:
                     if cmd_show == 'i':
                         printf('* Do CMD : {}\n - RT_CODE : {}\n - Spend   : {}\n - Output  : {}'.format(cmd_str,rc_0,Human_Unit(Int(Get(rc,4),0)-Int(Get(rc,3),0),unit='S'),Get(rc,1)),log=self.log,log_level=1, dsp='d',no_intro=None)
