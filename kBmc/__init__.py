@@ -2433,7 +2433,7 @@ class kBmc:
                 if PyVer('3.2','<'):
                     running=self.bgpm['worker'].isAlive()
                 else:
-                    running=self.bgpm['worker'].isAlive():
+                    running=self.bgpm['worker'].isAlive()
                 if running:
                     printf('Already running',log=self.log)
                     return self.bgpm
