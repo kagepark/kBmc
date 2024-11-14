@@ -181,7 +181,10 @@ class Redfish:
                     if isinstance(data[1].text,str) and 'unauthorized' in data[1].text.lower():
                         return False,'unauthorized'
                     return False,data[1].text
-            msg='Redfish Request error:{}'.format(data[1].text)
+            if isinstance(data[1],str):
+                msg='Redfish Request error:{}'.format(data[1])
+            else:
+                msg='Redfish Request error:{}'.format(data[1].text)
             printf(msg,log=self.log,mode='d')
             return False,msg
 
