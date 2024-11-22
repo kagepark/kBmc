@@ -2616,12 +2616,11 @@ class kBmc:
         if ip is None: ip=self.ip
         if not IpV4(ip): return False,None,None
         test_user=self.test_user[:]
-        if not test_user: test_user=['ADMIN']
         if 'ADMIN' not in test_user: test_user=['ADMIN']+test_user
         if extra_test_user and isinstance(extra_test_user,list):
             for i in Iterable(extra_test_user):
                 if i not in test_user: test_user.append(i)
-        test_user=MoveData(self.test_user[:],self.user,to='first') # current password
+        test_user=MoveData(test_user[:],self.user,to='first') # current password
         if isinstance(first_user,str) and first_user:
             test_user=MoveData(test_user[:],first_user,to='first')
 
