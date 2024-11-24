@@ -9,6 +9,8 @@ import time
 import json
 import threading
 from kmport import *
+import kmport
+kmport.krc_ext='shell'
 
 #printf_ignore_empty=True
 
