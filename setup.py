@@ -30,7 +30,7 @@ def lib_ver():
             return ver_a[1]
     return 1.0
 
-pkg_name='kBmc'
+pkg_name='kbmc'
 pkg_desc="Kage's Intelgent BMC handler"
 pkg_git="https://github.com/kagepark/kBmc"
 long_description=''
