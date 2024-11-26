@@ -121,28 +121,70 @@ class Redfish:
                 'BootOption':'Systems/1/BootOptions',
             }
         self.bmc=opts.get('bmc')
-        if isinstance(self.bmc,kBmc):
-            self.user=self.bmc.__dict__['user']
-            self.passwd=self.bmc.__dict__['passwd']
-            self.host=self.bmc.__dict__['ip']
-            self.pxe_boot_mac=self.bmc.__dict__.get('eth_mac',opts.get('pxe_boot_mac',opts.get('eth_mac')))
-            self.log=opts.get('log',self.bmc.__dict__.get('log'))
-            self.timeout=opts.get('timeout',Int(self.bmc.__dict__.get('timeout'),1800))
-            self.cancel_func=opts.get('cancel_func',opts.get('stop_func',self.bmc.__dict__.get('cancel_func',None)))
-            self.cancel_args=opts.get('cancel_args',opts.get('stop_args',self.bmc.__dict__.get('cancel_args',{})))
-        else:
-            self.user=opts.get('user','ADMIN')
-            self.passwd=opts.get('passwd','ADMIN')
-            self.host=opts.get('host',opts.get('ip'))
-            self.pxe_boot_mac=opts.get('pxe_boot_mac',opts.get('eth_mac'))
-            self.log=opts.get('log',None)
-            self.timeout=Int(opts.get('timeout'),1800)
-            self.cancel_func=opts.get('cancel_func',opts.get('stop_func',None))
-            self.cancel_args=opts.get('cancel_args',opts.get('stop_args',{}))
+        self.user=opts.get('user')
+        self.passwd=Get(opts,['passwd','password','ipmi_passwd'],default=None,err=True,peel='force')
+        self.host=Get(opts,['ip','host','ipmi_ip'],default=None,err=True,peel='force')
+        self.pxe_boot_mac=Get(opts,['pxe_boot_mac','eth_mac'],default=None,err=True,peel='force')
+        self.timeout=Int(Get(opts,['timeout','time_out'],default=None,err=True,peel='force'),default=1800)
+        self.log=opts.get('log',self.bmc.__dict__.get('log') if self.bmc else None)
+        self.cancel_func=opts.get('cancel_func',opts.get('stop_func',self.bmc.__dict__.get('cancel_func') if self.bmc else None))
+        self.cancel_args=opts.get('cancel_args',opts.get('stop_args',self.bmc.__dict__.get('cancel_args',{}) if self.bmc else {}))
         if not isinstance(self.cancel_args,dict): self.cancel_args={}
 
+    def Passwd(self,passwd=None,default=None):
+        if passwd:
+            self.passwd=passwd
+            if self.bmc and self.bmc.__dict__.get('passwd') != passwd:
+                self.bmc.__dict__['passwd']=passwd
+            return passwd
+        else:
+            if self.passwd:
+                return self.passwd
+            elif self.bmc:
+                return self.bmc.__dict__.get('passwd',default)
+            return default
+
+    def User(self,user=None,default=None):
+        if user:
+            self.user=user
+            if self.bmc and self.bmc.__dict__.get('user') != user:
+                self.bmc.__dict__['user']=user
+            return user
+        else:
+            if self.user:
+                return self.user
+            elif self.bmc:
+                return self.bmc.__dict__.get('user',default)
+            return default
+
+    def Ip(self,ip=None,default=None):
+        if ip:
+            self.host=ip
+            if self.bmc and self.bmc.__dict__.get('ip') != ip:
+                self.bmc.__dict__['ip']=ip
+            return ip
+        else:
+            if self.host:
+                return self.host
+            elif self.bmc:
+                return self.bmc.__dict__.get('ip',default)
+            return default
+
+    def EthMac(self,eth_mac=None,default=None):
+        if eth_mac:
+            self.pxe_boot_mac=eth_mac
+            if self.bmc and self.bmc.__dict__.get('eth_mac') != eth_mac:
+                self.bmc.__dict__['eth_mac']=eth_mac
+            return eth_mac
+        else:
+            if self.pxe_boot_mac:
+                return self.pxe_boot_mac
+            elif self.bmc:
+                return self.bmc.__dict__.get('eth_mac',default)
+            return default
+
     def Cmd(self,cmd,host=None):
-        if not host: host=self.host
+        if not host: host=self.Ip()
         if cmd.startswith('/redfish/v1'):
             return "https://{}{}".format(host,cmd)
         elif cmd.startswith('redfish/v1'):
@@ -193,9 +235,9 @@ class Redfish:
 
     def Get(self,cmd,host=None,user=None,passwd=None,auto_search_passwd_in_bmc=True):
         if not isinstance(cmd,str) or not cmd: return False
-        if not host: host=self.host
-        if not user: user=self.user
-        if not passwd: passwd=self.passwd
+        if not host: host=self.Ip()
+        if not user: user=self.User()
+        if not passwd: passwd=self.Passwd()
         if not IpV4(host):
             printf("ERROR: Wrong IP({}) format".format(host),log=self.log)
             return False,"ERROR: Wrong IP({}) format".format(host)
@@ -213,15 +255,15 @@ class Redfish:
                     if self.bmc and not self.no_find_user_pass and auto_search_passwd_in_bmc:
                         ok,uu,pp=self.bmc.find_user_pass()
                         if ok is True:
-                            user=uu
-                            passwd=pp
+                            user=self.User(uu)
+                            passwd=self.Passwd(pp)
                             continue # Try again with new password
                 return False,msg
             return ok,msg
         return ok,msg
 
     def Post(self,cmd,host=None,json=None,data=None,files=None,mode='post',retry=3,patch_reset=False,auto_search_passwd_in_bmc=True):
-        if not host: host=self.host
+        host=self.Ip(host)
         if not ping(host,timeout=1800,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log):
             printf("ERROR: Can not access the ip({}) over 30min.".format(host),log=self.log)
             return False
@@ -239,15 +281,15 @@ class Redfish:
                     return False
         printf('Redfish.Post:\n - url:{}\n - mode:{}\n - data:{}\n - json:{}\n - file:{}'.format(url,mode,data,json,files),log=self.log,mode='d',no_intro=None)
         for i in range(0,retry):
-            data = WEB().Request(url,auth=(self.user, self.passwd),mode=mode,json=json,data=data,files=files)
+            data = WEB().Request(url,auth=(self.User(), self.Passwd()),mode=mode,json=json,data=data,files=files)
             ok,msg=self._RfResult_(data,dbg=True)
             if not ok:
                 if msg == 'unauthorized':
                     if self.bmc and auto_search_passwd_in_bmc and not self.no_find_user_pass:
                         ok,uu,pp=self.bmc.find_user_pass()
                         if ok is True:
-                            self.user=uu
-                            self.passwd=pp
+                            self.User(uu)
+                            self.Passwd(pp)
                             continue
             if isinstance(msg,dict):
                 answer_tag=next(iter(msg))
@@ -1635,10 +1677,10 @@ class Redfish:
             if aa[0]:
                 if aa[1].get('Current interface') == 'HTML 5':
                     if mode == 'url':
-                        return True,'https://{}/{}'.format(self.host,aa[1].get('URI'))
+                        return True,'https://{}/{}'.format(self.Ip(),aa[1].get('URI'))
                     else:
                         import webbrowser
-                        webbrowser.open_new('https://{}/{}'.format(self.host,aa[1].get('URI')))
+                        webbrowser.open_new('https://{}/{}'.format(self.Ip(),aa[1].get('URI')))
                         return True,'ok'
                 else:
                     if self.Post(rf_key,json={'Current interface':'HTML 5'},mode='patch') is False:
@@ -1670,7 +1712,7 @@ class Redfish:
         if rc is True:
              time.sleep(5)
              printf("""Wait until response from BMC""",log=self.log,dsp='d')
-             return ping(self.host,keep_good=keep_on,timeout=self.timeout,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log)
+             return ping(self.Ip(),keep_good=keep_on,timeout=self.timeout,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log)
         return rc
 
     def FactoryDefault(self,keep_on=30):
@@ -1743,12 +1785,8 @@ class kBmc:
             self.ip=Get(opts,['ip','ipmi_ip'],default=None,err=True,peel='force')
         else:
             self.ip=env
-        self.user=Get(inps,1) if Get(inps,1,err=True) else Get(opts,['user','ipmi_user'],default='ADMIN',err=True,peel='force')
-        self.passwd=Get(inps,2) if Get(inps,2,err=True) else Get(opts,['password','passwd','ipmi_pass'],default='ADMIN',err=True,peel='force')
         self.port=Get(opts,['port','ipmi_port'],default=(623,664,443),err=True,peel='force')
-        Get(opts,['port','ipmi_port'],default=(623,664,443),err=True,peel='force')
         self.mac=Get(opts,['mac','ipmi_mac','bmc_mac'],default=None,err=True,peel='force')
-        self.upasswd=Get(opts,['ipmi_upass','upasswd'],default=None,err=True,peel='force')
         self.eth_mac=opts.get('eth_mac')
         self.eth_ip=opts.get('eth_ip')
         self.err={}
@@ -1761,20 +1799,31 @@ class kBmc:
         self.find_user_pass_interval=opts.get('find_user_pass_interval',None)
         self.no_find_user_pass=opts.get('no_find_user_pass',False)
         self.log=opts.get('log',None)
-        self.org_user=opts.get('org_user',self.user)
+
+        self.user=Get(inps,1) if Get(inps,1,err=True) else Get(opts,['user','ipmi_user','bmc_user'],default='ADMIN',err=True,peel='force')
+        self.passwd=Get(inps,2) if Get(inps,2,err=True) else Get(opts,['password','passwd','ipmi_pass','bmc_pass','ipmi_passwd','ipmi_password','bmc_passwd','bmc_password'],default='ADMIN',err=True,peel='force')
+        self.org_user=opts.get('org_user',self.user)       #copy user to org_user
+        self.org_passwd=opts.get('org_passwd',self.passwd) #copy password to org_passwd
+
+        self.upasswd=Get(opts,['ipmi_upass','upasswd','unique_password','unique_passwd'],default=None,err=True,peel='force')
         self.default_passwd=Get(opts,['ipmi_dpass','dpasswd','default_password'],default='ADMIN',err=True,peel='force')
-        self.org_passwd=opts.get('org_passwd',self.passwd)
+
+        self.hardcode=Get(opts,['rpass','rpasswd','recover_password','recover_pass','recover_passwd','hardcode'],default='ADMIN1234',peel='force')
         self.test_user=opts.get('test_user')
         if isinstance(self.test_user,str): self.test_user=self.test_user.split(',')
-        if not isinstance(self.test_user,list) or not self.test_user: self.test_user=['ADMIN','Admin','admin','root','Administrator']
-        self.base_passwd=['ADMIN','Admin','admin','root','Administrator']
-        self.test_passwd=opts.get('test_pass',opts.get('test_passwd',self.base_passwd))
-        if not isinstance(self.test_passwd,list):
-            self.test_passwd=self.base_passwd
+        if not isinstance(self.test_user,list) or not self.test_user:
+            self.test_user=['ADMIN','Admin','admin','root','Administrator']
+
+        self.test_passwd=Get(opts,['test_pass','test_passwd','test_password'],err=True,default=[],peel='force')
+        if isinstance(self.test_passwd,str): self.test_passwd=self.test_passwd.split(',')
+        if not isinstance(self.test_passwd,list) or not self.test_passwd:
+            self.test_passwd=['ADMIN','Admin','admin','root','Administrator']
+
+        #Hard coding for ADMIN1234. So do not remove it
+        if self.hardcode not in self.test_passwd: self.test_passwd.append(self.hardcode)
         if self.user in self.test_user: self.test_user.remove(self.user)
         if self.passwd in self.test_passwd: self.test_passwd.remove(self.passwd)
-        #Hard coding for ADMIN1234. So do not remove it
-        if 'ADMIN1234' not in self.test_passwd: self.test_passwd.append('ADMIN1234')
+
         self.cmd_module=[Ipmitool()]
         if opts.get('cmd_module') and isinstance(opts.get('cmd_module'),list):
             self.cmd_module=opts.get('cmd_module')
@@ -1797,7 +1846,7 @@ class kBmc:
         # Redfish Support
         self.redfish=opts.get('redfish') if isinstance(opts.get('redfish'),bool) else True if opts.get('redfish_hi') is True else None
         rf=None
-        if self.redfish is None:
+        if self.redfish is not False:
             rf=self.CallRedfish(True,True)
             if rf:
                 self.redfish=rf.IsEnabled() if rf else False
@@ -1806,9 +1855,7 @@ class kBmc:
             if isinstance(opts.get('redfish_hi'),bool):
                 self.redfish_hi=opts.get('redfish_hi')
             else:
-                if rf is None: rf=self.CallRedfish(True,True)
-                if rf:
-                    self.redfish_hi=rf.RedfishHI().get('enable') if rf else False
+                self.redfish_hi=rf.RedfishHI().get('enable') if rf else False
         else:
             self.redfish_hi=False
         self.power_monitor_stop=False
@@ -1837,7 +1884,7 @@ class kBmc:
                     return False
                 self.checked_ip=True
                 
-                if detail_log: printf("Call Redfish",log=self.log,log_level=1,dsp='d',end='')
+                printf("Call Redfish",log=self.log,log_level=1,dsp='d',end='')
                 for i in range(0,2):
                     # Define Redfish
                     rf=Redfish(bmc=self)
@@ -1846,7 +1893,7 @@ class kBmc:
                     if krc(rf_system,chk=True):
                         return rf
                     # Check BMC User/Password with ipmitool command
-                    if detail_log: printf("Check User/Password with IPMITOOL",log=self.log,log_level=1,dsp='d')
+                    printf("Check User/Password with IPMITOOL",log=self.log,dsp='d')
                     if no_ipmitool or self.no_find_user_pass is True: break
                     ok,user,passwd=self.find_user_pass(ip,no_redfish=True)
                     if ok is False:
@@ -2617,31 +2664,42 @@ class kBmc:
         if cancel_func is None: cancel_func=self.cancel_func
         if ip is None: ip=self.ip
         if not IpV4(ip): return False,None,None
+
+        #Manage user
         test_user=self.test_user[:]
-        if 'ADMIN' not in test_user: test_user=['ADMIN']+test_user
-        if extra_test_user and isinstance(extra_test_user,list):
+        if extra_test_user:
+            if isinstance(extra_test_user,str):
+                extra_test_user=extra_test_user.split(',')
             for i in Iterable(extra_test_user):
                 if i not in test_user: test_user.append(i)
-        test_user=MoveData(test_user[:],self.user,to='first') # current password
+        if 'ADMIN' not in test_user: test_user.append('ADMIN')
+        test_user=MoveData(test_user[:],self.user,to='first')      #move current user to first
         if isinstance(first_user,str) and first_user:
-            test_user=MoveData(test_user[:],first_user,to='first')
+            test_user=MoveData(test_user[:],first_user,to='first') #move want user to first
+        test_user=Uniq(test_user)
 
+        #Manage password
         test_passwd=self.test_passwd[:]
-        for i in Iterable(extra_test_pass):
-            if i not in test_passwd: test_passwd.append(i)
-        for i in Iterable(failed_passwd): # Append base password
-            test_passwd=MoveData(test_passwd,failed_passwd,to='last') # move failed passwd to last
-        for i in Iterable(self.base_passwd): # Append base password
-            test_passwd=MoveData(test_passwd,i,to='first')
+        if extra_test_pass:
+            if isinstance(extra_test_pass,str):
+                extra_test_pass=extra_test_pass.split(',')
+            for i in Iterable(extra_test_pass):
+                if i not in test_passwd: test_passwd.append(i)
+        if failed_passwd:
+            if isinstance(failed_passwd,str):
+                failed_passwd=failed_passwd.split(',')
+            for i in Iterable(failed_passwd): # Append base password
+                test_passwd=MoveData(test_passwd,i,to='last') # move failed passwd to last
         if self.upasswd: test_passwd=MoveData(test_passwd,self.upasswd,to='first') # move uniq passwd
         if self.org_passwd: test_passwd=MoveData(test_passwd,self.org_passwd,to='first') # move original passwd
         if self.default_passwd:
             test_passwd=MoveData(test_passwd,self.default_passwd,to='first')
         test_passwd=MoveData(test_passwd,'ADMIN',to='first')
-        test_passwd=Uniq(test_passwd)
         test_passwd=MoveData(test_passwd,self.passwd,to='first') # move current passwd
         if isinstance(first_passwd,str) and first_passwd:
             test_passwd=MoveData(test_passwd,first_passwd,to='first') # move want first check passwd
+        test_passwd=Uniq(test_passwd)
+
         tt=1
         #if len(self.test_passwd) > default_range: tt=2
         tt=(len(test_passwd) // default_range) + 1
@@ -2822,22 +2880,22 @@ class kBmc:
                         self.user='''{}'''.format(user2)
                         self.passwd='''{}'''.format(passwd2)
                         return True,self.user,self.passwd
-            printf("""Not support original/default password. Looks need more length. So Try again with ADMIN1234""",log=self.log,log_level=4)
+            printf(f"""Not support original/default password. Looks need more length. So Try again with {self.hardcode}""",log=self.log,log_level=4)
             if self.user == self.org_user:
                 #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
-                recover_cmd=mm.cmd_str("""user setpwd 2 ADMIN1234""")
+                recover_cmd=mm.cmd_str(f"""user setpwd 2 {self.hardcode}""")
             else:
                 #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
-                recover_cmd=mm.cmd_str("""user add 2 {} ADMIN1234 4""".format(self.org_user))
-            printf("""Recover command: {}""".format(recover_cmd),mode='d')
+                recover_cmd=mm.cmd_str(f"""user add 2 {self.org_user} {self.hardcode} 4""")
+            printf(f"""Recover command: {recover_cmd}""",mode='d')
             rrc=self.run_cmd(recover_cmd)
             if krc(rrc,chk=True):
-                printf("""Recovered BMC: from User({}) and Password(original/default) to User({}) and Password(ADMIN1234)""".format(self.user,self.org_user),log=self.log,log_level=4)
+                printf(f"""Recovered BMC: from User({self.user}) and Password(original/default) to User({self.org_user}) and Password({self.hardcode})""",log=self.log,log_level=4)
                 ok2,user2,passwd2=self.find_user_pass()
                 if ok2:
-                    printf("""Confirmed changed user password to {}:{}""".format(user2,passwd2),log=self.log,log_level=4)
-                    self.user='''{}'''.format(user2)
-                    self.passwd='''{}'''.format(passwd2)
+                    printf(f"""Confirmed changed user password to {user2}:{passwd2}""",log=self.log,log_level=4)
+                    self.user=f'''{user2}'''
+                    self.passwd=f'''{passwd2}'''
                     return True,self.user,self.passwd
         self.warn(_type='ipmi_user',msg="Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.")
         printf("""BMC Password: Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.""",log=self.log,log_level=1)
