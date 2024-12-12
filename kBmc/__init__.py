@@ -2075,7 +2075,7 @@ class kBmc:
         self.power_get_tools=opts.get('power_get_tools',True)
 
     def CallRedfish(self,force=False,check=True,no_ipmitool=True,detail_log=False,timeout=None,keep_ping=0):
-        if not force and self.rc: return self.rf
+        if not force and self.rf: return self.rf
         if self.redfish or force:
             if force or check:
                 # when it called from here and there. So too much logging
