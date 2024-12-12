@@ -363,6 +363,43 @@ class Redfish:
                         ndata[xx]=data[xx].get('@odata.id')
         return ndata
 
+    def GetBiosBootProgress(self):
+        #Read BIOS Initialize step by redfish and return up,off,on for the system
+        #Can not read redfish information then return False
+        ok,aa=self.Get('Systems/1')
+        if isinstance(aa,dict):
+            #The hardware initialization finish / ready state
+            #Same as ipmitool's sensor data readable step
+            physical_power=aa.get('PowerState')
+            if IsIn(physical_power,['Off']):
+                #return None # Off state
+                return 'off' # Off state
+            elif IsIn(physical_power,['On']):
+                if isinstance(aa.get('BootProgress'),dict):
+                    boot_progress=aa.get('BootProgress').get('LastState')
+                    if IsIn(boot_progress,[None,'None']):
+                        self.bootprogress_wait=0
+                        #if IsIn(before,['on']):
+                        #    return 'off' # Power state is on. but not ready. So going up
+                        if IsIn(before,['on',None]):
+                           return 'off' # Power state is on. but not ready. So going up
+                        return 'up' # Power state is on. but not ready. So going up
+                    elif IsIn(boot_progress,['SystemHardwareInitializationComplete']):
+                        self.bootprogress_wait=0
+                        return 'on' #ON state
+                    elif IsIn(boot_progress,['OEM']):  # OEM made some issue on some strange BMC
+                        printf('WARN: The BootProgress in Redfish shows "OEM" instead of the BIOS initialization state.',log=self.log,no_intro=None,mode='d')
+                        if self.bootprogress_wait > 0:
+                            self.bootprogress_wait-=1
+                            return 'up'
+                        else:
+                            up_state=True
+                            # goto next step (Thermal check)
+                    else: #Keep changing boot_progress for BIOS initialization
+                        self.bootprogress_wait=20
+                        return 'up' # Power state is on. but not ready. So going up
+        return False
+
     def SystemReadyState(self,thermal=None,before=None):
         thermal_value=''
         boot_progress='_NA_'
@@ -370,38 +407,10 @@ class Redfish:
         #it can read the Redfish's Thermal data when OS is running
         #ipmitool's sensor data can read when the system's CPU is ready
         if IsIn(thermal,[False,None]):
-            ok,aa=self.Get('Systems/1')
-            if isinstance(aa,dict):
-                #The hardware initialization finish / ready state
-                #Same as ipmitool's sensor data readable step
-                physical_power=aa.get('PowerState')
-                if IsIn(physical_power,['Off']):
-                    #return None # Off state
-                    return 'off' # Off state
-                elif IsIn(physical_power,['On']):
-                    if isinstance(aa.get('BootProgress'),dict):
-                        boot_progress=aa.get('BootProgress').get('LastState')
-                        if IsIn(boot_progress,[None,'None']):
-                            self.bootprogress_wait=0
-                            #if IsIn(before,['on']):
-                            #    return 'off' # Power state is on. but not ready. So going up
-                            if IsIn(before,['on',None]):
-                               return 'off' # Power state is on. but not ready. So going up
-                            return 'up' # Power state is on. but not ready. So going up
-                        elif IsIn(boot_progress,['SystemHardwareInitializationComplete']):
-                            self.bootprogress_wait=0
-                            return 'on' #ON state
-                        elif IsIn(boot_progress,['OEM']):  # OEM made some issue on some strange BMC
-                            printf('WARN: The BootProgress in Redfish shows "OEM" instead of the BIOS initialization state.',log=self.log,no_intro=None,mode='d')
-                            if self.bootprogress_wait > 0:
-                                self.bootprogress_wait-=1
-                                return 'up'
-                            else:
-                                up_state=True
-                                # goto next step (Thermal check)
-                        else: #Keep changing boot_progress for BIOS initialization
-                            self.bootprogress_wait=20
-                            return 'up' # Power state is on. but not ready. So going up
+            boot_progress=self.GetBiosBootProgress()
+            if boot_progress in ['off','on','up']:
+                return boot_progress
+        #If can not get boot progress then reading Thermal value for node status
         if IsIn(thermal,[True,None]) or IsIn(boot_progress,['OEM']):
             ok,aa=self.Get('Chassis/1/Thermal')
             if isinstance(aa,dict):
@@ -895,42 +904,166 @@ class Redfish:
             if 'BootSourceOverrideTarget@Redfish.AllowableValues' in boot_info: naa['help']['boot']=boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues')
         return naa
 
+    def GetBiosAttributes(self,FindKey=None,FindData=None,boot_attr=None,get_bootkey=False):
+        if not boot_attr:
+            ok,bios_info=self.Get('Systems/1/Bios')
+            if not ok: return False
+            boot_attr=bios_info.get('Attributes',{})
+        if isinstance(boot_attr,dict):
+            if 'Attributes' in boot_attr: # if put the 'Systems/1/Bios' output at boot_attr then filter out
+                boot_attr=boot_attr['Attributes']
+            if not FindKey and not FindData and not get_bootkey:
+                return boot_attr
+            out={}
+            for k in boot_attr:
+                if get_bootkey:
+                    if k.startswith('UEFIBootOption_') or k.startswith('BootOption_'):
+                        out[k]=boot_attr[k]
+                else:
+                    if FindKey:
+                        if k.startswith(FindKey):
+                            out[k]=boot_attr[k]
+                    elif FindData:
+                        if boot_attr[k] == FindData:
+                            out[k]=boot_attr[k]
+            return out
+        return None
+
+    def FindMac(self,data):
+        if isinstance(data,str) and data:
+            m=FIND(data).Find("(MAC:\w+)")
+            if m:
+                mac=MacV4(m[0][4:] if isinstance(m,list) else m[4:] if isinstance(m,str) else m)
+                if mac:
+                    return mac
+            for x in Split(data):
+                m=MacV4(x)
+                if m:
+                    return m
+
+    def GetPXEBootableInfo(self,pxe_boot_mac=None,mode='auto'):
+        #If not put pxe_boot_mac then it can automatically get possible pxe_boot_mac
+        #if it has multiplue PXE bootable mac then try next pxe boot id when next_pxe_id=# (int number)
+        #B13,X13,X14
+        pxe_mac=None
+        pxe_mac_id=None
+        pxe_boot_macs=[]
+        mode=None
+        orders=[]
+
+        ok,fixed_boot_order_info=self.Get('Systems/1/Oem/Supermicro/FixedBootOrder')
+        if not ok or not isinstance(fixed_boot_order_info,dict):
+            return pxe_boot_mac,pxe_mac_id,pxe_boot_macs,mode,orders
+        mode=fixed_boot_order_info.get('BootModeSelected')
+        orders=fixed_boot_order_info.get('FixedBootOrder')
+        for i in Iterable(fixed_boot_order_info.get('UEFINetwork')):
+            m=self.FindMac(i)
+            if m and m not in pxe_boot_macs:
+                pxe_boot_macs.append(m)
+        for i in range(len(orders)):
+            m=self.FindMac(orders[i])
+            if m:
+                pxe_mac=m
+            if pxe_mac and not pxe_mac_id:
+                if pxe_boot_mac:
+                    if pxe_boot_mac in pxe_boot_macs:
+                        if pxe_mac != pxe_boot_mac:
+                            pxe_mac=None
+                            continue
+                    elif mode == 'keep':
+                        continue
+                pxe_mac_id=i
+                break
+        if mode == 'keep' and pxe_boot_mac:
+            return pxe_boot_mac,pxe_mac_id,pxe_boot_macs,mode,orders
+        #Auto
+        return pxe_mac if pxe_mac else pxe_boot_mac,pxe_mac_id,pxe_boot_macs,mode,orders
+
     def _Boot_BiosBootInfo(self,pxe_boot_mac=None,next_pxe_id=False,ipv='v4',http=False):
         # Try to Special OEM BOOT ORDER first
-        def SMC_OEM_SPECIAL_BOOTORDER(next_pxe_id=False):
-            #if it has multiplue PXE bootable mac then try next pxe boot id when next_pxe_id=# (int number)
-            #B13
-            naa={}
-            ok,fixed_boot_order_info=self.Get('Systems/1/Oem/Supermicro/FixedBootOrder')
-            if not ok or not isinstance(fixed_boot_order_info,dict):
-                return False
-            naa['mode']=fixed_boot_order_info.get('BootModeSelected')
-            pxe_boot_mac=[]
-            for i in Iterable(fixed_boot_order_info.get('UEFINetwork')):
-                for x in Split(i):
-                    a=MacV4(x)
-                    if a and a not in pxe_boot_mac:
-                        pxe_boot_mac.append(a)
-            naa['order']=fixed_boot_order_info.get('FixedBootOrder')
-            for i in range(0,len(Iterable(naa['order']))):
-                if isinstance(next_pxe_id,int) and not isinstance(next_pxe_id,bool) and next_pxe_id >= i:
-                    continue
-                for x in Split(naa['order'][i]):
-                    a=MacV4(x)
-                    if a and a in pxe_boot_mac:
-                        naa['pxe_boot_id']=i
-                        naa['pxe_boot_mac']=a
+        def BB_INFO(data,bb={},devpath='',attributes=None):
+            if 'UEFI' in data:
+                bb['efi']=True
+            if 'PXE' in data:
+                bb['pxe']=True
+            elif 'HTTP' in data:
+                bb['http']=True
+            if isinstance(attributes,dict):
+                for k in attributes:
+                    if attributes[k] == data:
+                        bb['key']=k
                         break
+
+            if isinstance(devpath,str) and devpath:
+                for x in Split(devpath,'/'):
+                    if 'MAC(' in x:
+                        bb['mac']=MacV4(x.split(',')[0].split('(')[1])
+                    elif 'IP' in x:
+                        bb['ip']='v6' if 'IPv6' in x else 'v4'
+                        bb['dhcp']=True if 'DHCP' in x else False
+            else:
+                m=self.FindMac(data)
+                if m:
+                    bb['mac']=m
+                if bb.get('mac'):
+                    bb['ip']='v6' if 'IPv6' in data else 'v4'
+                    bb['dhcp']=True
+            return bb
+
+        def SMC_OEM_SPECIAL_BOOTORDER(next_pxe_id=False,pxe_boot_mac=None):
+            #If not put pxe_boot_mac then it can automatically get possible pxe_boot_mac
+            #if it has multiplue PXE bootable mac then try next pxe boot id when next_pxe_id=# (int number)
+            #B13,X13,X14
+            boot_attr=self.GetBiosAttributes(get_bootkey=True)
+
+            pxe_boot_mac,pxe_mac_id,pxe_boot_macs,mode,orders=self.GetPXEBootableInfo(pxe_boot_mac=pxe_boot_mac,mode='auto')
+            naa={}
+            naa['mode']=mode
+            naa['order']=[]
+            naa['pxe_boot_id']=pxe_mac_id
+            naa['pxe_boot_mac']=pxe_boot_mac
+            for i in range(len(orders)):
+                bb={'name':orders[i],'id':i}
+                BB_INFO(orders[i],bb,attributes=boot_attr)
+                naa['order'].append(bb)
             return naa
 
-        naa=SMC_OEM_SPECIAL_BOOTORDER(next_pxe_id=next_pxe_id)
+            #ok,fixed_boot_order_info=self.Get('Systems/1/Oem/Supermicro/FixedBootOrder')
+            #if not ok or not isinstance(fixed_boot_order_info,dict):
+            #    return False
+            #naa['mode']=fixed_boot_order_info.get('BootModeSelected')
+            #if not pxe_boot_mac:
+            #    pxe_boot_mac=[]
+            #    for i in Iterable(fixed_boot_order_info.get('UEFINetwork')):
+            #        for x in Split(i):
+            #            a=MacV4(x)
+            #            if a and a not in pxe_boot_mac:
+            #                pxe_boot_mac.append(a)
+            #naa['order']=[]
+            #orders=fixed_boot_order_info.get('FixedBootOrder')
+            #for i in range(len(orders)):
+            #    bb={'name':orders[i],'id':i}
+            #    BB_INFO(orders[i],bb,attributes=boot_attr)
+            #    if isinstance(next_pxe_id,int) and not isinstance(next_pxe_id,bool) and next_pxe_id >= i:
+            #        naa['order'].append(bb)
+            #        continue
+            #    if bb.get('mac') and naa.get('pxe_boot_id') is None:
+            #        if pxe_boot_mac:
+            #            for pbm in Iterable(pxe_boot_mac,force=True):
+            #                if MacV4(pbm) == bb.get('mac'):
+            #                    naa['pxe_boot_id']=i
+            #                    naa['pxe_boot_mac']=bb['mac']
+            #                    break
+            #    naa['order'].append(bb)
+            #return naa
+
+        naa=SMC_OEM_SPECIAL_BOOTORDER(next_pxe_id=next_pxe_id,pxe_boot_mac=pxe_boot_mac)
         if isinstance(naa,dict): return naa
         #Get BIOS Boot order information
         cmd='Systems/1/Bios'
         naa={}
         ok,bios_info=self.Get(cmd)
         if not ok or not isinstance(bios_info,dict):
-#            printf('Redfish ERROR: {}'.format(bios_info),log=self.log,log_level=1,mode='d')
             naa['error']=bios_info
             return naa
         #CMD
@@ -942,7 +1075,7 @@ class Redfish:
         if pxe_boot_mac in [None,'00:00:00:00:00:00']: pxe_boot_mac=self.BaseMac().get('lan')
         naa['pxe_boot_mac']=MacV4(pxe_boot_mac)
      
-        #Boot order
+        #Boot order in BIOS CFG
         boot_attr=bios_info.get('Attributes',{})
         if boot_attr:
             #BootMode # X11, X12, (X13,H13, B13, B2??)
@@ -1011,23 +1144,14 @@ class Redfish:
                     if 'order' not in naa: naa['order']=[]
                     name=boot_attr[ii]
                     bb={'name':name,'id':boot_id,'key':ii}
-                    bb['ip']='v6' if  'IPv6' in name else 'v4'
-                    if  'EFI' in name:
-                         bb['efi']=True
-                    if  'HTTP' in name:
-                         bb['http']=True
-                    if  'PXE' in name:
-                         bb['pxe']=True
-                         bb['dhcp']=True
-                         a=FIND(name).Find("(MAC:\w+)")
-                         if a:
-                             mac=MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a)
-                             bb['mac']=mac
-                             if naa.get('pxe_boot_id') is None and mac == naa['pxe_boot_mac'] and bb.get('http',False) == http and bb.get('ip') == ipv and len(bb.get('key','').split('_')) == 2:
-                                 naa['pxe_boot_id']=boot_id
-                                 if boot_id == 0: naa['type']='http' if bb.get('http') is True  else 'pxe'
+                    BB_INFO(name,bb,attributes=boot_attr)
+                    if bb.get('mac') and naa.get('pxe_boot_id') is None:
+                        if bb.get('mac') == naa['pxe_boot_mac'] and bb.get('http',False) == http and bb.get('ip') == ipv and (bb.get('key') is None or len(bb.get('key','').split('_')) == 2):
+                            naa['pxe_boot_id']=boot_id
+                            if boot_id == 0: naa['type']='http' if bb.get('http') is True  else 'pxe'
                     naa['order'].append(bb)
                     boot_id+=1
+            #Boot Order Stuff
             if 'order' not in naa:
                 #Boot order
                 ok,aa=self.Get('Systems/1/BootOptions')
@@ -1053,38 +1177,7 @@ class Redfish:
                                     if not aa.get('BootOptionEnabled',True): continue # enabled device or not.(old case, just support)
                                     name=aa.get('DisplayName','')
                                     bb={'name':name,'id':ix}
-                                    #if 'UEFI Network Card' in name:# or 'UEFI PXE IP' in name:
-                                    #    bb['efi']=True
-                                    #    bb['pxe']=True
-                                    #    bb['ip']='v4'
-                                    #    bb['dhcp']=True
-                                    #    a=FIND(name).Find("(MAC:\w+)")
-                                    #    if a:
-                                    #        mac=MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a)
-                                    #        bb['mac']=mac
-                                    #        if naa.get('pxe_boot_id') is None and mac == naa['pxe_boot_mac']:
-                                    #            naa['pxe_boot_id']=len(naa['order'])-1
-                                    #else:
-                                    if 'UEFI' in name:
-                                        bb['efi']=True
-                                    if 'PXE' in name:
-                                        bb['pxe']=True
-                                    elif 'HTTP' in name:
-                                        bb['http']=True
-                                    if 'UefiDevicePath' in aa:
-                                        for x in Split(aa.get('UefiDevicePath'),'/'):
-                                            if 'MAC(' in x:
-                                                bb['mac']=MacV4(x.split(',')[0].split('(')[1])
-                                            elif 'IP' in x:
-                                                bb['ip']='v6' if 'IPv6' in x else 'v4'
-                                                bb['dhcp']=True if 'DHCP' in x else False
-                                    else:
-                                        bb['dhcp']=True
-                                        bb['ip']='v6' if 'IPv6' in name else 'v4'
-                                        a=FIND(name).Find("(MAC:\w+)")
-                                        if a:
-                                            mac=MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a)
-                                            bb['mac']=mac
+                                    BB_INFO(name,bb,devpath=aa.get('UefiDevicePath'),attributes=boot_attr)
                                     naa['order'].append(bb)
                                     if naa['pxe_boot_mac'] in [None,'00:00:00:00:00:00'] and ix == 0 and bb.get('mac','A') != 'A' and bb.get('dhcp') is True and bb.get('ip') == ipv:
                                         naa['pxe_boot_id']=0
@@ -1111,9 +1204,9 @@ class Redfish:
                          if (http and 'HTTP' in rrt.get('DisplayName')) or ('PXE' in rrt.get('DisplayName')):
                              if 'IP{}'.format(ipv) in rrt.get('DisplayName'):
                                  if pxe_boot_mac:
-                                     a=FIND(rrt.get('DisplayName')).Find("(MAC:\w+)")
-                                     if a:
-                                          if pxe_boot_mac == MacV4(a[0][4:] if isinstance(a,list) else a[4:] if isinstance(a,str) else a):
+                                     m=self.FindMac(rrt.get('DisplayName'))
+                                     if m:
+                                         if pxe_boot_mac == m:
                                               if x == 0: return None  #Already set
                                               boot_orders=[rrt.get('BootOptionReference')]+boot_orders
                                               continue
@@ -1191,10 +1284,15 @@ class Redfish:
              'BootSourceOverrideTarget':boot
              }
         }
-        if self._Boot_BootOrderCheck_(boot,mode,keep,pre=True,_o_=_o_)[0] is False:
-            if self.Post('Systems/1',json=boot_db,mode='patch') is True:
+        # or using boot order name: boot_db{'Boot':{'BootSourceOverrideEnabled':'Continuous','BootSourceOverrideTarget':'None','BootOrder':["UEFI Internal Shell"]}}
+        if self._Boot_BootOrderCheck_(boot,mode,keep,pre=True,_o_=_o_)[0] is True:
+            return None,'Redfish: Already get same BootOrder condition'
+        else:
+            #if self.Post('Systems/1',json=boot_db,mode='patch') is True:
+            setrc=self.Post('Systems/1',json=boot_db,mode='patch')
+            if setrc is True:
                 return self._Boot_BootOrderCheck_(boot,mode,keep)
-        return None,'Redfish: ALready get same BootOrder condition'
+            return False,'Can not set boot order'
 
     def _Boot_SetHTTP(self,_b_,mode,https=False,retry=3):
         setting_cmd=_b_.get('cmd',"Systems/1/Bios")
@@ -1202,7 +1300,8 @@ class Redfish:
         boot_db={}
         if mode != _b_.get('mode'):
             if 'Attributes' not in boot_db: boot_db['Attributes']={}
-            boot_db['Attributes'][_b_.get('mode_name')]=mode
+            if _b_.get('mode_name'):
+                boot_db['Attributes'][_b_.get('mode_name')]=mode
         if chk not in _b_.get('support'):
             if https:
                 if 'Attributes' not in boot_db: boot_db['Attributes']={}
@@ -1213,14 +1312,16 @@ class Redfish:
         if boot_db.get('Attributes'):
             for j in range(0,retry):
                 if self.Post(setting_cmd,json=boot_db,mode='patch') in [True,None]:
-                    _b_=BiosBootInfo()
+                    _b_=self._Boot_BiosBootInfo()
                     if chk in _b_.get('support'):
-                        return _b_ #Setup
+                        return True
+#                        return _b_ #Setup
                 printf('.',direct=True,log=self.log,log_level=1)
                 time.sleep(10)
             return False # Not setup
         else:
-            return _b_ #All Same
+            #return _b_ #All Same
+            return True
 
     def _Boot_BiosBootOrderCheck_(self,pxe_boot_mac,_b_=None):
         if not isinstance(_b_,dict): _b_=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
@@ -1228,16 +1329,17 @@ class Redfish:
             if _b_.get('pxe_boot_mac') == pxe_boot_mac:
                 if _b_.get('pxe_boot_id') == 0:
                     return True,'Same PXE Boot Condition({})'.format(pxe_boot_mac)
-                return False,'Found mac({}) but boot order is low'.format(pxe_boot_mac)
+                return False,'Found mac({}) but boot order is low({})'.format(pxe_boot_mac,_b_.get('pxe_boot_id'))
             return False,'NOT Found mac({}) on this system'.format(pxe_boot_mac)
         return False,'Input parameter pxe_boot_mac is not MAC Address({})'.format(pxe_boot_mac)
 
     def _Boot_SetBiosBootOrder(self,boot='pxe',mode='UEFI',pxe_boot_mac=None,http=False,https=False,ipv='v4',retry=3,_b_=None):
+        #Support only /redfish/v1/Systems/1/Oem/Supermicro/FixedBootOrder
         pxe_boot_mac=MacV4(pxe_boot_mac)
         if not isinstance(_b_,dict): _b_=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
         if http: #HTTP stuff
-            _b_=self.SetHTTP(_b_,mode,https=https,retry=3)
-            if _b_ is False: return False,'Can not setup BootMODE or HTTP/HTTPS protocol'
+            if self._Boot_SetHTTP(_b_,mode,https=https,retry=3) is False:
+                return False,'Can not setup BootMODE or HTTP/HTTPS protocol'
 
         net_boot=self._Boot_NetworkBootOrder(pxe_boot_mac=pxe_boot_mac,http=http,ipv=ipv)
         if net_boot is False: #Error
@@ -1246,60 +1348,171 @@ class Redfish:
         else:
             if net_boot is None:
                  printf('Network Boot(PXE) setting : Not support on this BMC',log=self.log,log_level=1,mode='d')
-            _b_=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
-        #Exist
-
-        ## Systems/1/Bios
-        setting_cmd=_b_.get('cmd',"Systems/1/Bios")
-        boot_db={}
-        #Change BIOS Boot order (under X12)
+            if not isinstance(_b_,dict): _b_=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
+        #Check BIOS Boot order 
         if pxe_boot_mac:
             if self._Boot_BiosBootOrderCheck_(pxe_boot_mac,_b_=_b_)[0] is True:
                 return True,'Already Same PXE Boot Condition({})'.format(pxe_boot_mac)
-        if _b_.get('pxe_boot_mac') and _b_.get('pxe_boot_id'):
-            if _b_.get('pxe_boot_mac') == pxe_boot_mac:
-                boot_db={'Attributes':{_b_.get('order')[0].get('key'):_b_.get('order')[_b_.get('pxe_boot_id')].get('name')}}
+        #Support only /redfish/v1/Systems/1/Oem/Supermicro/FixedBootOrder
+        if _b_.get('pxe_boot_mac') and IsInt(_b_.get('pxe_boot_id')):
+            orders=_b_.get('order')
+            fxiedorders=[i['name'] for i in orders]
+            a=fxiedorders[0]
+            b=fxiedorders[_b_.get('pxe_boot_id')]
+            #b=fxiedorders[8]
+            fxiedorders[0]=b
+            fxiedorders[_b_.get('pxe_boot_id')]=a
+            #fxiedorders[8]=a
+            ppp=self.Post('Systems/1/Oem/Supermicro/FixedBootOrder',json={'FixedBootOrder':fxiedorders},mode='patch')
+            if ppp in [True,None]:
+                time.sleep(2)
+                _b_=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
+                if _b_.get('pxe_boot_id') == 0:
+                    return True,'Set {} Boot with {}'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE',pxe_boot_mac)
+                else:
+                    return False,'Can not set {} Boot at BIOS'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE')
             else:
-                for i in Iterable(_b_.get('order')):
-                    if i.get('mac') == pxe_boot_mac and i.get('dhcp') is True and i.get('ip') == 'v4' and i.get('http',False) == http:
-                        boot_db={'Attributes':{_b_.get('order')[0].get('key'):i.get('name')}}
-                        break
-        mode=self._Boot_Mode(mode)
-        if mode != _b_.get('mode'):
-            #Change BootMode(BootModeSelect)
-            if 'Attributes' not in boot_db: boot_db['Attributes']={}
-            boot_db['Attributes'][_b_.get('mode_name')]=mode
-        support_mode=_b_.get('support')
-        if support_mode:
-            if (http is None or http is True) and 'http' in support_mode:
-                #Change Support (http) (IPv4HTTPSupport)
-                if 'Attributes' not in boot_db: boot_db['Attributes']={}
-                http_info=_b_.get('support').get('http')
-                if 'v4' in http_info.get('ver',{}):
-                    v4_id=http_info.get('ver').index('v4')
-                    if http_info.get('enabled')[v4_id] is False:
-                        boot_db['Attributes'][http_info.get('key')[v4_id]]='Enabled'
-            if (http is None or http is False) and 'pxe' in support_mode:
-                #Change Support (PXE) (IPv4PXESupport)
-                if 'Attributes' not in boot_db: boot_db['Attributes']={}
-                pxe_info=_b_.get('support').get('pxe')
-                if 'v4' in pxe_info.get('ver',{}):
-                    v4_id=pxe_info.get('ver').index('v4')
-                    if pxe_info.get('enabled')[v4_id] is False:
-                        boot_db['Attributes'][pxe_info.get('key')[v4_id]]='Enabled'
-
-        if boot_db.get('Attributes'):
-            for j in range(0,retry):
-                if self.Post(setting_cmd,json=boot_db,mode='patch') in [True,None]:
-                    if self._Boot_BiosBootOrderCheck_(pxe_boot_mac)[0] is True:
-#                    binfo=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
-#                    if binfo.get('pxe_boot_id') == 0:
-                       return True,'Set {} Boot with {}'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE',pxe_boot_mac)
-                time.sleep(10)
-            return False,'Can not set {} Boot at BIOS'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE')
+                return None,'Not support /Systems/1/Oem/Supermicro/FixedBootOrder command'
         return None,'Not found any updating parameters'
+        
+        #Directly Change Systems/1/Bios. but it something mixed the order(duplicated). So not good
+#        ## Systems/1/Bios
+#        setting_cmd=_b_.get('cmd',"Systems/1/Bios")
+# 
+#        swap_boot_order=[]
+#        #boot_db={}
+#        #Change BIOS Boot order (under X12)
+#        if pxe_boot_mac:
+#            if self._Boot_BiosBootOrderCheck_(pxe_boot_mac,_b_=_b_)[0] is True:
+#                return True,'Already Same PXE Boot Condition({})'.format(pxe_boot_mac)
+#        print('>>> _b_:',pxe_boot_mac,'::::',_b_)
+#        if _b_.get('pxe_boot_mac') and _b_.get('pxe_boot_id'):
+#            if _b_.get('pxe_boot_mac') == pxe_boot_mac:
+#                key_name_f=_b_.get('order')[0].get('key') if _b_.get('order')[0].get('key') else 'UEFIBootOption_1'
+#                key_name_o=_b_.get('order')[_b_.get('pxe_boot_id')].get('key') if _b_.get('order')[_b_.get('pxe_boot_id')].get('key') else 'UEFIBootOption_{}'.format(_b_.get('pxe_boot_id')+1)
+#                # Swap pxe_boot_id and 0
+#                #boot_db={'Attributes':{key_name_f:_b_.get('order')[_b_.get('pxe_boot_id')].get('name'),key_name_o:_b_.get('order')[0].get('name')}}
+#                swap_boot_order=[{'Attributes':{key_name_f:_b_.get('order')[_b_.get('pxe_boot_id')].get('name'),key_name_o:_b_.get('order')[0].get('name')}}]
+#                #swap_boot_order.append((0,{'Attributes':{key_name_f:_b_.get('order')[_b_.get('pxe_boot_id')].get('name')}}))
+#                #swap_boot_order.append((_b_.get('pxe_boot_id'),{'Attributes':{key_name_o:_b_.get('order')[0].get('name')}}))
+#            else:
+#                for i in Iterable(_b_.get('order')):
+#                    if i.get('mac') == pxe_boot_mac and i.get('dhcp') is True and i.get('ip') == 'v4' and i.get('http',False) == http:
+#                        key_name_f=_b_.get('order')[0].get('key')  if _b_.get('order')[0].get('key') else 'UEFIBootOption_1'
+#                        key_name_o=i.get('key')  if i.get('key') else 'UEFIBootOption_{}'.format(i.get('id')+1)
+#                        #boot_db={'Attributes':{key_name_f:i.get('name'),key_name_o:_b_.get('order')[0].get('name')}}
+#                        swap_boot_order=[{'Attributes':{key_name_f:i.get('name'),key_name_o:_b_.get('order')[0].get('name')}}]
+#                        #swap_boot_order.append((0,{'Attributes':{key_name_f:i.get('name')}}))
+#                        #swap_boot_order.append((i.get('id'),{'Attributes':{key_name_o:_b_.get('order')[0].get('name')}}))
+#                        break
+#        print('>>>>>>>ORDER:',swap_boot_order)
+#        boot_db={}
+#        mode=self._Boot_Mode(mode)
+#        if mode != _b_.get('mode'):
+#            #Change BootMode(BootModeSelect)
+#            if 'Attributes' not in boot_db: boot_db['Attributes']={}
+#            boot_db['Attributes'][_b_.get('mode_name')]=mode
+#        support_mode=_b_.get('support')
+#        if support_mode:
+#            if (http is None or http is True) and 'http' in support_mode:
+#                #Change Support (http) (IPv4HTTPSupport)
+#                if 'Attributes' not in boot_db: boot_db['Attributes']={}
+#                http_info=_b_.get('support').get('http')
+#                if 'v4' in http_info.get('ver',{}):
+#                    v4_id=http_info.get('ver').index('v4')
+#                    if http_info.get('enabled')[v4_id] is False:
+#                        boot_db['Attributes'][http_info.get('key')[v4_id]]='Enabled'
+#            if (http is None or http is False) and 'pxe' in support_mode:
+#                #Change Support (PXE) (IPv4PXESupport)
+#                if 'Attributes' not in boot_db: boot_db['Attributes']={}
+#                pxe_info=_b_.get('support').get('pxe')
+#                if 'v4' in pxe_info.get('ver',{}):
+#                    v4_id=pxe_info.get('ver').index('v4')
+#                    if pxe_info.get('enabled')[v4_id] is False:
+#                        boot_db['Attributes'][pxe_info.get('key')[v4_id]]='Enabled'
+# 
+#        print('>>>><<<<BIOS CFG:boot_db:',boot_db)
+#        results=[]
+#        if not swap_boot_order:
+#            return None,'Not found any updating parameters'
+#        def Apply(setting_cmd,swdb,x=0):
+#            ppp=self.Post(setting_cmd,json=swdb,mode='patch')
+#            print('>>>><<<<BIOS CFG:post:',x, ppp, swdb)
+#            if ppp in [True,None]:
+#                return 0
+#            else:
+#                return 1
+#                 if self.Power('on' if self.Power() == 'off' else 'reset',up=10,sensor=True):
+#                     for i in range(10):
+#                         binfo=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
+#                         print('>>>i:',i,binfo)
+#                         if isinstance(binfo,dict):
+#                             oo=binfo.get('order')
+#                             if isinstance(oo,list):
+#                                 if oo[want_id].get('name') == list(swdb[1]['Attributes'].items())[0][1]:
+#                                     return 0
+#                         time.sleep(3)
+#                 return 1
+#                 #Not changed it quickly. it need to reboot for apply it
+#                 #if self._Boot_BiosBootOrderCheck_(pxe_boot_mac)[0] is True:
+#                 #binfo=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
+#                 #if binfo.get('pxe_boot_id') == 0:
+#                 #return True,'Set {} Boot with {}'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE',pxe_boot_mac)
+#             else:
+#                 if self.Power('reset',up=10,sensor=True):
+#                     return 2
+#                 return 1
+# 
+#        x=0
+#        for swdb in swap_boot_order:
+#            for j in range(0,retry):
+#                if boot_db:
+#                    for k in boot_db['Attributes']:
+#                        if k not in swdb['Attributes']:
+#                            swdb['Attributes'][k]=boot_db['Attributes'][k]
+#                rc=Apply(setting_cmd,swdb,x=x)
+#                print('>>>APPLY:RC:',rc,' from ',swdb)
+#                if rc == 2:
+#                    time.sleep(20)
+#                else:
+#                    results.append(True if rc==0 else False)
+#                    break
+#            x+=1
+#                #print('>>><<<DB??',swdb)
+#                #ppp=self.Post(setting_cmd,json=swdb,mode='patch')
+#                #print('>>>><<<<BIOS CFG:post:',ppp)
+#                ##if self.Post(setting_cmd,json=boot_db,mode='patch') in [True,None]:
+#                #if ppp in [True,None]:
+#                #    if x == 0:
+#                #        if self.Power() == 'off':
+#                #            if self.Power('on',up=5,sensor=True):
+#                #                results.append(True)
+#                #                break
+#                #            else:
+#                #                results.append(False)
+#                #        else:
+#                #            if self.Power('reset',up=5,sensor=True):
+#                #                results.append(True)
+#                #                break
+#                #            else:
+#                #                results.append(False)
+#                #    else:
+#                #        results.append(True)
+#                #        break
+#                #    #Not changed it quickly. it need to reboot for apply it
+#                #    #if self._Boot_BiosBootOrderCheck_(pxe_boot_mac)[0] is True:
+#                #    binfo=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
+#                #    if binfo.get('pxe_boot_id') == 0:
+#                #    #return True,'Set {} Boot with {}'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE',pxe_boot_mac)
+#                #else:
+#                #    results.append(False)
+#                #    break
+#                #time.sleep(10)
+#        if len(results) > 0 and results[0] is True:
+#            return True,'Set {} Boot with {}'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE',pxe_boot_mac)
+#        return False,'Can not set {} Boot at BIOS'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE')
 
-    def BootInfo(self,simple_mode=False,rf_boot_info=None):
+    def BootInfo(self,simple_mode=False,rf_boot_info=None,pxe_boot_mac=None):
         if not isinstance(rf_boot_info,dict):
             rf_boot_info={'order':self._Boot_BootSourceOverrideInfo(),'bios':self._Boot_BiosBootInfo(pxe_boot_mac=MacV4(pxe_boot_mac))}
             if not rf_boot_info['order'] and not rf_boot_info['bios']:
@@ -1372,18 +1585,16 @@ class Redfish:
                 https=True
                 mode='UEFI'
             #Check
+            if not pxe_boot_mac and rf_boot_info['bios'].get('pxe_boot_mac'):
+                pxe_boot_mac=rf_boot_info['bios'].get('pxe_boot_mac')
             biosbootorder_check=self._Boot_BiosBootOrderCheck_(pxe_boot_mac,_b_=rf_boot_info['bios'])
-            if biosbootorder_check[0] is True:
+            if biosbootorder_check[0] is True: #Already Boot from PXE in BIOS CFG 
                 return biosbootorder_check
-            #Temporary Boot order
+            #Temporary set Boot order
             if IsIn(set_mode,['auto','order','bootoverride','temp','simple','temporary']) or IsIn(boot,['efi_shell','uefi_shell','shell','cd','usb','hdd','floppy','bios','setup','biossetup','set']):
                 rt=self._Boot_SetBootOrder(boot,mode,keep=keep)
-                if IsIn(set_mode,['auto']):
-                    if rt[0]: return rt
-                    #If fail then set boot bios cfg
-                else:
-                    return rt
-            #BIOS CFG Change
+                if rt[0] is not False: return rt
+            #Set/Change BIOS CFG
             return self._Boot_SetBiosBootOrder(boot,mode,pxe_boot_mac,http,https,ipv,_b_=rf_boot_info['bios'])
         else:
         # Information
@@ -3341,6 +3552,7 @@ class kBmc:
                         mode='UEFI'
                     printf("[RF] Boot: boot:{}, mode:{}, keep:{}, force:{}".format(boot,mode,True if persistent else False,force),log=self.log,mode='d')
                     ok,rf_boot=rf.Boot(boot=boot,mode=mode,keep='keep' if persistent else 'Once',force=force,set_bios_uefi=set_bios_uefi,pxe_boot_mac=pxe_boot_mac)
+                    if ok in [True,None]: ok=True
                     printf("[RF] SET : {}".format(ok),log=self.log,mode='d')
                     rc=ok,(ok,'{} set {} to {}'.format('Persistently' if persistent else 'Temporarily',boot,mode) if ok else rf_boot)
                     if krc(rc,chk=True):
