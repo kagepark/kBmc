@@ -2056,11 +2056,11 @@ class kBmc:
         self.org_ip='{}'.format(self.ip)
         # Redfish Support
         self.redfish=opts.get('redfish') if isinstance(opts.get('redfish'),bool) else True if opts.get('redfish_hi') is True else None
-        rf=None
+        self.rf=None
         if self.redfish is not False:
-            rf=self.CallRedfish(True,True)
-            if rf:
-                self.redfish=rf.IsEnabled() if rf else False
+            self.rf=self.CallRedfish(True,True)
+            if self.rf:
+                self.redfish=self.rf.IsEnabled() if self.rf else False
         if self.redfish:
             # If support Redfish then check redfish_hi interface
             if isinstance(opts.get('redfish_hi'),bool):
@@ -2075,6 +2075,7 @@ class kBmc:
         self.power_get_tools=opts.get('power_get_tools',True)
 
     def CallRedfish(self,force=False,check=True,no_ipmitool=True,detail_log=False,timeout=None,keep_ping=0):
+        if not force and self.rc: return self.rf
         if self.redfish or force:
             if force or check:
                 # when it called from here and there. So too much logging
@@ -2102,6 +2103,7 @@ class kBmc:
                     # Call Simple command of Redfish
                     rf_system=rf.Get('/Systems')
                     if krc(rf_system,chk=True):
+                        self.rf=rf
                         return rf
                     # Check BMC User/Password with ipmitool command
                     printf("Check User/Password with IPMITOOL",log=self.log,dsp='d')
@@ -2115,7 +2117,8 @@ class kBmc:
                 return False
             else:
                 if detail_log: printf("directly call Redfish without check",log=self.log,log_level=1,dsp='d')
-                return Redfish(bmc=self)
+                self.rf=Redfish(bmc=self)
+                return self.rf
         #Not support redfish
         if detail_log: printf("Not support redfish and not force check redfish",log=self.log,log_level=1,dsp='d')
         return False
@@ -3466,7 +3469,7 @@ class kBmc:
                             return True,ii_a[-1]
         return krc(rc[0]),None
 
-    def SetPXE(self,ipxe=True,persistent=True,set_bios_uefi=False,force=False):
+    def SetPXE(self,ipxe=True,persistent=True,set_bios_uefi=False,force=False,pxe_boot_mac=None):
         # 0. Check boot order and not set then keep going
         # 1. turn off system
         # 2. Set Boot Order
@@ -3493,7 +3496,7 @@ class kBmc:
         #if self.power('off',verify=True):
         #    if self.is_down(timeout=1200,interval=5,sensor_off_monitor=5,keep_off=5)[0]:
 
-        br_rc=self.bootorder(mode='pxe',ipxe=ipxe,force=True,persistent=persistent,set_bios_uefi=set_bios_uefi)
+        br_rc=self.bootorder(mode='pxe',ipxe=ipxe,force=True,persistent=persistent,set_bios_uefi=set_bios_uefi,pxe_boot_mac=pxe_boot_mac)
         if br_rc[0]:
             if self.power('on'):
                 time.sleep(10)
