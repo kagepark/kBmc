@@ -262,7 +262,10 @@ class Redfish:
             return ok,msg
         return ok,msg
 
-    def Post(self,cmd,host=None,json=None,data=None,files=None,mode='post',retry=3,patch_reset=False,auto_search_passwd_in_bmc=True):
+    def Post(self,cmd,host=None,json=None,data=None,files=None,mode='post',retry=3,patch_reset=False,wait_after_reset=30,auto_search_passwd_in_bmc=True):
+        #False: Error condition
+        #True : Post OK
+        #0    : property issue 
         host=self.Ip(host)
         if not ping(host,timeout=1800,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log):
             printf("ERROR: Can not access the ip({}) over 30min.".format(host),log=self.log)
@@ -295,10 +298,10 @@ class Redfish:
                 answer_tag=next(iter(msg))
                 # sometimes, success with 202 code or maybe others(??)
                 if IsIn(answer_tag,['Success','Accepted']): #OK
-                    if patch_reset:
-                        if mode == 'patch':# if patch command then reset the power to apply
+                    if mode == 'patch':# if patch command then reset the power to apply
+                        if patch_reset:
                             time.sleep(5)
-                            return self.Power('reset',up=30,sensor=True)
+                            return self.Power('reset',up=Int(wait_after_reset,default=30),sensor=True)
                     return True #OK
                 if IsIn(answer_tag,['error','Action@Message.ExtendedInfo']): #Error
                     _mm_= msg.get(answer_tag)
@@ -332,13 +335,14 @@ class Redfish:
                             return 0
             if data[1].status_code == 200: #OK
                 if mode == 'patch': # if patch command then reset the power to apply
-                    time.sleep(5)
-                    return self.Power('reset',up=30,sensor=True)
+                    if patch_reset:
+                        time.sleep(5)
+                        return self.Power('reset',up=Int(wait_after_reset,default=30),sensor=True)
                 return True
             #Fail
             printf(' - Error: ({}:{}):{}'.format(mode,data[1].status_code,data[1].text),log=self.log,no_intro=None,mode='d')
             break
-        return 0
+        return False
 
     def Data(self,data):
         ndata={}
@@ -1624,7 +1628,17 @@ class Redfish:
             return None
         if isinstance(aa,dict): return aa.get('BiosVersion')
 
-    def RedfishHI(self,active=None,permanent=False):
+    def OnOffRedfishHI(self,active=True,permanent=None,cmd_str=None):
+        if not cmd_str: cmd_str='Managers/1/HostInterfaces/1'
+        rndis_act={'InterfaceEnabled': False if active is False else True}
+        if isinstance(permanent,bool): #Not sure
+            if permanent:
+                rndis_act['CredentialBootstrapping']={'EnableAfterReset':True,'Enabled':True}
+            else:
+                rndis_act['CredentialBootstrapping']={'EnableAfterReset':False,'Enabled':True}
+        return self.Post(cmd_str,json=rndis_act,mode='patch')
+
+    def RedfishHI(self,active=None,permanent=None):
         naa={}
         ok,aa=self.Get('Systems/1/EthernetInterfaces/ToManager')
         if isinstance(aa,dict):
@@ -1649,17 +1663,13 @@ class Redfish:
                 naa['mac']=aa.get('PermanentMACAddress',aa.get('MACAddress'))
                 naa['status']=aa.get('Status',{}).get('State')
                 naa['connect']=aa.get('Oem',{}).get('Supermicro',{}).get('USBConnection')
-        if naa and isinstance(active,bool) and naa['interface_id']:
-            if active:
-                rndis_act={'InterfaceEnabled':True}
-                if permanent: #Not sure
-                    rndis_act['CredentialBootstrapping']={'EnableAfterReset': True,'Enabled': True}
-            else:
-                rndis_act={'InterfaceEnabled':False}
-                if permanent: #Not sure
-                    rndis_act['CredentialBootstrapping']={'EnableAfterReset': False,'Enabled': False}
-            bb=self.Post(naa['interface_id'],json=rndis_act,mode='patch')
-            #bb=self.Post('Systems/1/EthernetInterfaces/ToManager',json=rndis_act,mode='patch')
+
+        if isinstance(active,bool):
+            if not self.OnOffRedfishHI(cmd_str=naa.get('interface_id'),active=active,permanent=permanent):
+                return {'error':'Can not turn on the Redfish_HI interface'}
+            # Re-scan after activate
+            return self.RedfishHI()
+        # return status
         return naa
 
     def BaseMac(self,port=None):
