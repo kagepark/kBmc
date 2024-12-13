@@ -2066,7 +2066,7 @@ class kBmc:
             if isinstance(opts.get('redfish_hi'),bool):
                 self.redfish_hi=opts.get('redfish_hi')
             else:
-                self.redfish_hi=rf.RedfishHI().get('enable') if rf else False
+                self.redfish_hi=self.rf.RedfishHI().get('enable') if self.rf else False
         else:
             self.redfish_hi=False
         self.power_monitor_stop=False
