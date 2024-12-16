@@ -4171,7 +4171,7 @@ class kBmc:
                                         cur_temp=Int(ssi_a[1],default=0)
                                         ucr=Int(ssi_a[-2],default=0) # Threshold value
                                         unr=Int(ssi_a[-1],default=0) # critical issue value
-                                        if cur_temp > 0 and ncr > 0 and cur_temp > ncr:
+                                        if cur_temp > 0 and ucr > 0 and cur_temp > ucr:
                                             high_temp='{} is too high({}) (over threshold {})'.format(ssi_a[0],cur_temp,ucr)
                             
                             pre_msg=' - Suddenly off' if IsIn(Get(Split(is_up[1],'-'),-2),['up','on']) else ' - Keep off(never on)'
