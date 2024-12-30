@@ -367,7 +367,7 @@ class Redfish:
                         ndata[xx]=data[xx].get('@odata.id')
         return ndata
 
-    def GetBiosBootProgress(self):
+    def GetBiosBootProgress(self,before=None):
         #Read BIOS Initialize step by redfish and return up,off,on for the system
         #Can not read redfish information then return False
         ok,aa=self.Get('Systems/1')
@@ -383,10 +383,10 @@ class Redfish:
                     boot_progress=aa.get('BootProgress').get('LastState')
                     if IsIn(boot_progress,[None,'None']):
                         self.bootprogress_wait=0
-                        #if IsIn(before,['on']):
-                        #    return 'off' # Power state is on. but not ready. So going up
-                        if IsIn(before,['on',None]):
-                           return 'off' # Power state is on. but not ready. So going up
+                        if IsIn(before,['on']):
+                            return 'off' # Previously ON, but now something up state then it should be off and on
+                        #if IsIn(before,['on',None]):
+                        #   return 'off' # Previously ON, but now something up state then it should be off and on
                         return 'up' # Power state is on. but not ready. So going up
                     elif IsIn(boot_progress,['SystemHardwareInitializationComplete']):
                         self.bootprogress_wait=0
@@ -411,7 +411,7 @@ class Redfish:
         #it can read the Redfish's Thermal data when OS is running
         #ipmitool's sensor data can read when the system's CPU is ready
         if IsIn(thermal,[False,None]):
-            boot_progress=self.GetBiosBootProgress()
+            boot_progress=self.GetBiosBootProgress(before=before)
             if boot_progress in ['off','on','up']:
                 return boot_progress
         #If can not get boot progress then reading Thermal value for node status
@@ -2200,7 +2200,7 @@ class kBmc:
         out=['none','none','none'] # [Sensor(ipmitool/SMCIPMITool), Redfish, ipmitool/SMCIPMITool]
         if sensor:
             for mm in Iterable(self.cmd_module):
-                #It is only ipmitool only result. So denided using redfish 
+                #It is only ipmitool only result. So denided using redfish ,So don't need before power state in here.
                 rt=self.SystemReadyState(mm.cmd_str('ipmi sensor',passwd=self.passwd),mm.__name__,ipmitoolonly=True)
                 if IsIn(rt,['up','on']):
                     out[0]=rt
@@ -2215,7 +2215,7 @@ class kBmc:
             rf=self.CallRedfish(check=False if checked_redfish else True)
             if rf:
                 checked_redfish=True
-
+                # here check with before power mon in redfish
                 rt=rf.Power(sensor=redfish_sensor,before=before_mon)
                 out[1]='on' if IsIn(rt,['on']) else 'up' if IsIn(rt,['up']) else 'off' if IsIn(rt,['down','off']) else rt
                 if out[1] not in ['on','off','up']: # wrong data then not checked redfish
