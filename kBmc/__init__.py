@@ -421,12 +421,18 @@ class Redfish:
                 if isinstance(aa.get('Temperatures'),dict):
                     for ii in aa.get('Temperatures'):
                         if isinstance(ii,dict) and ii.get('PhysicalContext') == 'CPU':
-                            if IsIn(ii.get('ReadingCelsius')):
+                            #if IsIn(ii.get('ReadingCelsius')):
+                            cpu_temp=Int(ii.get('ReadingCelsius'),default=-1)
+                            if cpu_temp >= 0:
                                 self.bootprogress_wait=0
                                 if IsIn(thermal,[None,False]):
-                                    return 'on'
+                                    if cpu_temp > 10:
+                                        return 'on'
+                                    else:
+                                        return 'off'
                                 else:
-                                    return int(ii.get('ReadingCelsius')) #ON
+                                    #return int(ii.get('ReadingCelsius')) #ON
+                                    return cpu_temp
                             else:
                                 thermal_value=ii.get('ReadingCelsius')
                     if IsIn(thermal,[None,False]):
@@ -439,12 +445,18 @@ class Redfish:
                     for i in aa.get('Temperatures'):
                         if isinstance(i,dict):
                             if i.get('PhysicalContext') == 'CPU':
-                                if IsInt(i.get('ReadingCelsius')):
+                                cpu_temp=Int(i.get('ReadingCelsius'),default=-1)
+                                #if IsInt(cpu_temp):
+                                if cpu_temp >=0:
                                     self.bootprogress_wait=0
                                     if IsIn(thermal,[None,False]):
-                                        return 'on'
+                                        if cpu_temp > 10:
+                                            return 'on'
+                                        else:
+                                            return 'off'
                                     else:
-                                        return i.get('ReadingCelsius')
+                                        #return i.get('ReadingCelsius')
+                                        return cpu_temp
                                 else:
                                     thermal_value=i.get('ReadingCelsius')
                     if IsIn(thermal,[None,False]):
