@@ -2257,6 +2257,8 @@ class kBmc:
         #define get power status function
         get_current_power_status=opts.get('get_current_power_status')
         if IsNone(get_current_power_status): get_current_power_status=self.power_get_status
+        on_off_keep_counts=[0,0] # Keep on or off counting number according to the before state in is_on_off_up()
+        on_off_keep_count_for_before=Int(opts.get('on_off_keep_count_for_before'),2) # Keep on or off state count limit to the before state in is_on_off_up()
         status_log=opts.get('status_log',True)
         monitor_interval=Int(opts.get('monitor_interval'),5)
         timeout=Int(opts.get('timeout'),1800)
@@ -2265,6 +2267,7 @@ class kBmc:
         wait_on_for_up=Int(opts.get('wait_up'),180)
         mode=opts.get('mode','a')
         info=opts.get('info',False)
+        before_power_state=opts.get('before_power_state')
         # monitoring_state= list or string with comma (monitoring each state step)
         # timeout : monitoring timeout
         # monitor_interval : monitoring interval time
@@ -2279,34 +2282,61 @@ class kBmc:
         #### define local varible
         # count : how many loop
         # printed : fix printing 
-        def is_on_off(data,mode='a',sensor_time=None,sensor_off_time=420,before=None,checked_redfish=False):
+        def is_on_off_up(data,mode='a',sensor_time=None,sensor_off_time=420,before=None,checked_redfish=False,on_off_keep_count_for_before=2,on_off_keep_counts=[0,0]):
             #<sensor>,<redfish>,<ipmi/tool>
             # data: [Sensor data(ipmitool/smcipmitool), Redfish data, ipmitool/smcipmitool data)]
+            # mode: a: auto, r: redfish only, t: ipmitool only, s: ipmitool sensor temporature only
             if not sensor_time: sensor_time=TIME().Int()
             if data.count('off') == 3 or data.count('on') == 3: # All same data then return without any condition
+                on_off_keep_counts=[0,0]
                 return data[0],sensor_time
             if mode == 'r':
-                if IsIn(data[1],['on','off','up']): return data[1],0 # redfish output
+                if IsIn(data[1],['on','off','up']):
+                    on_off_keep_counts=[0,0]
+                    return data[1],0 # redfish output
             elif mode == 't':
-                if IsIn(data[2],['on','off']): return data[2],0 # cmd/ipmitool output
+                if IsIn(data[2],['on','off']):
+                    on_off_keep_counts=[0,0]
+                    return data[2],0 # cmd/ipmitool output
+            elif mode == 's':
+                if IsIn(data[0],['on','off']):
+                    on_off_keep_counts=[0,0]
+                    return data[0],0 # cmd/ipmitool output
             # Other mode case
             #if mode == 's':
             #For mode a and s
             #if data[1] == 'off' and (data[1] == data[2] or data[0] == data[1]):
             #if 'off' in data and (data[2] == data[0] or data[2] == data[1] or data[0] == data[1]):
             if data.count('off') >= 2: # right off
-                return 'off',sensor_time
+                if data[2] == 'on' and on_off_keep_counts[1] >= 5: # [off, off, on] case
+                    #How to know this is ipmitool command stuck or not?
+                    return 'up',sensor_time
+                else:
+                    on_off_keep_counts[1]+=1
+                    return 'off',sensor_time
             elif data.count('on') >= 2: # right on
+                on_off_keep_counts=[0,0]
                 return 'on',sensor_time
             elif IsIn(data[0],['off']) and IsIn(data[1],['up']) and IsIn(data[2],['on']): #right up
-                if IsIn(before,['on']):
+                #if IsIn(before,['on']):
+                if IsIn(before,['on']) or (before == 'off' and on_off_keep_counts[0] > 0 and on_off_keep_counts[0] <= on_off_keep_count_for_before):
+                    on_off_keep_counts[0]+=1
+                    return 'off',sensor_time
+                return 'up',sensor_time
+            #New case, sensor(temporature) and redfish are off but ipmitool command on then return off and up
+            elif IsIn(data[0],['off']) and IsIn(data[1],['off']) and IsIn(data[2],['on']): #right up
+                #if IsIn(before,['on']):
+                if IsIn(before,['on']) or (before == 'off' and on_off_keep_counts[0] > 0 and on_off_keep_counts[0] <= on_off_keep_count_for_before):
+                    on_off_keep_counts[0]+=1
                     return 'off',sensor_time
                 return 'up',sensor_time
             #Only single data case
             if checked_redfish: # Only working on redfish
                 if IsIn(data[0],[None,False,'none']) and IsIn(data[2],[None,False,'none']):
                     if IsIn(data[1],['on','off','up']):
-                        if IsIn(data[1],['up']) and IsIn(before,['on']):
+                        #if IsIn(data[1],['up']) and IsIn(before,['on']):
+                        if IsIn(data[1],['up']) and (IsIn(before,['on']) or (before =='up' and on_off_keep_counts[0] > 0 and on_off_keep_counts[0] <= on_off_keep_count_for_before)):
+                            on_off_keep_counts[0]+=1
                             return 'off',sensor_time
                         return data[1],sensor_time
             # after sensor time
@@ -2314,20 +2344,25 @@ class kBmc:
                 if TIME().Int()-sensor_time > sensor_off_time: #over the sensor off time
                     if checked_redfish:
                         if IsIn(data[1],['on','off','up']):
-                            if IsIn(before,['on']):
+                            #if IsIn(before,['on']):
+                            if IsIn(before,['on']) or (before =='off' and on_off_keep_counts[0] > 0 and on_off_keep_counts[0] <= on_off_keep_count_for_before):
                                 if IsIn(data[1],['up']):
+                                    on_off_keep_counts[0]+=1
                                     return 'off',sensor_time
                             return data[1],sensor_time
                     else:
                         if IsIn(data[0],['on','off','up']):
-                            if IsIn(before,['on']):
+                            #if IsIn(before,['on']):
+                            if IsIn(before,['on']) or (before =='off' and on_off_keep_counts[0] > 0 and on_off_keep_counts[0] <= on_off_keep_count_for_before):
                                 if IsIn(data[0],['up']):
+                                    on_off_keep_counts[0]+=1
                                     return 'off',sensor_time
                             elif data[2] == data[0]:
+                                on_off_keep_counts=[0,0]
                                 return data[0],sensor_time
-                            elif IsIn(data[2],['off']):
+                            elif IsIn(data[2],['off']): #if ipmitool stuck then how to catch it?
                                 return 'off',sensor_time
-                            elif data[2] == 'on':
+                            elif IsIn(data[2],['on']):#if ipmitool stuck then how to catch it?
                                 if IsIn(data[0],['off']):
                                     return 'up',sensor_time
                             elif IsIn(data[0],['up']):
@@ -2335,65 +2370,18 @@ class kBmc:
                                     return 'off',sensor_time
                                 return 'up',sensor_time
                         elif mode == 'a':
-                            if data[2] in ['on','off']:
+                            if data[2] in ['on','off']:#if ipmitool stuck then how to catch it?
+                                on_off_keep_counts=[0,0]
                                 return data[2],sensor_time
             #keep checking both data
             if checked_redfish:
                 if data[0] == data[1]:
+                    on_off_keep_counts=[0,0]
                     return data[1],sensor_time
             else:
                 if data[0] == data[2]:
+                    on_off_keep_counts=[0,0]
                     return data[0],sensor_time
-
-                #### The Other case
-                #if 'off' in data[0:2] or 'up' in data[0:2]: # temp or redfish has off or up case
-                #    if data[0] in [None,'none',False]:
-                #        return data[1],sensor_time
-                #    # if data[0] is unknown then checkup sensor_off_time
-                #    # over 7min(420) then use redfish and ipmitool command result
-                #    if isinstance(sensor_time,int) and sensor_time:
-                #        if TIME().Int()-sensor_time > sensor_off_time:
-                #            if data[1] == data[2]: # redfish and ipmitool has same result then cmd result
-                #                return data[1],sensor_time
-                #            else:
-                #                if checked_redfish:
-                #                    if data[1] in ['on','off','up']: #redfish data
-                #                        return data[1],sensor_time
-                #                if data[0] in ['on','off','up']: #temp data
-                #                    return data[0],sensor_time
-                #                return data[2],sensor_time #ipmitool data
-                #                ## one of command got unknown then the other result
-                #                #if IsIn(data[1],['unknown','none',None]) and data[2] in ['on','off']:
-                #                #    return data[2],sensor_time
-                #                #elif IsIn(data[2],['unknown','none',None]) and data[1] in ['on','off']:
-                #                #    return data[1],sensor_time
-                #        else:
-                #            #if data[2] =='on': #booting
-                #            #if 'up' in data[0:2] or 'on' not in data[0:2]:# sensor changed to up then short time off
-                #            if 'up' in data[0:2]:# sensor changed to up then short time off
-                #                if IsIn(before,['on']): # reset command/suddenly changed state then got off state
-                #                    return 'off',sensor_time
-                #                return 'up',sensor_time
-                #    return 'off',sensor_time
-                #elif data[0] == 'on' or data[1] == 'on':
-            #elif mode == 'a':
-            #    #if data.count('off') == 3: return 'off',0 # off state
-            #    #elif data.count('on') == 3: return 'on',0 # on state
-            #    if data.count('off') >= 2: return 'off',0 # off state
-            #    elif data.count('on') >= 2: return 'on',0 # on state
-            #    elif IsIn(before,['on']): # ON->Something changed : OFF
-            #        #if 'off' in data or 'up' in data:
-            #        if 'up' in data:
-            #            return 'off',0
-            #    if not sensor_time: sensor_time=TIME().Int()
-            #    if isinstance(sensor_time,int) and sensor_time:
-            #        if TIME().Int()-sensor_time > sensor_off_time:
-            #            return 'on',sensor_time # if more then monitoring UP then ON
-            #            # if not detecting sensor or redfish then after monitoring time then ON
-            #    return 'up',0 # Something changing : up
-#                if 'on' in data[1:]: return 'on',0 # anyone on then on 
-#                if 'off' in data[1:]: return 'off',0  # anyone off then off
-#            print('<<<<<<<unknonwn')
             return 'unknown',sensor_time
 
         def mark_on_off(a):
@@ -2583,7 +2571,7 @@ class kBmc:
                 #else:
                 #    if curr_power_status[0]==curr_power_status[2]=='on':
                 #        before_power_state='on'
-            on_off,is_on_off_time=is_on_off(curr_power_status,mode=data['mode'],sensor_time=is_on_off_time,sensor_off_time=data['sensor_off_time'],before=before_power_state,checked_redfish=checked_redfish)
+            on_off,is_on_off_time=is_on_off_up(curr_power_status,mode=data['mode'],sensor_time=is_on_off_time,sensor_off_time=data['sensor_off_time'],before=before_power_state,checked_redfish=checked_redfish,on_off_keep_counts=on_off_keep_counts)
             if on_off in ['on','off','up']:
                 before_power_state=on_off
             if on_off not in data['monitored_status']: data['monitored_status'][on_off]=[]
@@ -3951,18 +3939,20 @@ class kBmc:
     def get_boot_mode(self):
         return self.bootorder(mode='status')
 
-    def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,post_keep_down=0,timeout=1800,lanmode=None,fail_down_time=240,cancel_func=None,set_bios_uefi_mode=False,monitor_mode='a',command_gap=5,error=True,mc_reset=False,off_on_interval=0,sensor=None,keep_init_state_timeout_rf=60,monitor_timeout_rf=300):
+    def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,post_keep_down=0,timeout=1800,lanmode=None,fail_down_time=240,cancel_func=None,set_bios_uefi_mode=False,monitor_mode='a',command_gap=5,error=True,mc_reset=False,off_on_interval=0,sensor=None,keep_init_state_timeout_rf=60,monitor_timeout_rf=300,failed_timeout_keep_off=120,failed_timeout_keep_on=60):
         # verify=False
         #  - just send a command 
         #  - if off_on command then check off mode without sensor monitor
         #    and on case, just send a on command
         # post_keep_up, post_keep_down,pre_keep_up : required verify=True
         # monitor_mode : when verify is True then required this.
+        # failed_timeout_keep_off: default 60: if keep off state(monitoring) after power action then it will failed power action
+        # failed_timeout_keep_on: default 40: if keep on state(monitoring) after power action then it will failed power action
         retry=Int(retry,default=0)
-        timeout=Int(timeout,default=1800)
-        pre_keep_up=Int(pre_keep_up,default=0)
-        post_keep_up=Int(post_keep_up,default=20)
-        post_keep_down=Int(post_keep_down,default=0)
+        timeout=Int(timeout,default=1800)         # timeout to whole process
+        pre_keep_up=Int(pre_keep_up,default=0)    # required precondition to keep up time(over keep up then keep working to next step)
+        post_keep_up=Int(post_keep_up,default=20) # required post condition to keep up time(over keep up then pass)
+        post_keep_down=Int(post_keep_down,default=0) # required post condition to keep down time(over keep down then pass)
         rf=self.CallRedfish()
         if cancel_func is None: cancel_func=self.cancel_func
         if not isinstance(cmd,str): cmd='status'
@@ -4004,9 +3994,33 @@ class kBmc:
                     return False,rc[1]
                 printf('Set BootOrder output: {}'.format(rc),log=self.log,mode='d')
                 time.sleep(10)
-        return self.do_power(cmd,retry=retry,verify=verify,timeout=timeout,post_keep_up=post_keep_up,post_keep_down=post_keep_down,lanmode=lanmode,fail_down_time=fail_down_time,mode=monitor_mode,command_gap=command_gap,error=error,mc_reset=mc_reset,off_on_interval=off_on_interval,sensor=sensor,keep_init_state_timeout_rf=keep_init_state_timeout_rf,monitor_timeout_rf=monitor_timeout_rf)
+        return self.do_power(cmd,retry=retry,verify=verify,timeout=timeout,post_keep_up=post_keep_up,post_keep_down=post_keep_down,lanmode=lanmode,fail_down_time=fail_down_time,mode=monitor_mode,command_gap=command_gap,error=error,mc_reset=mc_reset,off_on_interval=off_on_interval,sensor=sensor,keep_init_state_timeout_rf=keep_init_state_timeout_rf,monitor_timeout_rf=monitor_timeout_rf,failed_timeout_keep_off=failed_timeout_keep_off,failed_timeout_keep_on=failed_timeout_keep_on)
 
-    def do_power(self,cmd,retry=0,verify=False,timeout=1200,post_keep_up=40,post_keep_down=0,pre_keep_up=0,lanmode=None,cancel_func=None,fail_down_time=300,fail_up_time=300,mode=None,command_gap=5,error=True,mc_reset=False,off_on_interval=0,sensor=None,end_newline=True,keep_init_state_timeout_rf=60,monitor_timeout_rf=300):
+    def IsStuckOrNotIpmitool(self):
+        mm=Ipmitool()
+        stuck=None
+        init_rc=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
+        if krc(init_rc[0],chk=True):
+            stuck=True
+            cur_stat=Get(init_rc[1][1].split(),-1)
+            test_power='off' if IsIn(cur_stat,['on']) else 'on'
+            test_rc=self.run_cmd(mm.cmd_str(mm.power_mode[test_power][0],passwd=self.passwd))
+            time.sleep(5)
+            if krc(test_rc[0],chk=True):
+                for i in range(0,5):
+                    c=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
+                    if krc(c[0],chk=True):
+                        cc=Get(c[1][1].split(),-1)
+                        if IsIn(cc,[test_power]):
+                            stuck=False
+                            break
+                        else:
+                            time.sleep(3)
+        return stuck
+
+    def do_power(self,cmd,retry=0,verify=False,timeout=1200,post_keep_up=40,post_keep_down=0,pre_keep_up=0,lanmode=None,cancel_func=None,fail_down_time=300,fail_up_time=300,mode=None,command_gap=5,error=True,mc_reset=False,off_on_interval=0,sensor=None,end_newline=True,keep_init_state_timeout_rf=60,monitor_timeout_rf=300,failed_timeout_keep_off=120,failed_timeout_keep_on=60):
+        #failed_timeout_keep_off:default 60: if keep off state after power action then it will failed power action 
+        #failed_timeout_keep_on:default 40: if keep on state after power action then it will failed power action 
         timeout=Int(timeout,default=1200)
         command_gap=Int(command_gap,default=5)
         kfdt=TIME().Int() # keep fail down time
@@ -4162,7 +4176,7 @@ class kBmc:
                 if verify:
                     if verify_status in ['on','up']:
                         cc=TIME().Int()
-                        is_up=self.is_up(timeout=timeout,keep_up=post_keep_up,cancel_func=cancel_func,keep_down=60,mode=mode,init_power_state=init_power_state)
+                        is_up=self.is_up(timeout=timeout,keep_up=post_keep_up,cancel_func=cancel_func,keep_down=failed_timeout_keep_off,mode=mode,init_power_state=init_power_state)
                         if is_up[0]:
                             kfdt=TIME().Int() # keep fail down time
                             if chk < verify_num:
@@ -4217,7 +4231,7 @@ class kBmc:
                             continue
                     elif verify_status in ['off','down']:
                         cc=TIME().Int()
-                        is_down=self.is_down(timeout=timeout,keep_down=post_keep_down,keep_on=40,cancel_func=cancel_func,mode=mode,init_power_state=init_power_state)
+                        is_down=self.is_down(timeout=timeout,keep_down=post_keep_down,keep_on=failed_timeout_keep_on,cancel_func=cancel_func,mode=mode,init_power_state=init_power_state)
                         if is_down[0]:
                             kfut=TIME().Int() # keep fail up time
                             if chk == len(mm.power_mode[cmd]):
