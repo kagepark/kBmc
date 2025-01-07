@@ -2258,7 +2258,7 @@ class kBmc:
         get_current_power_status=opts.get('get_current_power_status')
         if IsNone(get_current_power_status): get_current_power_status=self.power_get_status
         on_off_keep_counts=[0,0] # Keep on or off counting number according to the before state in is_on_off_up()
-        on_off_keep_count_for_before=Int(opts.get('on_off_keep_count_for_before'),2) # Keep on or off state count limit to the before state in is_on_off_up()
+        on_off_keep_count_for_before=Int(opts.get('on_off_keep_count_for_before'),3) # Keep on or off state count limit to the before state in is_on_off_up()
         status_log=opts.get('status_log',True)
         monitor_interval=Int(opts.get('monitor_interval'),5)
         timeout=Int(opts.get('timeout'),1800)
@@ -2282,7 +2282,7 @@ class kBmc:
         #### define local varible
         # count : how many loop
         # printed : fix printing 
-        def is_on_off_up(data,mode='a',sensor_time=None,sensor_off_time=420,before=None,checked_redfish=False,on_off_keep_count_for_before=2,on_off_keep_counts=[0,0]):
+        def is_on_off_up(data,mode='a',sensor_time=None,sensor_off_time=420,before=None,checked_redfish=False,on_off_keep_count_for_before=3,on_off_keep_counts=[0,0]):
             #<sensor>,<redfish>,<ipmi/tool>
             # data: [Sensor data(ipmitool/smcipmitool), Redfish data, ipmitool/smcipmitool data)]
             # mode: a: auto, r: redfish only, t: ipmitool only, s: ipmitool sensor temporature only
@@ -2290,25 +2290,27 @@ class kBmc:
             if data.count('off') == 3 or data.count('on') == 3: # All same data then return without any condition
                 on_off_keep_counts=[0,0]
                 return data[0],sensor_time
-            if mode == 'r':
+            if mode == 'r': #Redfish Only
                 if IsIn(data[1],['on','off','up']):
                     on_off_keep_counts=[0,0]
                     return data[1],0 # redfish output
-            elif mode == 't':
+            elif mode == 't': #pmitool only 
                 if IsIn(data[2],['on','off']):
                     on_off_keep_counts=[0,0]
                     return data[2],0 # cmd/ipmitool output
-            elif mode == 's':
-                if IsIn(data[0],['on','off']):
+            elif mode == 's': #Sensor(Temperature) data only
+                #if IsIn(data[0],['on','off']):
+                if IsIn(data[0],['on','off','up']):
                     on_off_keep_counts=[0,0]
-                    return data[0],0 # cmd/ipmitool output
+                    return data[0],0 # cmd/ipmitool sensor (Temperature) data 
             # Other mode case
             #if mode == 's':
             #For mode a and s
             #if data[1] == 'off' and (data[1] == data[2] or data[0] == data[1]):
             #if 'off' in data and (data[2] == data[0] or data[2] == data[1] or data[0] == data[1]):
             if data.count('off') >= 2: # right off
-                if data[2] == 'on' and on_off_keep_counts[1] >= 5: # [off, off, on] case
+                #if data[2] == 'on':
+                if data[2] == 'on' and on_off_keep_counts[1] >= 3: # [off, off, on] case
                     #How to know this is ipmitool command stuck or not?
                     return 'up',sensor_time
                 else:
@@ -3939,7 +3941,7 @@ class kBmc:
     def get_boot_mode(self):
         return self.bootorder(mode='status')
 
-    def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,post_keep_down=0,timeout=1800,lanmode=None,fail_down_time=240,cancel_func=None,set_bios_uefi_mode=False,monitor_mode='a',command_gap=5,error=True,mc_reset=False,off_on_interval=0,sensor=None,keep_init_state_timeout_rf=60,monitor_timeout_rf=300,failed_timeout_keep_off=120,failed_timeout_keep_on=60):
+    def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,post_keep_down=0,timeout=1800,lanmode=None,fail_down_time=240,cancel_func=None,set_bios_uefi_mode=False,monitor_mode='a',command_gap=5,error=True,mc_reset=False,off_on_interval=0,sensor=None,keep_init_state_timeout_rf=60,monitor_timeout_rf=300,failed_timeout_keep_off=240,failed_timeout_keep_on=120):
         # verify=False
         #  - just send a command 
         #  - if off_on command then check off mode without sensor monitor
@@ -4033,9 +4035,9 @@ class kBmc:
             printf(' ipmitool command is not works : {}'.format(init_rc),log=self.log,mode='d')
             return True
 
-    def do_power(self,cmd,retry=0,verify=False,timeout=1200,post_keep_up=40,post_keep_down=0,pre_keep_up=0,lanmode=None,cancel_func=None,fail_down_time=300,fail_up_time=300,mode=None,command_gap=5,error=True,mc_reset=False,off_on_interval=0,sensor=None,end_newline=True,keep_init_state_timeout_rf=60,monitor_timeout_rf=300,failed_timeout_keep_off=120,failed_timeout_keep_on=60):
-        #failed_timeout_keep_off:default 60: if keep off state after power action then it will failed power action 
-        #failed_timeout_keep_on:default 40: if keep on state after power action then it will failed power action 
+    def do_power(self,cmd,retry=0,verify=False,timeout=1200,post_keep_up=40,post_keep_down=0,pre_keep_up=0,lanmode=None,cancel_func=None,fail_down_time=300,fail_up_time=300,mode=None,command_gap=5,error=True,mc_reset=False,off_on_interval=0,sensor=None,end_newline=True,keep_init_state_timeout_rf=60,monitor_timeout_rf=300,failed_timeout_keep_off=240,failed_timeout_keep_on=120):
+        #failed_timeout_keep_off:default 240: if keep off state after power action then it will failed power action 
+        #failed_timeout_keep_on:default 120: if keep on state after power action then it will failed power action 
         timeout=Int(timeout,default=1200)
         command_gap=Int(command_gap,default=5)
         kfdt=TIME().Int() # keep fail down time
@@ -4044,7 +4046,7 @@ class kBmc:
         rf=self.CallRedfish()
         if isinstance(sensor,bool): # sensor parameter is more higher level than mode.
             mode='s' if sensor is True else 't'
-        if not IsIn(mode,['s','a','r','t']): mode='t'
+        if not IsIn(mode,['s','a','r','t']): mode='a' #a is default
         # mode : s:sensor, a:any data, r: redfish data, t: ipmitool data
 
         def LanmodeCheck(lanmode):
@@ -4221,7 +4223,7 @@ class kBmc:
                                 msg_ext='(cool down over 5min)'
                                 retry_sleep=300
                             else:
-                                msg="{} the power over 1min".format(pre_msg)
+                                msg="{} the power over {}".format(pre_msg,Human_Unit(failed_timeout_keep_off,unit='M'))
                                 retry_sleep=20
                                 msg_ext=''
                             if fail_down > retry:
