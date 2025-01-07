@@ -3998,25 +3998,40 @@ class kBmc:
 
     def IsStuckOrNotIpmitool(self):
         mm=Ipmitool()
-        stuck=None
         init_rc=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
+        printf('BMC Power Stuck check with ipmitool command',log=self.log,mode='d')
         if krc(init_rc[0],chk=True):
-            stuck=True
             cur_stat=Get(init_rc[1][1].split(),-1)
             test_power='off' if IsIn(cur_stat,['on']) else 'on'
+            printf(' Test to {} from {} state'.format(test_power,cur_stat),log=self.log,no_intro=None,mode='d')
             test_rc=self.run_cmd(mm.cmd_str(mm.power_mode[test_power][0],passwd=self.passwd))
+            if not krc(test_rc[0],chk=True):
+                printf(" ipmitool can't set power '{}'\n{}".format(test_power,test_rc),log=self.log,mode='d')
+                printf(' Try again test to {} from {} state'.format(test_power,cur_stat),log=self.log,no_intro=None,mode='d')
+                time.sleep(5)
+                test_rc=self.run_cmd(mm.cmd_str(mm.power_mode[test_power][0],passwd=self.passwd))
+                if not krc(test_rc[0],chk=True):
+                    printf(' ipmitool command is not works to power handle: {}'.format(test_rc),log=self.log,mode='d')
+                    return True #Stuck
+
             time.sleep(5)
-            if krc(test_rc[0],chk=True):
-                for i in range(0,5):
-                    c=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
-                    if krc(c[0],chk=True):
-                        cc=Get(c[1][1].split(),-1)
-                        if IsIn(cc,[test_power]):
-                            stuck=False
-                            break
-                        else:
-                            time.sleep(3)
-        return stuck
+            cnt=0
+            for i in range(0,10):
+                c=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
+                if krc(c[0],chk=True):
+                    cc=Get(c[1][1].split(),-1)
+                    printf(' current power stat is {}'.format(cc),log=self.log,no_intro=None,mode='d')
+                    if IsIn(cc,[test_power]):
+                        cnt+=1
+                        if cnt > 5:
+                            printf(' Confirm it works',log=self.log,no_intro=None,mode='d')
+                            return False #is is working
+                printf('.',log=self.log,direct=True,mode='d')
+                time.sleep(3)
+            return True #Stuck
+        else:
+            printf(' ipmitool command is not works : {}'.format(init_rc),log=self.log,mode='d')
+            return True
 
     def do_power(self,cmd,retry=0,verify=False,timeout=1200,post_keep_up=40,post_keep_down=0,pre_keep_up=0,lanmode=None,cancel_func=None,fail_down_time=300,fail_up_time=300,mode=None,command_gap=5,error=True,mc_reset=False,off_on_interval=0,sensor=None,end_newline=True,keep_init_state_timeout_rf=60,monitor_timeout_rf=300,failed_timeout_keep_off=120,failed_timeout_keep_on=60):
         #failed_timeout_keep_off:default 60: if keep off state after power action then it will failed power action 
