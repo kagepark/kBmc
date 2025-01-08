@@ -2244,7 +2244,8 @@ class kBmc:
         return out,checked_redfish
 
     # Map for threading function
-    def power_status_monitor_t(self,monitor_status,data={},keep_off=0,keep_on=0,sensor_on=600,sensor_off=0,monitor_interval=5,timeout=1200,reset_after_unknown=0,mode='s'):
+    #def power_status_monitor_t(self,monitor_status,data={},keep_off=0,keep_on=0,sensor_on=600,sensor_off=0,monitor_interval=5,timeout=1200,reset_after_unknown=0,mode='a'):
+    def power_status_monitor_t(self,monitor_status,data={},keep_off=0,keep_on=0,sensor_on=0,sensor_off=0,monitor_interval=5,timeout=1200,reset_after_unknown=0,mode='a'):
         return self.power_status_monitor(monitoring_state=monitor_status,data=data,keep_off=keep_off,keep_on=keep_on,sensor_on=sensor_on,sensor_off=sensor_off,status_log=False,monitor_interval=monitor_interval,timeout=timeout,reset_after_unknown=reset_after_unknown,mode=mode)
 
     def power_status_monitor(self,monitoring_state=None,data=None,sensor=False,**opts):
@@ -2684,7 +2685,8 @@ class kBmc:
             data_info=data_info+'\nFinished Reason: {} ({})'.format(data.get('done_reason'),data.get('done')[next(iter(data.get('done')))])
             printf(data_info,log=self.log,log_level=1)
 
-    def power_monitor(self,timeout=1200,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=600,sensor_off_monitor=0,monitor_interval=5,reset_after_unknown=0,start=True,background=False,status_log=False,**opts):
+    #def power_monitor(self,timeout=1200,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=600,sensor_off_monitor=0,monitor_interval=5,reset_after_unknown=0,start=True,background=False,status_log=False,**opts):
+    def power_monitor(self,timeout=1200,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=0,sensor_off_monitor=0,monitor_interval=5,reset_after_unknown=0,start=True,background=False,status_log=False,**opts):
         #timeout       : monitoring timeout
         #monitor_status: monitoring status off -> on : ['off','on'], on : ['on'], off:['off']
         #keep_off: off state keeping time : 0: detected then accept
