@@ -2244,8 +2244,7 @@ class kBmc:
         return out,checked_redfish
 
     # Map for threading function
-    #def power_status_monitor_t(self,monitor_status,data={},keep_off=0,keep_on=0,sensor_on=600,sensor_off=0,monitor_interval=5,timeout=1200,reset_after_unknown=0,mode='a'):
-    def power_status_monitor_t(self,monitor_status,data={},keep_off=0,keep_on=0,sensor_on=0,sensor_off=0,monitor_interval=5,timeout=1200,reset_after_unknown=0,mode='a'):
+    def power_status_monitor_t(self,monitor_status,data={},keep_off=0,keep_on=0,sensor_on=900,sensor_off=0,monitor_interval=5,timeout=1800,reset_after_unknown=0,mode='a'):
         return self.power_status_monitor(monitoring_state=monitor_status,data=data,keep_off=keep_off,keep_on=keep_on,sensor_on=sensor_on,sensor_off=sensor_off,status_log=False,monitor_interval=monitor_interval,timeout=timeout,reset_after_unknown=reset_after_unknown,mode=mode)
 
     def power_status_monitor(self,monitoring_state=None,data=None,sensor=False,**opts):
@@ -2264,7 +2263,7 @@ class kBmc:
         monitor_interval=Int(opts.get('monitor_interval'),5)
         timeout=Int(opts.get('timeout'),1800)
         reset_after_unknown=Int(opts.get('reset_after_unknown'),0)
-        sensor_off_time=Int(opts.get('sensor_off_time',opts.get('sensor_on')),600)
+        sensor_off_time=Int(opts.get('sensor_off_time',opts.get('sensor_on')),900)
         wait_on_for_up=Int(opts.get('wait_up'),180)
         mode=opts.get('mode','a')
         info=opts.get('info',False)
@@ -2685,8 +2684,7 @@ class kBmc:
             data_info=data_info+'\nFinished Reason: {} ({})'.format(data.get('done_reason'),data.get('done')[next(iter(data.get('done')))])
             printf(data_info,log=self.log,log_level=1)
 
-    #def power_monitor(self,timeout=1200,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=600,sensor_off_monitor=0,monitor_interval=5,reset_after_unknown=0,start=True,background=False,status_log=False,**opts):
-    def power_monitor(self,timeout=1200,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=0,sensor_off_monitor=0,monitor_interval=5,reset_after_unknown=0,start=True,background=False,status_log=False,**opts):
+    def power_monitor(self,timeout=1800,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=900,sensor_off_monitor=0,monitor_interval=5,reset_after_unknown=0,start=True,background=False,status_log=False,**opts):
         #timeout       : monitoring timeout
         #monitor_status: monitoring status off -> on : ['off','on'], on : ['on'], off:['off']
         #keep_off: off state keeping time : 0: detected then accept
@@ -2698,12 +2696,15 @@ class kBmc:
         # - start: True : monitoring start, False : just waiting monitoring
         # - rt['start']=True: if background monitor was False and I want start monitoring then give it to True
         # - rt['stop']=True : Stop monitoring process
-        timeout=timeout if isinstance(timeout,int) else 1200
-        if not opts.get('mode'):
-            if sensor_on_monitor or sensor_off_monitor:
-                opts['mode']='s'
-            else:
-                opts['mode']='a'
+        timeout=timeout if isinstance(timeout,int) else 1800
+        #if not opts.get('mode'):
+        #    if sensor_on_monitor or sensor_off_monitor:
+        #        opts['mode']='s'
+        #    else:
+        #        opts['mode']='a'
+        #Default monitoring mode is 'a'.
+        if opts.get('mode') not in ['s','a','r','t']:
+            opts['mode']='a'
         if background is True:
             #Background, it wait until start acition.
             # wait until action start
@@ -3863,8 +3864,8 @@ class kBmc:
         print('%10s : %s'%("BootOrder",'{}'.format(self.bootorder()[1])))
 
 
-    def is_up(self,timeout=1200,interval=8,sensor_on_monitor=600,reset_after_unknown=0,full_state=True,status_log=True,**opts):
-        timeout=Int(timeout,default=1200)
+    def is_up(self,timeout=1700,interval=8,sensor_on_monitor=900,reset_after_unknown=0,full_state=True,status_log=True,**opts):
+        timeout=Int(timeout,default=1700)
         keep_on=Int(Pop(opts,'keep_up',Pop(opts,'keep_on')),default=30)
         keep_off=Int(Pop(opts,'keep_down',Pop(opts,'keep_off',Pop(opts,'power_down'))),default=30)
         rf_only=opts.get('rf_only',opts.get('redfish_only',False))
@@ -3893,7 +3894,7 @@ class kBmc:
                 return True,out
         return False,out
 
-    def is_down_up(self,timeout=1200,sensor_on_monitor=600,sensor_off_monitor=0,interval=8,status_log=True,reset_after_unknown=0,full_state=True,**opts): # Node state
+    def is_down_up(self,timeout=1800,sensor_on_monitor=900,sensor_off_monitor=0,interval=8,status_log=True,reset_after_unknown=0,full_state=True,**opts): # Node state
         dn,dn_msg=self.is_down(timeout=timeout,interval=interval,sensor_off_monitor=sensor_off_monitor,status_log=status_log,reset_after_unknown=reset_after_unknown,full_state=full_state,**opts)
         if dn:
             return self.is_up(timeout=timeout,interval=interval,sensor_on_monitor=sensor_on_monitor,reset_after_unknown=reset_after_unknown,full_state=full_state,status_log=status_log,**opts)
@@ -3912,7 +3913,7 @@ class kBmc:
         #        return True,out
         #return False,out
 
-    def is_down(self,timeout=1200,interval=8,sensor_off_monitor=0,full_state=True,status_log=True,reset_after_unknown=0,**opts): # Node state
+    def is_down(self,timeout=1800,interval=8,sensor_off_monitor=0,full_state=True,status_log=True,reset_after_unknown=0,**opts): # Node state
         timeout=Int(timeout,default=1200)
         keep_on=Int(Pop(opts,'keep_up',Pop(opts,'keep_on')),default=30)
         keep_off=Int(Pop(opts,'keep_down',Pop(opts,'keep_off')),default=30)
@@ -3928,7 +3929,7 @@ class kBmc:
                     return False,'Node is UP'
                 #Error then try next
 
-        rt=self.power_monitor(Int(timeout,default=1200),monitor_status=['off'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=0,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
+        rt=self.power_monitor(Int(timeout,default=1800),monitor_status=['off'],keep_off=keep_off,keep_on=keep_on,sensor_on_monitor=0,sensor_off_monitor=sensor_off_monitor,monitor_interval=interval,start=True,background=False,status_log=status_log,reset_after_unknown=reset_after_unknown,**opts)
         out=next(iter(rt.get('done').values())) if isinstance(rt.get('done'),dict) else rt.get('done')
         out_a=Split(out,'-')
         if out_a:
