@@ -241,25 +241,27 @@ class Redfish:
         if not IpV4(host):
             printf("ERROR: Wrong IP({}) format".format(host),log=self.log)
             return False,"ERROR: Wrong IP({}) format".format(host)
-        if not ping(host,timeout=600,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log,log_format='d'):
-            printf("ERROR: Can not access the ip({}) over 10min.".format(host),log=self.log)
-            return False,"ERROR: Can not access the ip({}) over 10min.".format(host)
         #err_msg='Redfish Request Error'
         ok=False
         msg='Redfish Request Error'
         for i in range(0,2):
-            data = WEB().Request(self.Cmd(cmd,host=host),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=self.log)
-            ok,msg=self._RfResult_(data)
-            if not ok:
-                if msg == 'unauthorized':
-                    if self.bmc and not self.no_find_user_pass and auto_search_passwd_in_bmc:
-                        ok,uu,pp=self.bmc.find_user_pass()
-                        if ok is True:
-                            user=self.User(uu)
-                            passwd=self.Passwd(pp)
-                            continue # Try again with new password
-                return False,msg
-            return ok,msg
+            if ping(host,timeout=600,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log,log_format='d'):
+                data = WEB().Request(self.Cmd(cmd,host=host),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=self.log)
+                ok,msg=self._RfResult_(data)
+                if not ok:
+                    if msg == 'unauthorized':
+                        if self.bmc and not self.no_find_user_pass and auto_search_passwd_in_bmc:
+                            ok,uu,pp=self.bmc.find_user_pass()
+                            if ok is True:
+                                user=self.User(uu)
+                                passwd=self.Passwd(pp)
+                                continue # Try again with new password
+                    return False,msg
+                return ok,msg
+            else:
+                msg="Can not access the ip({}) over {}min.".format(host,(i+1)*10)
+                printf(msg,log=self.log,mode='d')
+                ok=False
         return ok,msg
 
     def Post(self,cmd,host=None,json=None,data=None,files=None,mode='post',retry=3,patch_reset=False,wait_after_reset=30,auto_search_passwd_in_bmc=True):
@@ -2946,6 +2948,7 @@ class kBmc:
                     test_pass_sample=MoveData(test_pass_sample,self.default_passwd,to='first') # move default passwd
                     test_pass_sample=MoveData(test_pass_sample,self.org_passwd,to='first') # move original passwd
                 test_pass_sample=MoveData(test_pass_sample,self.passwd,to='first') # move current passwd for make sure
+                test_pass_sample=[self.passwd]+test_pass_sample  # Testing two time for current password. Some time it timing issue.
                 # Two times check for uniq,current,temporary password
                 for uu in test_user:
                     #If user is None then skip
@@ -3699,7 +3702,9 @@ class kBmc:
                         efi=True if rf_boot_info.get('order',{}).get('mode','') == 'UEFI' else False
                         status=rf_boot_info.get('order',{}).get('1','').lower()
                         persistent=True if rf_boot_info.get('order',{}).get('enable','') == 'Continuous' else False
-                    return [status,efi,persistent]
+                    # if status is False then it can't correctly read Redfish. So keep check with ipmitool
+                    if status is not False:
+                        return [status,efi,persistent]
                 #If received bios_cfg file
                 if bios_cfg:
                     bios_cfg=self.find_uefi_legacy(bioscfg=bios_cfg)
@@ -4167,6 +4172,7 @@ class kBmc:
                     ok=rf.Power(verify_status,keep_up=0,keep_down=0,retry=2,timeout=60,keep_init_state_timeout=keep_init_state_timeout_rf,monitor_timeout=monitor_timeout_rf)
                     err_msg=''
                     rc_msg=verify_status
+                    printf(' RF Out: {}'.format(ok),log=self.log,no_intro=None,mode='d')
                 #if ok is False:
                 if ok in [False,None]: # Timeout(None) or Error(False) then try with ipmitool command instead Redfish
                     _cc_=True
@@ -4194,6 +4200,7 @@ class kBmc:
                     time.sleep(5)
                     break # try next command
                 if verify:
+                    printf(' Verify power status : {}'.format(verify_status),log=self.log,no_intro=None,mode='d')
                     if verify_status in ['on','up']:
                         cc=TIME().Int()
                         is_up=self.is_up(timeout=timeout,keep_up=post_keep_up,cancel_func=cancel_func,keep_down=failed_timeout_keep_off,mode=mode,init_power_state=init_power_state)
