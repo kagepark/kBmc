@@ -4198,7 +4198,7 @@ class kBmc:
                 err_msg=''
                 #_cc_=False
                 if not _cc_ and self.redfish and rf:
-                    printf('redfish : Try {}'.format(verify_status),log=self.log,no_intro=None,mode='d')
+                    printf(' Redfish : Try {}'.format(verify_status),log=self.log,no_intro=None,mode='d')
                     #_cc_=True
                     ok=rf.Power(verify_status,keep_up=0,keep_down=0,retry=2,timeout=60,keep_init_state_timeout=keep_init_state_timeout_rf,monitor_timeout=monitor_timeout_rf)
                     err_msg=''
