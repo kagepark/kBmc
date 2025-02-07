@@ -1361,16 +1361,17 @@ class Redfish:
 
         net_boot=self._Boot_NetworkBootOrder(pxe_boot_mac=pxe_boot_mac,http=http,ipv=ipv)
         if net_boot is False: #Error
-            printf('Network Boot(PXE) setting Error: Not found Network Boot Source',log=self.log,log_level=1)
+            printf('Network Boot(PXE) setting Error: Not found Network Boot Source',log=self.log,mode='d')
             return False,'Network Boot(PXE) setting Error: Not found Network Boot Source'
         else:
             if net_boot is None:
-                 printf('Network Boot(PXE) setting : Not support on this BMC',log=self.log,log_level=1,mode='d')
+                printf(f'Network Boot(PXE) setting : Not support PXE Boot for {pxe_boot_mac} with http:{http} on this BMC',log=self.log,mode='d')
             if not isinstance(_b_,dict): _b_=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
         #Check BIOS Boot order 
         if pxe_boot_mac:
             if self._Boot_BiosBootOrderCheck_(pxe_boot_mac,_b_=_b_)[0] is True:
-                return True,'Already Same PXE Boot Condition({})'.format(pxe_boot_mac)
+                printf(f'Alreay Same PXE Boot Condition({pxe_boot_mac})',log=self.log,mode='d')
+                return True,f'Already Same PXE Boot Condition({pxe_boot_mac})'
         #Support only /redfish/v1/Systems/1/Oem/Supermicro/FixedBootOrder
         if _b_.get('pxe_boot_mac') and IsInt(_b_.get('pxe_boot_id')):
             orders=_b_.get('order')
@@ -1386,11 +1387,15 @@ class Redfish:
                 time.sleep(2)
                 _b_=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
                 if _b_.get('pxe_boot_id') == 0:
+                    printf('Set {} Boot with {}'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE',pxe_boot_mac),log=self.log,mode='d')
                     return True,'Set {} Boot with {}'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE',pxe_boot_mac)
                 else:
+                    printf('Can not set {} Boot at BIOS'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE'),log=self.log,mode='d')
                     return False,'Can not set {} Boot at BIOS'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE')
             else:
+                printf('Not support /Systems/1/Oem/Supermicro/FixedBootOrder command',log=self.log,mode='d')
                 return None,'Not support /Systems/1/Oem/Supermicro/FixedBootOrder command'
+        printf('Not found any updating parameters',log=self.log,mode='d')
         return None,'Not found any updating parameters'
         
         #Directly Change Systems/1/Bios. but it something mixed the order(duplicated). So not good
@@ -3643,23 +3648,20 @@ class kBmc:
                 if rf:
                     # return <RC>,<boot order information>,persistant
                     rc=rf.Boot(boot='order')
+                    #print('>>>>>rf boot.order:',rc)
                     return rc[0],rc[1],None
                 rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5',passwd=self.passwd))
+                #print('>>>>>chassis bootparam get 5:',rc)
                 # Boot Flags :
-                #   - Boot Flag Invalid
-                #   - Options apply to only next boot
-                #   - BIOS EFI boot 
-                #   - Boot Device Selector : Force PXE
+                #   - Boot Flag Invalid                # Invalid :not setup, Valid : Setup
+                #   - Options apply to only next boot  # only next boot: one time at next time, all tuture boots : persistent boot
+                #   - BIOS EFI boot                    # UEFI or Legacy (BIOS PC Compatible (legacy) boot)
+                #   - Boot Device Selector : Force PXE # PXE, BIOS, HDD, CD, ....
                 #   - Console Redirection control : System Default
                 #   - BIOS verbosity : Console redirection occurs per BIOS configuration setting (default)
                 #   - BIOS Mux Control Override : BIOS uses recommended setting of the mux at the end of POST
                 # return <RC>,<boot order information>,persistant
                 rc_str=Get(Get(rc,1),1)
-#                if rc[0]:
-#                    found=FIND(rc_str).Find('- Boot Device Selector : (\w.*)')
-#                    if found:
-#                        found=found[0] if isinstance(found,list) else found
-#                        return True,found,True if 'Force' in found else False
                 return rc[0],rc_str,None
             # Status : output: [status, uefi, persistent]
             elif mode in ['status','detail']:
@@ -3670,6 +3672,7 @@ class kBmc:
                 rf=self.CallRedfish()
                 if rf:
                     ok,rf_boot_info=rf.Boot()
+                    #print('>>>>>rf.Boot():',rf_boot_info)
                     #Detail information : output : dictionary
                     if mode == 'detail':
                         return rf_boot_info
@@ -3704,6 +3707,7 @@ class kBmc:
                         persistent=True if rf_boot_info.get('order',{}).get('enable','') == 'Continuous' else False
                     # if status is False then it can't correctly read Redfish. So keep check with ipmitool
                     if status is not False:
+                        #print('>>>>>rf.Boot() result:',[status,efi,persistent])
                         return [status,efi,persistent]
                 #If received bios_cfg file
                 if bios_cfg:
@@ -3726,9 +3730,18 @@ class kBmc:
                 #If not special, so get information from ipmitool
                 else:
                     rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5',passwd=self.passwd))
+                    # Boot Flags :
+                    #   - Boot Flag Invalid                # Invalid :not setup, Valid : Setup
+                    #   - Options apply to only next boot  # only next boot: one time at next time, all tuture boots : persistent boot
+                    #   - BIOS EFI boot                    # UEFI or Legacy (BIOS PC Compatible (legacy) boot)
+                    #   - Boot Device Selector : Force PXE # PXE, BIOS, HDD, CD, ....
+                    #   - Console Redirection control : System Default
+                    #   - BIOS verbosity : Console redirection occurs per BIOS configuration setting (default)
+                    #   - BIOS Mux Control Override : BIOS uses recommended setting of the mux at the end of POST
                     if mode == 'detail':
                         return rc
                     if krc(rc,chk=True):
+                        #Find EFI(iPXE) or PXE
                         efi_found=FIND(rc[1]).Find('- BIOS (\w.*) boot')
                         if efi_found:
                             if isinstance(efi_found,list):
@@ -3739,18 +3752,36 @@ class kBmc:
                                 if 'EFI' in efi_found:
                                     efi=True
                                     status='pxe'
+                        #Find persistance 
+                        found=FIND(rc[1]).Find('- Options apply to (\w.*)')
+                        if found:
+                            if isinstance(found,list): 
+                                if 'all future boot' in found[0]:
+                                    persistent=True
+                            elif isinstance(found,str):
+                                if 'all future boot' in found:
+                                    persistent=True
+                        #Find Boot mode (PXE,BIOS,...)
                         found=FIND(rc[1]).Find('- Boot Device Selector : (\w.*)')
                         if found:
-                            if isinstance(found,list):
-                                if 'Force' in found[0]:
-                                    persistent=True
+                            if isinstance(found,list): 
+                                #if 'Force' in found[0]:
+                                #    persistent=True
                                 if 'PXE' in found[0]:
                                     status='pxe'
                             elif isinstance(found,str):
-                                if 'Force' in found:
-                                    persistent=True
+                                #if 'Force' in found:
+                                #    persistent=True
                                 if 'PXE' in found:
                                     status='pxe'
+                        enabled_boot=FIND(rc[1]).Find('- Boot Flag (\w.*)')
+                        if enabled_boot:
+                            if isinstance(enabled_boot,list):
+                                if 'Invalid' in enabled_boot[0]:
+                                    status=False
+                            elif isinstance(enabled_boot,str):
+                                if 'Invalid' in enabled_boot:
+                                    status=False
                 return [status,efi,persistent]
 
         for mm in Iterable(self.cmd_module):
