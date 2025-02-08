@@ -3138,7 +3138,7 @@ class kBmc:
         printf("""BMC Password: Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.""",log=self.log,log_level=1)
         return False,self.user,self.passwd
 
-    def run_cmd(self,cmd,append=None,path=None,retry=0,timeout=None,return_code={'ok':[0,True],'fail':[]},show_str=False,dbg=False,mode='app',cancel_func=None,peeling=False,progress=False,ip=None,user=None,passwd=None,cd=False,keep_cwd=False,check_password_rc=[],trace_passwd=False,output_log_size=0):
+    def run_cmd(self,cmd,append=None,path=None,retry=0,timeout=None,return_code={'ok':[0,True],'fail':[]},show_str=False,dbg=False,mode='app',cancel_func=None,peeling=False,progress=False,ip=None,user=None,passwd=None,cd=False,keep_cwd=False,check_password_rc=[],trace_passwd=False,output_log_size=0,auto_reset_bmc_when_bmc_redfish_error=False):
         #output_log_size=0 # print full
         if cancel_func is None: cancel_func=self.cancel_func
         error=self.error()
@@ -3252,8 +3252,13 @@ class kBmc:
                 elif rc_0 == 0 or IsIn(rc_0,rc_ok):
                     return True,rc,'ok'
                 elif IsIn(rc_0,rc_err_bmc_redfish): # retry after reset the BMC
-                    if not self.McResetCold():
-                        return False,(-1,'Looks Stuck at BMC and Can not reset the BMC','Looks Stuck at BMC and Can not reset the BMC',0,0,cmd_str,path),'reset bmc'
+                    printf(f'Looks Stuck at BMC because rc({rc_0}) in the condition {rc_err_bmc_redfish}',log=self.log,log_level=1,dsp='d')
+                    if auto_reset_bmc_when_bmc_redfish_error:
+                        printf('Try to Reset BMC(Cold) according to auto_reset_bmc_when_bmc_redfish_error option',log=self.log,log_level=1,dsp='d')
+                        if not self.McResetCold():
+                            return False,(-1,'Looks Stuck at BMC and Can not reset the BMC','Looks Stuck at BMC and Can not reset the BMC',0,0,cmd_str,path),'reset bmc'
+                    else:
+                        return False,(-1,'Looks Stuck at BMC','Looks Stuck at BMC',0,0,cmd_str,path),'bmc error'
                 elif IsIn(rc_0,rc_err_connection): # retry condition1
                     msg='err_connection'
                     printf('Connection error condition:{}, return:{}'.format(rc_err_connection,Get(rc,0)),start_newline=True,log=self.log,log_level=7)
