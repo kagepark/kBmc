@@ -2,6 +2,18 @@
 # Inteligent BMC Tool
 # Version 2
 
+# Todo Enhancement)
+# Power (ipmitool, redfish)
+#  - check status
+#  - handle : on/off/reset/cycle
+# Check :
+#  - status is already booted (wait short time for BIOS, other OS,...)
+#  - just power on now ( wait long time )
+# Network check
+# make more simple and reduce relate each functions (sometime looping)
+# re-design to Global and Local variable and names
+# possible to more flexable
+
 import re
 import os
 import sys
@@ -2105,49 +2117,63 @@ class kBmc:
 
     def CallRedfish(self,force=False,check=True,no_ipmitool=True,detail_log=False,timeout=None,keep_ping=0):
         if not force and self.rf: return self.rf
-        if self.redfish or force:
-            if force or check:
-                # when it called from here and there. So too much logging
-                if detail_log: printf("Check IP Address",log=self.log,log_level=1,dsp='d')
-                # Get IP
-                ip=self.mac2ip(self.mac) if IsFunction(self.mac2ip) and self.checked_ip is False and MacV4(self.mac) else '{}'.format(self.ip)
-                if detail_log: printf("Check Ping to the IP({}):".format(ip),log=self.log,log_level=1,dsp='d',end='')
-                # Check ping
+        if self.redfish is False and not force:
+             printf("Not support redfish({}) and not force({}) check redfish".format(self.redfish,force),log=self.log,log_level=1,dsp='d')
+             return False
+
+        if force or check:
+            # when it called from here and there. So too much logging
+            # Get IP
+            ip=IpV4(self.ip)
+            if not ip and IsFunction(self.mac2ip) and MacV4(self.mac):
+                printf("Searching IP from mac({})".format(self.mac),log=self.log,log_level=1,dsp='d',end='')
+                ip=self.mac2ip(self.mac) if self.checked_ip is False  else None
+            if detail_log: printf("Check Ping to the IP({}):".format(ip),log=self.log,log_level=1,dsp='d',end='')
+            # Check ping
+            if IpV4(ip):
                 ping_rc=self.Ping(host=ip,keep_good=Int(keep_ping,0),timeout=Int(timeout,self.timeout),log=self.log)
                 if not ping_rc:
                     err_msg="Can not ping to {} from {} over {}sec".format(ip,IpV4('my_ip'),Int(timeout,self.timeout))
                     printf(err_msg,log=self.log,log_level=1,dsp='e')
                     self.error(_type='net',msg=err_msg)
                     return False
-                if not IpV4(ip,port=self.port):
-                    printf("{} is not BMC IP".format(ip),log=self.log,log_level=1,dsp='e')
-                    self.error(_type='ip',msg="{} is not BMC IP".format(ip))
-                    return False
                 self.checked_ip=True
-                
-                printf("Call Redfish",log=self.log,log_level=1,dsp='d',end='')
-                for i in range(0,2):
-                    # Define Redfish
-                    rf=Redfish(bmc=self)
-                    # Call Simple command of Redfish
+
+            wrong_ip=True
+            for i in range(5):
+                if IpV4(ip,port=self.port):
+                    wrong_ip=False
+                    break
+                time.sleep(3)
+            if wrong_ip:
+                printf("{} is not BMC IP".format(ip),log=self.log,log_level=1,dsp='e')
+                self.error(_type='ip',msg="{} is not BMC IP".format(ip))
+                return False
+            
+            printf("Call Redfish",log=self.log,log_level=1,dsp='d',end='')
+            for i in range(0,2):
+                # Define Redfish
+                rf=Redfish(bmc=self)
+                # Call Simple command of Redfish
+                if rf:
                     rf_system=rf.Get('/Systems')
                     if krc(rf_system,chk=True):
                         self.rf=rf
                         return rf
-                    # Check BMC User/Password with ipmitool command
-                    printf("Check User/Password with IPMITOOL",log=self.log,dsp='d')
-                    if no_ipmitool or self.no_find_user_pass is True: break
-                    ok,user,passwd=self.find_user_pass(ip,no_redfish=True)
-                    if ok is False:
-                        printf("Can not find working user and password",log=self.log,log_level=1,dsp='e')
-                        return False
-                    continue
-                printf("Maybe not support redfish on this system or wrong USER({})/Password({})".format(self.user,self.passwd),log=self.log,log_level=1,dsp='d')
-                return False
-            else:
-                if detail_log: printf("directly call Redfish without check",log=self.log,log_level=1,dsp='d')
-                self.rf=Redfish(bmc=self)
-                return self.rf
+                # Check BMC User/Password with ipmitool command
+                printf("Check User/Password with IPMITOOL",log=self.log,dsp='d')
+                if no_ipmitool or self.no_find_user_pass is True: break
+                ok,user,passwd=self.find_user_pass(ip,no_redfish=True)
+                if ok is False:
+                    printf("Can not find working user and password",log=self.log,log_level=1,dsp='e')
+                    return False
+                continue
+            printf("Maybe not support redfish on this system or wrong USER({})/Password({})".format(self.user,self.passwd),log=self.log,log_level=1,dsp='d')
+            return False
+        else:
+            if detail_log: printf("directly call Redfish without check",log=self.log,log_level=1,dsp='d')
+            self.rf=Redfish(bmc=self)
+            return self.rf
         #Not support redfish
         if detail_log: printf("Not support redfish and not force check redfish",log=self.log,log_level=1,dsp='d')
         return False
