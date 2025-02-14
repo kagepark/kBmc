@@ -1939,6 +1939,13 @@ class Redfish:
                         return False,'Can not set to HTML 5'
             else:
                 rf_key='/Managers/1/IKVM'
+                if isinstance(aa[1],str) and 'Can not access the' in aa[1]:
+                    return False,aa[1]
+                if isinstance(aa[1],dict) and 'error' in aa[1]:
+                    if '@Message.ExtendedInfo' in aa[1].get('error',{}):
+                        return False,aa[1].get('error',{}).get('@Message.ExtendedInfo')[0].get('Message')
+                    else:
+                        return False,aa[1].get('error',{}).get('message')
         return False,'Can not login to the server'
 
     def ConsoleInfo(self):
@@ -4337,7 +4344,7 @@ class kBmc:
                                 if end_newline: printf(self.power_off_tag,no_intro=True,log=self.log,log_level=1)
                                 return True,'off'
                         elif IsIn(Get(Split(is_down[1],'-'),-1),['up','on']) and not chkd:
-                            pre_msg=' - Suddenly on' if IsIn(Get(Split(is_up[1],'-'),-2),['off','down']) else ' - Keep on(never off)'
+                            pre_msg=' - Suddenly on' if IsIn(Get(Split(is_down[1],'-'),-2),['off','down']) else ' - Keep on(never off)'
                             if fail_down > retry:
                                 if fail_up_time > 0:
                                     if  TIME().Int() - kfut  > fail_up_time or (TIME().Int() - total_time / fail_up_time) > 1:
