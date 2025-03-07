@@ -23,6 +23,10 @@ import threading
 from kmport import *
 import kmport
 kmport.krc_ext='shell'
+env_ipmi=Environment(name='ipmi')
+env_bmc=Environment(name='kBmc',power_on_tag='¯',power_up_tag='∸',power_off_tag='_',power_unknown_tag='·')
+env_errors=Environment(name='error')
+env_breaking=Environment(name='break')
 
 #printf_ignore_empty=True
 
@@ -38,11 +42,31 @@ kmport.krc_ext='shell'
 # (True == 1, False == 0)
 # <STR>    : user define value      : if rc: ok
 
+def Ping(host=None,**opts):
+    if not host:
+        if 'ip' in opts:
+            host=opts.pop('ip')
+        elif 'host' in opts:
+            host=opts.pop('host')
+        else:
+            host=env_ipmi.get('ip')
+    if 'log' not in opts: opts['log']=env_bmc.get('log')
+    if 'cancel_func' not in opts: opts['cancel_func']=env_breaking.get('cancel_func')
+    if 'cancel_args' not in opts: opts['cancel_args']=env_breaking.get('cancel_args',default={})
+    opts['timeout']=Int(opts.get('timeout',env_bmc.get('timeout')),default=1800)
+    if 'log_format' not in opts: opts['log_format']='i'
+    printf(' Check network of IP({}) (timeout:{}s)'.format(host,opts.get('timeout')),log=env_bmc.get('log'),log_level=4,dsp='f')
+    if ping(host,**opts):
+        env_errors.remove('net') #pinging now So remove network error when previously it has error
+        return True
+    return False
+
 class Ipmitool:
     def __init__(self,**opts):
         self.__name__='ipmitool'
         self.tool_path=None
-        self.log=opts.get('log',None)
+        log=opts.get('log')
+        if log: env_bmc.set('log',log)
         self.power_mode=opts.get('power_mode',{'on':['chassis power on'],'off':['chassis power off'],'reset':['chassis power reset'],'off_on':['chassis power off','chassis power on'],'on_off':['chassis power on','chassis power off'],'cycle':['chassis power cycle'],'status':['chassis power status'],'shutdown':['chassis power soft']})
         self.ready=True
         self.return_code={'ok':[0],'fail':[1]}
@@ -51,13 +75,101 @@ class Ipmitool:
             if find_executable('ipmitool') is False:
                 self.ready=False
 
+    def Vars(self,key=None,value={None},append=False,default=None,shared_name=None):
+        # if exist shared_name then adding/updating data at the shared global variable in all module of single program
+        # Vars(key) : searching shared global variable and my class's global variable
+        # Vars(key,value) : put value at exisint shared global variable or create/update in my class's global variable
+        # append=True: if list then append
+        # default : not found key then return the default
+        if key:
+            if env_ipmi.exist(key):
+                if value != {None}:
+                    if append:
+                        if isinstance(env_ipmi.get(key),list):
+                            env_ipmi.get(key).append(value)
+                            return True
+                        else:
+                            return default
+                    else:
+                        env_ipmi.set(key,value)
+                        return True
+                else:
+                    return env_ipmi.get(key)
+            elif env_bmc.exist(key):
+                if value != {None}:
+                    if append:
+                        if isinstance(env_bmc.get(key),list):
+                            env_bmc.get(key).append(value)
+                            return True
+                        else:
+                            return default
+                    else:
+                        env_bmc.set(key,value)
+                        return True
+                else:
+                    return env_bmc.get(key)
+            elif value != {None}:
+                if shared_name in ['env_ipmi','ipmi','env_bmc','bmc']:
+                    if shared_name in ['env_ipmi','ipmi']:
+                        if append:
+                            if env_ipmi.exist(key):
+                                if isinstance(env_ipmi.get(key),list):
+                                    env_ipmi.get(key).append(value)
+                                    return True
+                                else:
+                                    return default
+                            else:
+                                env_ipmi.set(key,[value])
+                                return True
+                        else:
+                            env_ipmi.set(key,value)
+                            return True
+                    else:
+                        if append:
+                            if env_ipmi.exist(key):
+                                if isinstance(env_bmc.get(key),list):
+                                    env_bmc.get(key).append(value)
+                                    return True
+                                else:
+                                    return default
+                            else:
+                                env_bmc.set(key,[value])
+                                return True
+                        else:
+                            env_bmc.set(key,value)
+                            return True
+                else:
+                    if append:
+                        if isinstance(self.__dict__[key],list):
+                            self.__dict__[key].append(value)
+                            return True
+                        else:
+                            return default
+                    else:
+                        self.__dict__[key]=value
+                        return True
+            elif key in self.__dict__:
+                return self.__dict__[key]
+            return default
+        else:
+            out={}
+            for i in self.__dict__:
+                out[i]=self.__dict__.get(i)
+            for i in env_bmc.get():
+                if i not in out:
+                    out[i]=env_bmc.get(i)
+            for i in env_ipmi.get():
+                if i not in out:
+                    out[i]=env_ipmi.get(i)
+            return out
+
     def cmd_str(self,cmd,**opts):
-        if not self.ready:
-            printf('Install ipmitool package(yum install ipmitool)',log=self.log,log_level=1,dsp='e')
-            return False,'ipmitool file not found',None,self.return_code,None
+        if not self.Vars('ready'):
+            printf('Install ipmitool package(yum install ipmitool)',log=env_bmc.get('log'),log_level=1,dsp='e')
+            return False,'ipmitool file not found',None,self.Vars('return_code'),None
         cmd_a=Split(cmd)
         option=opts.get('option','lanplus')
-        if IsIn('ipmi',cmd_a,idx=0) and IsIn('power',cmd_a,idx=1) and Get(cmd_a,2) in self.power_mode:
+        if IsIn('ipmi',cmd_a,idx=0) and IsIn('power',cmd_a,idx=1) and Get(cmd_a,2) in self.Vars('power_mode'):
             cmd_a[0] = 'chassis'
         elif IsIn('ipmi',cmd_a,idx=0) and IsIn('reset',cmd_a,idx=1):
             cmd_a=['mc','reset','cold']
@@ -68,8 +180,9 @@ class Ipmitool:
             #cmd_a=['sdr','type','Temperature']
             cmd_a=['sensor']
         passwd=opts.get('passwd')
+        if not passwd: passwd=env_ipmi.get('passwd')
         sym='"' if isinstance(passwd,str) and "'" in passwd else "'"
-        return True,{'base':'''ipmitool -I %s -H {ip} -U {user} -P %s{passwd}%s '''%(option,sym,sym),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
+        return True,{'base':'''ipmitool -I %s -H {ip} -U {user} -P %s{passwd}%s '''%(option,sym,sym),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.Vars('return_code'),None
 
 
 class Smcipmitool:
@@ -79,19 +192,108 @@ class Smcipmitool:
         self.ready=True
         if not self.smc_file or not os.path.isfile(self.smc_file):
             self.ready=False
-        self.log=opts.get('log',None)
+        log=opts.get('log',None)
+        if log: env_bmc.set('log',log)
         self.power_mode=opts.get('power_mode',{'on':['ipmi power up'],'off':['ipmi power down'],'reset':['ipmi power reset'],'off_on':['ipmi power down','ipmi power up'],'on_off':['ipmi power up','ipmi power down'],'cycle':['ipmi power cycle'],'status':['ipmi power status'],'shutdown':['ipmi power softshutdown']})
         self.return_code={'ok':[0,144],'error':[180],'err_bmc_user':[146],'err_connection':[145]}
 
+    def Vars(self,key=None,value={None},append=False,default=None,shared_name=None):
+        # if exist shared_name then adding/updating data at the shared global variable in all module of single program
+        # Vars(key) : searching shared global variable and my class's global variable
+        # Vars(key,value) : put value at exisint shared global variable or create/update in my class's global variable
+        # append=True: if list then append
+        # default : not found key then return the default
+        if key:
+            if env_ipmi.exist(key):
+                if value != {None}:
+                    if append:
+                        if isinstance(env_ipmi.get(key),list):
+                            env_ipmi.get(key).append(value)
+                            return True
+                        else:
+                            return default
+                    else:
+                        env_ipmi.set(key,value)
+                        return True
+                else:
+                    return env_ipmi.get(key)
+            elif env_bmc.exist(key):
+                if value != {None}:
+                    if append:
+                        if isinstance(env_bmc.get(key),list):
+                            env_bmc.get(key).append(value)
+                            return True
+                        else:
+                            return default
+                    else:
+                        env_bmc.set(key,value)
+                        return True
+                else:
+                    return env_bmc.get(key)
+            elif value != {None}:
+                if shared_name in ['env_ipmi','ipmi','env_bmc','bmc']:
+                    if shared_name in ['env_ipmi','ipmi']:
+                        if append:
+                            if env_ipmi.exist(key):
+                                if isinstance(env_ipmi.get(key),list):
+                                    env_ipmi.get(key).append(value)
+                                    return True
+                                else:
+                                    return default
+                            else:
+                                env_ipmi.set(key,[value])
+                                return True
+                        else:
+                            env_ipmi.set(key,value)
+                            return True
+                    else:
+                        if append:
+                            if env_ipmi.exist(key):
+                                if isinstance(env_bmc.get(key),list):
+                                    env_bmc.get(key).append(value)
+                                    return True
+                                else:
+                                    return default
+                            else:
+                                env_bmc.set(key,[value])
+                                return True
+                        else:
+                            env_bmc.set(key,value)
+                            return True
+                else:
+                    if append:
+                        if isinstance(self.__dict__[key],list):
+                            self.__dict__[key].append(value)
+                            return True
+                        else:
+                            return default
+                    else:
+                        self.__dict__[key]=value
+                        return True
+            elif key in self.__dict__:
+                return self.__dict__[key]
+            return default
+        else:
+            out={}
+            for i in self.__dict__:
+                out[i]=self.__dict__.get(i)
+            for i in env_bmc.get():
+                if i not in out:
+                    out[i]=env_bmc.get(i)
+            for i in env_ipmi.get():
+                if i not in out:
+                    out[i]=env_ipmi.get(i)
+            return out
+
     def cmd_str(self,cmd,**opts):
         cmd_a=Split(cmd)
-        if not self.ready:
-            if self.smc_file:
-                lmmsg='- SMCIPMITool({}) not found'.format(self.smc_file)
-                printf(lmmsg,log=self.log,log_level=1,dsp='e')
+        if not self.Vars('ready'):
+            if self.Vars('smc_file'):
+                lmmsg='- SMCIPMITool({}) not found'.format(self.Vars('smc_file'))
+                printf(lmmsg,log=env_bmc.get('log'),log_level=1,dsp='e')
             else:
                 lmmsg='- Not assigned SMCIPMITool'
-            return False,lmmsg,None,self.return_code,None
+            return False,lmmsg,None,self.Vars('return_code'),None
         if IsIn('chassis',cmd_a,idx=0) and IsIn('power',cmd_a,idx=1):
             cmd_a[0] == 'ipmi'
         elif IsIn('mc',cmd_a,idx=0) and IsIn('reset',cmd_a,idx=1) and IsIn('cold',cmd_a,idx=2):
@@ -101,22 +303,18 @@ class Smcipmitool:
         elif IsIn('sdr',cmd_a,idx=0) and IsIn('Temperature',cmd_a,idx=2):
             cmd_a=['ipmi','sensor']
         passwd=opts.get('passwd')
+        if not passwd: passwd=env_ipmi.get('passwd')
         sym='"' if isinstance(passwd,str) and "'" in passwd else "'"
-        if isinstance(self.smc_file,str) and Get(Split(os.path.basename(self.smc_file),'.'),-1) == 'jar':
-            return True,{'base':'''sudo java -jar %s {ip} {user} %s{passwd}%s '''%(self.smc_file,sym,sym),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
+        if isinstance(self.Vars('smc_file'),str) and Get(Split(os.path.basename(self.Vars('smc_file')),'.'),-1) == 'jar':
+            return True,{'base':'''sudo java -jar %s {ip} {user} %s{passwd}%s '''%(self.Vars('smc_file'),sym,sym),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.Vars('return_code'),None
         else:
-            return True,{'base':'''%s {ip} {user} %s{passwd}%s '''%(self.smc_file,sym,sym),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.return_code,None
+            return True,{'base':'''%s {ip} {user} %s{passwd}%s '''%(self.Vars('smc_file'),sym,sym),'cmd':'''%s'''%(' '.join(cmd_a))},None,self.Vars('return_code'),None
 
 class Redfish:
     #ref: https://www.supermicro.com/manuals/other/redfish-ref-guide-html/Content/general-content/available-apis.htm
     #/redfish/v1/Managers/1/EthernetInterfaces/ToHost : RedfishHI
     #/redfish/v1/Managers/1/EthernetInterfaces/1      : BMC
     def __init__(self,**opts):
-        self.power_on_tag='¯'
-        self.power_up_tag='∸'
-        self.power_off_tag='_'
-        self.power_down_tag='⨪'
-        self.power_unknown_tag='·'
         self.__name__='redfish'
         self.bootprogress_wait=0
         self.no_find_user_pass=opts.get('no_find_user_pass',False)
@@ -133,70 +331,113 @@ class Redfish:
                 'BootOption':'Systems/1/BootOptions',
             }
         self.bmc=opts.get('bmc')
-        self.user=opts.get('user')
-        self.passwd=Get(opts,['passwd','password','ipmi_passwd'],default=None,err=True,peel='force')
-        self.host=Get(opts,['ip','host','ipmi_ip'],default=None,err=True,peel='force')
-        self.pxe_boot_mac=Get(opts,['pxe_boot_mac','eth_mac'],default=None,err=True,peel='force')
+        user=opts.get('user')
+        if user: env_ipmi.set('user',user)
+        passwd=Get(opts,['passwd','password','ipmi_passwd'],default=None,err=True,peel='force')
+        if passwd: env_ipmi.set('passwd',passwd)
+        host=Get(opts,['ip','host','ipmi_ip'],default=None,err=True,peel='force')
+        if host: env_ipmi.set('ip',host)
+        pxe_boot_mac=Get(opts,['pxe_boot_mac','eth_mac'],default=None,err=True,peel='force')
+        if pxe_boot_mac: env_ipmi.set('pxe_boot_mac',pxe_boot_mac)
         self.timeout=Int(Get(opts,['timeout','time_out'],default=None,err=True,peel='force'),default=1800)
-        self.log=opts.get('log',self.bmc.__dict__.get('log') if self.bmc else None)
-        self.cancel_func=opts.get('cancel_func',opts.get('stop_func',self.bmc.__dict__.get('cancel_func') if self.bmc else None))
-        self.cancel_args=opts.get('cancel_args',opts.get('stop_args',self.bmc.__dict__.get('cancel_args',{}) if self.bmc else {}))
-        if not isinstance(self.cancel_args,dict): self.cancel_args={}
+        log=opts.get('log')
+        if log: env_bmc.set('log',log)
+        cancel_func=opts.get('cancel_func',opts.get('stop_func'))
+        if cancel_func: env_breaking.set('cancel_func',cancel_func)
+        cancel_args=opts.get('cancel_args',opts.get('stop_args'))
+        if not isinstance(cancel_args,dict): cancel_args={}
+        if cancel_args: env_breaking.set('cancel_args',cancel_args)
 
-    def Passwd(self,passwd=None,default=None):
-        if passwd:
-            self.passwd=passwd
-            if self.bmc and self.bmc.__dict__.get('passwd') != passwd:
-                self.bmc.__dict__['passwd']=passwd
-            return passwd
-        else:
-            if self.passwd:
-                return self.passwd
-            elif self.bmc:
-                return self.bmc.__dict__.get('passwd',default)
+    def Vars(self,key=None,value={None},append=False,default=None,shared_name=None):
+        # if exist shared_name then adding/updating data at the shared global variable in all module of single program
+        # Vars(key) : searching shared global variable and my class's global variable
+        # Vars(key,value) : put value at exisint shared global variable or create/update in my class's global variable
+        # append=True: if list then append
+        # default : not found key then return the default
+        if key:
+            if env_ipmi.exist(key):
+                if value != {None}:
+                    if append:
+                        if isinstance(env_ipmi.get(key),list):
+                            env_ipmi.get(key).append(value)
+                            return True
+                        else:
+                            return default
+                    else:
+                        env_ipmi.set(key,value)
+                        return True
+                else:
+                    return env_ipmi.get(key)
+            elif env_bmc.exist(key):
+                if value != {None}:
+                    if append:
+                        if isinstance(env_bmc.get(key),list):
+                            env_bmc.get(key).append(value)
+                            return True
+                        else:
+                            return default
+                    else:
+                        env_bmc.set(key,value)
+                        return True
+                else:
+                    return env_bmc.get(key)
+            elif value != {None}:
+                if shared_name in ['env_ipmi','ipmi','env_bmc','bmc']:
+                    if shared_name in ['env_ipmi','ipmi']:
+                        if append:
+                            if env_ipmi.exist(key):
+                                if isinstance(env_ipmi.get(key),list):
+                                    env_ipmi.get(key).append(value)
+                                    return True
+                                else:
+                                    return default
+                            else:
+                                env_ipmi.set(key,[value])
+                                return True
+                        else:
+                            env_ipmi.set(key,value)
+                            return True
+                    else:
+                        if append:
+                            if env_ipmi.exist(key):
+                                if isinstance(env_bmc.get(key),list):
+                                    env_bmc.get(key).append(value)
+                                    return True
+                                else:
+                                    return default
+                            else:
+                                env_bmc.set(key,[value])
+                                return True
+                        else:
+                            env_bmc.set(key,value)
+                            return True
+                else:
+                    if append:
+                        if isinstance(self.__dict__[key],list):
+                            self.__dict__[key].append(value)
+                            return True
+                        else:
+                            return default
+                    else:
+                        self.__dict__[key]=value
+                        return True
+            elif key in self.__dict__:
+                return self.__dict__[key]
             return default
-
-    def User(self,user=None,default=None):
-        if user:
-            self.user=user
-            if self.bmc and self.bmc.__dict__.get('user') != user:
-                self.bmc.__dict__['user']=user
-            return user
         else:
-            if self.user:
-                return self.user
-            elif self.bmc:
-                return self.bmc.__dict__.get('user',default)
-            return default
-
-    def Ip(self,ip=None,default=None):
-        if ip:
-            self.host=ip
-            if self.bmc and self.bmc.__dict__.get('ip') != ip:
-                self.bmc.__dict__['ip']=ip
-            return ip
-        else:
-            if self.host:
-                return self.host
-            elif self.bmc:
-                return self.bmc.__dict__.get('ip',default)
-            return default
-
-    def EthMac(self,eth_mac=None,default=None):
-        if eth_mac:
-            self.pxe_boot_mac=eth_mac
-            if self.bmc and self.bmc.__dict__.get('eth_mac') != eth_mac:
-                self.bmc.__dict__['eth_mac']=eth_mac
-            return eth_mac
-        else:
-            if self.pxe_boot_mac:
-                return self.pxe_boot_mac
-            elif self.bmc:
-                return self.bmc.__dict__.get('eth_mac',default)
-            return default
+            out={}
+            for i in self.__dict__:
+                out[i]=self.__dict__.get(i)
+            for i in env_bmc.get():
+                if i not in out:
+                    out[i]=env_bmc.get(i)
+            for i in env_ipmi.get():
+                if i not in out:
+                    out[i]=env_ipmi.get(i)
+            return out
 
     def Cmd(self,cmd,host=None):
-        if not host: host=self.Ip()
+        if not host: host=env_ipmi.get('ip')
         if cmd.startswith('/redfish/v1'):
             return "https://{}{}".format(host,cmd)
         elif cmd.startswith('redfish/v1'):
@@ -210,7 +451,7 @@ class Redfish:
 
     def _RfResult_(self,data,dbg=False):
         if isinstance(data,(list,tuple)):
-            if dbg: printf(' - code:{}\n - msg:{}'.format(data[1].status_code,data[1].text),no_intro=None,log=self.log,mode='d')
+            if dbg: printf(' - code:{}\n - msg:{}'.format(data[1].status_code,data[1].text),no_intro=None,log=env_bmc.get('log'),mode='d')
             if data[0]:
                 try:
                     data_dic=json.loads(data[1].text) #whatever, it can dictionary then check with dictionary
@@ -242,37 +483,35 @@ class Redfish:
                 msg='Redfish Request error:{}'.format(data[1])
             else:
                 msg='Redfish Request error:{}'.format(data[1].text)
-            printf(msg,log=self.log,mode='d')
+            printf(msg,log=env_bmc.get('log'),mode='d')
             return False,msg
 
     def Get(self,cmd,host=None,user=None,passwd=None,auto_search_passwd_in_bmc=True):
         if not isinstance(cmd,str) or not cmd: return False
-        if not host: host=self.Ip()
-        if not user: user=self.User()
-        if not passwd: passwd=self.Passwd()
+        if not host: host=env_ipmi.get('ip')
+        if not user: user=env_ipmi.get('user')
+        if not passwd: passwd=env_ipmi.get('passwd')
         if not IpV4(host):
-            printf("ERROR: Wrong IP({}) format".format(host),log=self.log)
+            printf("ERROR: Wrong IP({}) format".format(host),log=env_bmc.get('log'))
             return False,"ERROR: Wrong IP({}) format".format(host)
         #err_msg='Redfish Request Error'
         ok=False
         msg='Redfish Request Error'
         for i in range(0,2):
-            if ping(host,timeout=600,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log,log_format='d'):
-                data = WEB().Request(self.Cmd(cmd,host=host),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=self.log)
+            if Ping(timeout=600,log_format='d'):
+                data = WEB().Request(self.Cmd(cmd,host=host),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=env_bmc.get('log'))
                 ok,msg=self._RfResult_(data)
                 if not ok:
                     if msg == 'unauthorized':
-                        if self.bmc and not self.no_find_user_pass and auto_search_passwd_in_bmc:
+                        if self.Vars('bmc') and not self.Vars('no_find_user_pass') and auto_search_passwd_in_bmc:
                             ok,uu,pp=self.bmc.find_user_pass()
                             if ok is True:
-                                user=self.User(uu)
-                                passwd=self.Passwd(pp)
                                 continue # Try again with new password
                     return False,msg
                 return ok,msg
             else:
                 msg="Can not access the ip({}) over {}min.".format(host,(i+1)*10)
-                printf(msg,log=self.log,mode='d')
+                printf(msg,log=env_bmc.get('log'),mode='d')
                 ok=False
         return ok,msg
 
@@ -280,12 +519,12 @@ class Redfish:
         #False: Error condition
         #True : Post OK
         #0    : property issue 
-        host=self.Ip(host)
-        if not ping(host,timeout=1800,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log):
-            printf("ERROR: Can not access the ip({}) over 30min.".format(host),log=self.log)
+        if not host: host=env_ipmi.get('ip')
+        if not Ping(timeout=1800):
+            printf("ERROR: Can not access the ip({}) over 30min.".format(host),log=env_bmc.get('log'))
             return False
         if not isinstance(cmd,str):
-            printf("ERROR: Not support command({})".format(cmd),log=self.log)
+            printf("ERROR: Not support command({})".format(cmd),log=env_bmc.get('log'))
             return False
         url=self.Cmd(cmd,host=host)
         #patch then need the power on
@@ -294,19 +533,17 @@ class Redfish:
                 return None #No data. So return None
             if self.Power() == 'off':
                 if not self.Power('on',up=30,sensor=True):
-                    printf("ERROR: Required power ON for the command, but can't power ON the system. Please look at the BMC or Redfish for power",log=self.log)
+                    printf("ERROR: Required power ON for the command, but can't power ON the system. Please look at the BMC or Redfish for power",log=env_bmc.get('log'))
                     return False
-        printf('Redfish.Post:\n - url:{}\n - mode:{}\n - data:{}\n - json:{}\n - file:{}'.format(url,mode,data,json,files),log=self.log,mode='d',no_intro=None)
+        printf('Redfish.Post:\n - url:{}\n - mode:{}\n - data:{}\n - json:{}\n - file:{}'.format(url,mode,data,json,files),log=env_bmc.get('log'),mode='d',no_intro=None)
         for i in range(0,retry):
-            data = WEB().Request(url,auth=(self.User(), self.Passwd()),mode=mode,json=json,data=data,files=files)
+            data = WEB().Request(url,auth=(env_ipmi.get('user'), env_ipmi.get('passwd')),mode=mode,json=json,data=data,files=files)
             ok,msg=self._RfResult_(data,dbg=True)
             if not ok:
                 if msg == 'unauthorized':
-                    if self.bmc and auto_search_passwd_in_bmc and not self.no_find_user_pass:
+                    if self.Vars('bmc') and auto_search_passwd_in_bmc and not self.Vars('no_find_user_pass'):
                         ok,uu,pp=self.bmc.find_user_pass()
                         if ok is True:
-                            self.User(uu)
-                            self.Passwd(pp)
                             continue
             if isinstance(msg,dict):
                 answer_tag=next(iter(msg))
@@ -323,7 +560,7 @@ class Redfish:
                         if _mm_:
                             _mm_=_mm_[0]
                         else: 
-                            printf(' - Error: Missing DATA for {} command : {}'.format(mode,msg),log=self.log,no_intro=None,mode='d')
+                            printf(' - Error: Missing DATA for {} command : {}'.format(mode,msg),log=env_bmc.get('log'),no_intro=None,mode='d')
                             return False
                     if 'message' in _mm_:
                         mm=_mm_.get('message')
@@ -332,20 +569,20 @@ class Redfish:
                     elif '@Message.ExtendedInfo' in _mm_:
                         mm=_mm_.get('@Message.ExtendedInfo',[{}])[-1].get('Message')
                     else:
-                        printf(' - Error: Unknown : {}'.format(_mm_),log=self.log,no_intro=None,mode='d')
+                        printf(' - Error: Unknown : {}'.format(_mm_),log=env_bmc.get('log'),no_intro=None,mode='d')
                         return False
                     if isinstance(mm,str):
                         if ('temporarily unavailable' in mm and 'Retry in  seconds' in mm) or ('Bios setting file already exists' in mm):
                             #Retry
                             # This error message required reset the power to flushing the redfish's garbage configuration
                             self.Power('reset',up=30,sensor=True)
-                            printf('.',direct=True,log=self.log)
+                            printf('.',direct=True,log=env_bmc.get('log'))
                             continue 
                         elif ('general error has occurred' in mm):
-                            printf(' - Error : {} command : {}'.format(mode,mm),log=self.log,no_intro=None,mode='d')
+                            printf(' - Error : {} command : {}'.format(mode,mm),log=env_bmc.get('log'),no_intro=None,mode='d')
                             return False
                         elif ('property Action is not in the list' in mm):
-                            printf(' - Error: Remove the unknown property from the request body and resubmit the request if the operation failed',log=self.log,no_intro=None,mode='d')
+                            printf(' - Error: Remove the unknown property from the request body and resubmit the request if the operation failed',log=env_bmc.get('log'),no_intro=None,mode='d')
                             return 0
             if data[1].status_code == 200: #OK
                 if mode == 'patch': # if patch command then reset the power to apply
@@ -354,7 +591,7 @@ class Redfish:
                         return self.Power('reset',up=Int(wait_after_reset,default=30),sensor=True)
                 return True
             #Fail
-            printf(' - Error: ({}:{}):{}'.format(mode,data[1].status_code,data[1].text),log=self.log,no_intro=None,mode='d')
+            printf(' - Error: ({}:{}):{}'.format(mode,data[1].status_code,data[1].text),log=env_bmc.get('log'),no_intro=None,mode='d')
             break
         return False
 
@@ -396,25 +633,26 @@ class Redfish:
                 if isinstance(aa.get('BootProgress'),dict):
                     boot_progress=aa.get('BootProgress').get('LastState')
                     if IsIn(boot_progress,[None,'None']):
-                        self.bootprogress_wait=0
+                        self.Vars('bootprogress_wait',0)
                         if IsIn(before,['on']):
                             return 'off' # Previously ON, but now something up state then it should be off and on
                         #if IsIn(before,['on',None]):
                         #   return 'off' # Previously ON, but now something up state then it should be off and on
                         return 'up' # Power state is on. but not ready. So going up
                     elif IsIn(boot_progress,['SystemHardwareInitializationComplete']):
-                        self.bootprogress_wait=0
+                        self.Vars('bootprogress_wait',0)
                         return 'on' #ON state
                     elif IsIn(boot_progress,['OEM']):  # OEM made some issue on some strange BMC
-                        printf('WARN: The BootProgress in Redfish shows "OEM" instead of the BIOS initialization state.',log=self.log,no_intro=None,mode='d')
-                        if self.bootprogress_wait > 0:
-                            self.bootprogress_wait-=1
+                        printf('WARN: The BootProgress in Redfish shows "OEM" instead of the BIOS initialization state.',log=env_bmc.get('log'),no_intro=None,mode='d')
+                        bootprogress_wait=self.Vars('bootprogress_wait')
+                        if bootprogress_wait > 0:
+                            bootprogress_wait-=1
                             return 'up'
                         else:
                             up_state=True
                             # goto next step (Thermal check)
                     else: #Keep changing boot_progress for BIOS initialization
-                        self.bootprogress_wait=20
+                        self.Vars('bootprogress_wait',20)
                         return 'up' # Power state is on. but not ready. So going up
         return False
 
@@ -438,7 +676,7 @@ class Redfish:
                             #if IsIn(ii.get('ReadingCelsius')):
                             cpu_temp=Int(ii.get('ReadingCelsius'),default=-1)
                             if cpu_temp >= 0:
-                                self.bootprogress_wait=0
+                                self.Vars('bootprogress_wait',0)
                                 if IsIn(thermal,[None,False]):
                                     if cpu_temp > 10:
                                         return 'on'
@@ -450,10 +688,10 @@ class Redfish:
                             else:
                                 thermal_value=ii.get('ReadingCelsius')
                     if IsIn(thermal,[None,False]):
-                        self.bootprogress_wait=0
+                        self.Vars('bootprogress_wait',0)
                         return 'off' # power off state
                     else:
-                        self.bootprogress_wait=0
+                        self.Vars('bootprogress_wait',0)
                         return None # power off state
                 elif isinstance(aa.get('Temperatures'),list):
                     for i in aa.get('Temperatures'):
@@ -462,7 +700,7 @@ class Redfish:
                                 cpu_temp=Int(i.get('ReadingCelsius'),default=-1)
                                 #if IsInt(cpu_temp):
                                 if cpu_temp >=0:
-                                    self.bootprogress_wait=0
+                                    self.Vars('bootprogress_wait',0)
                                     if IsIn(thermal,[None,False]):
                                         if cpu_temp > 10:
                                             return 'on'
@@ -474,18 +712,18 @@ class Redfish:
                                 else:
                                     thermal_value=i.get('ReadingCelsius')
                     if IsIn(thermal,[None,False]):
-                        self.bootprogress_wait=0
+                        self.Vars('bootprogress_wait',0)
                         return 'off' # power off state
                     else:
-                        self.bootprogress_wait=0
+                        self.Vars('bootprogress_wait',0)
                         return None # power off state
         if IsIn(thermal_value,[None,'None']): # Thermal value is None is off state
             if up_state: # boot progress has up_state
                 if IsIn(before,['up','on']): # before up or on then off state
-                    self.bootprogress_wait=0
+                    self.Vars('bootprogress_wait',0)
                     return 'off' # off
                 return 'up' #before was off then up state. up state is not completed state. So not initialize bootprogress_wait
-            self.bootprogress_wait=0
+            self.Vars('bootprogress_wait',0)
             return 'off' # nothing then off state
         return False # Error with status(Not support BootProgress or Temperature sensor : Not thermal and not boot progress
 
@@ -527,7 +765,7 @@ class Redfish:
         before_mon=opts.get('before',opts.get('before_mon',opts.get('before_state')))
         while not Time.Out(timeout):
             if Time.Out(timeout): return False #Timeout
-            stat=self.power_unknown_tag
+            stat=env_bmc.get('power_unknown_tag')
             if sensor:
                 mon=self.SystemReadyState(thermal=sensor_temp,before=before_mon)
             else:
@@ -538,7 +776,7 @@ class Redfish:
                 DTime.Reset()
                 UNTime.Reset()
                 UPSTATETime.Reset()
-                stat=self.power_on_tag
+                stat=env_bmc.get('power_on_tag')
                 if keep_on > 0:
                     if UTime.Out(keep_on): return True
                 else:
@@ -549,7 +787,7 @@ class Redfish:
                     if UPSTATETime.Out(up_state_timeout):
                         DTime.Reset()
                         UNTime.Reset()
-                        stat=self.power_on_tag
+                        stat=env_bmc.get('.power_on_tag')
                         if keep_on > 0:
                             if UTime.Out(keep_on): return True
                         else:
@@ -557,21 +795,21 @@ class Redfish:
                     else:
                         DTime.Reset()
                         UNTime.Reset()
-                        stat=self.power_up_tag
+                        stat=env_bmc.get('power_up_tag')
                 elif IsIn(mon,[None,'off']):
                     UNTime.Reset()
                     UPSTATETime.Reset()
-                    stat=self.power_off_tag
+                    stat=env_bmc.get('power_off_tag')
                     if keep_off > 0:
                         if DTime.Out(keep_off): return False # Off
                 else: #Unknown 
                     DTime.Reset()
                     UPSTATETime.Reset()
-                    stat=self.power_unknown_tag
+                    stat=env_bmc.get('power_unknown_tag')
                     if keep_unknown > 0:
                         if UNTime.Out(keep_unkown): return None # Unknown
             before_mon=mon
-            printf(stat,direct=True,log=self.log,log_level=1)
+            printf(stat,direct=True,log=env_bmc.get('log'),log_level=1)
             time.sleep(3)
         return None
 
@@ -589,7 +827,7 @@ class Redfish:
         UNTime=TIME()
         while not Time.Out(timeout):
             if Time.Out(timeout): return False #Timeout
-            stat=self.power_unknown_tag
+            stat=env_bmc.get('power_unknown_tag')
             if sensor:
                 mon=self.SystemReadyState(thermal=sensor_temp,before=before_mon)
             else:
@@ -601,7 +839,7 @@ class Redfish:
                 UNTime.Reset()
                 if keep_off > 0:
                     if DTime.Out(keep_off): return True
-                    stat=self.power_off_tag
+                    stat=env_bmc.get('power_off_tag')
                 else:
                     return True
             else:
@@ -609,19 +847,19 @@ class Redfish:
                 if IsIn(mon,['up']):
                     UNTime.Reset()
                     UTime.Reset()
-                    stat=self.power_up_tag
+                    stat=env_bmc.get('power_up_tag')
                 elif IsIn(mon,['on']):
                     UNTime.Reset()
-                    stat=self.power_on_tag
+                    stat=env_bmc.get('power_on_tag')
                     if keep_on > 0:
                         if UTime.Out(keep_on): return False
                 else:
                     UTime.Reset()
-                    stat=self.power_unknown_tag
+                    stat=env_bmc.get('power_unknown_tag')
                     if keep_unknown > 0:
                         if UNTime.Out(keep_unknown): return None
             before_mon=mon
-            printf(stat,direct=True,log=self.log,log_level=1)
+            printf(stat,direct=True,log=env_bmc.get('log'),log_level=1)
             time.sleep(3)
         return None
 
@@ -668,17 +906,17 @@ class Redfish:
                 parameters=rf_cmd_info[1].get('Parameters')
                 if parameters and isinstance(parameters[0],dict):
                     if rf_cmd not in parameters[0].get('AllowableValues'):
-                        printf('Command({} from {}) not support on this Redfish'.format(rf_cmd,cmd),log=self.log,mode='d')
+                        printf('Command({} from {}) not support on this Redfish'.format(rf_cmd,cmd),log=env_bmc.get('log'),mode='d')
                         return False
             #init_power_state=self.SystemReadyState() # duplicated code as my parent
             if IsIn(init_power_state,['on']):
-                printf(self.power_on_tag,log=self.log,direct=True,log_level=1)
+                printf(env_bmc.get('power_on_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
             elif IsIn(init_power_state,['off']):
-                printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
+                printf(env_bmc.get('power_off_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
             elif IsIn(init_power_state,['up']):
-                printf(self.power_up_tag,log=self.log,direct=True,log_level=1)
+                printf(env_bmc.get('power_up_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
             else:
-                printf(self.power_unknown_tag,log=self.log,direct=True,log_level=1)
+                printf(env_bmc.get('power_unknown_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
             xxx=init_power_state
             changed=False
             for i in range(0,retry):
@@ -687,13 +925,13 @@ class Redfish:
                 aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'Action': 'Reset', 'ResetType': rf_cmd})
                 if IsInt(aa,mode=int) and aa == 0: # ERROR. STOP
                     #Try again without Action parameter (OpenBMC not required???)
-                    printf('Try again({}/{}) {} without Action parameter'.format(i,retry,rf_cmd),log=self.log,mode='d')
+                    printf('Try again({}/{}) {} without Action parameter'.format(i,retry,rf_cmd),log=env_bmc.get('log'),mode='d')
                     aa=self.Post('/Systems/1/Actions/ComputerSystem.Reset',json={'ResetType': rf_cmd})
                     if IsInt(aa,mode=int) and aa == 0: # ERROR. STOP
                         return False
                 if aa is False: # Retry
                     ok=False #error
-                    printf('.',log=self.log,direct=True,log_level=1)
+                    printf('.',log=env_bmc.get('log'),direct=True,log_level=1)
                     time.sleep(5)
                     continue
                 # reset group command
@@ -706,31 +944,31 @@ class Redfish:
                         if IsIn(init_power_state,['on']) and IsIn(xxx,['up']):
                             Time.Reset(name='up_state_timeout')
                             off_state=True
-                            printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
+                            printf(env_bmc.get('power_off_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
                             break
                         elif IsIn(xxx,[None,'off']):
                             Time.Reset(name='up_state_timeout')
                             off_state=True
-                            printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
+                            printf(env_bmc.get('power_off_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
                             break
                         elif xxx is False:
                             Time.Reset(name='up_state_timeout')
-                            printf('.',log=self.log,direct=True,log_level=1)
+                            printf('.',log=env_bmc.get('log'),direct=True,log_level=1)
                             return False
                         elif IsIn(xxx,['up']):
                             if Time.Out(up_state_timeout,name='up_state_timeout'):
                                 off_state=True
-                                printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
+                                printf(env_bmc.get('power_off_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
                                 break
                         if IsIn(xxx,['on']):
-                            printf(self.power_on_tag,log=self.log,direct=True,log_level=1)
+                            printf(env_bmc.get('power_on_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
                         elif IsIn(xxx,['off']):
-                            printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
+                            printf(env_bmc.get('power_off_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
                         elif IsIn(xxx,['up']):
-                            printf(self.power_up_tag,log=self.log,direct=True,log_level=1)
+                            printf(env_bmc.get('power_up_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
                         else:
-                            printf(self.power_unknown_tag,log=self.log,direct=True,log_level=1)
-                        #printf('.',log=self.log,direct=True,log_level=1)
+                            printf(env_bmc.get('power_unknown_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
+                        #printf('.',log=env_bmc.get('log'),direct=True,log_level=1)
                         time.sleep(3)
                 #    if not off_state:
                 #        print('>>>xxx:not detected down, continue')
@@ -739,7 +977,7 @@ class Redfish:
                 # Monitor after power command
                 Time.Reset(name='monitor')
                 Time.Reset(name='init_state')
-                cst=self.power_unknown_tag
+                cst=env_bmc.get('power_unknown_tag')
                 while not Time.Out(monitor_timeout,name='monitor'):
                     if sensor:
                         cps=self.SystemReadyState(before=xxx)
@@ -749,27 +987,27 @@ class Redfish:
                     if cps == cmd_result(cmd):
                         if IsIn(cmd,['reset','cycle','reboot','restart','ForceRestart']):
                             if IsIn(init_power_state,['on']) and not off_state:
-                                printf('Keep ON state after power action({}). So try again'.format(cmd),log=self.log,mode='d')
+                                printf('Keep ON state after power action({}). So try again'.format(cmd),log=env_bmc.get('log'),mode='d')
                                 #for retry again
                                 break
                         return True
                     elif not changed:
                         # keep same state after power acition and over time then timeout.
                         if Time.Out(keep_init_state_timeout,name='init_state'):
-                            printf('Did not changed state after power action({}) over {}s'.format(cmd,keep_init_state_timeout),log=self.log,mode='d')
+                            printf('Did not changed state after power action({}) over {}s'.format(cmd,keep_init_state_timeout),log=env_bmc.get('log'),mode='d')
                             return False
                     if IsIn(cps,['on']):
-                        cst=self.power_on_tag
+                        cst=env_bmc.get('power_on_tag')
                     elif IsIn(cps,['off']):
-                        cst=self.power_off_tag
+                        cst=env_bmc.get('power_off_tag')
                     elif IsIn(cps,['up']):
-                        cst=self.power_up_tag
+                        cst=env_bmc.get('power_up_tag')
                     else:
-                        cst=self.power_unknown_tag
-                    printf(cst,log=self.log,direct=True,log_level=1)
+                        cst=env_bmc.get('power_unknown_tag')
+                    printf(cst,log=env_bmc.get('log'),direct=True,log_level=1)
                     time.sleep(5)
                 #Retry cmmand (for i in range(0,retry):)
-                printf(cst,log=self.log,direct=True,log_level=1)
+                printf(cst,log=env_bmc.get('log'),direct=True,log_level=1)
                 time.sleep(5)
             return ok
         ################################
@@ -813,7 +1051,7 @@ class Redfish:
             if cmd == 'ID_LED': #Get ID_LED status
                 ok,aa=self.Get('Chassis/1')
                 if not ok:
-#                    printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#                    printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
                     return False
                 if isinstance(aa,dict):
                     return aa.get('IndicatorLED')
@@ -874,7 +1112,7 @@ class Redfish:
             #Normal system case
             ok,aa=self.Get('Systems/1')
             if not ok or not isinstance(aa,dict):
-#                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#                printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
                 return False
             rf_key=aa.get('EthernetInterfaces',{}).get('@odata.id')
             if rf_key:
@@ -904,7 +1142,7 @@ class Redfish:
                                         if ok and isinstance(aa,dict):
                                             if aa.get('DeviceEnabled'):
                                                 return aa.get('Ethernet').get('MACAddress')
-            printf('.',direct=True,log=self.log,log_level=1)
+            printf('.',direct=True,log=env_bmc.get('log'),log_level=1)
             time.sleep(3)
 
     def _Boot_BootSourceOverrideInfo(self):
@@ -918,7 +1156,7 @@ class Redfish:
         cmd='Systems/1'
         ok,aa=self.Get(cmd)
         if not ok or not isinstance(aa,dict):
-#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#            printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
             naa['error']=aa
             return naa
         naa['cmd']=cmd
@@ -1200,7 +1438,7 @@ class Redfish:
                             if isinstance(redirect,str) and redirect:
                                 ok,aa=self.Get(redirect)
                                 if not ok:
-#                                    printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#                                    printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
                                     naa['error']=aa
                                     return naa
                                 if isinstance(aa,dict):
@@ -1225,7 +1463,7 @@ class Redfish:
         boot_orders=[]
         ok,rt=self.Get('Systems/1/BootOptions')
         pxe_boot_mac=MacV4(pxe_boot_mac)
-        printf('Set Network({}) BootOrder:'.format(pxe_boot_mac),log=self.log,log_level=1,mode='d')
+        printf('Set Network({}) BootOrder:'.format(pxe_boot_mac),log=env_bmc.get('log'),log_level=1,mode='d')
         if ok:
              for x,i in enumerate(rt.get('Members',[])):
                  ok,rrt=self.Get(i.get('@odata.id'))
@@ -1247,10 +1485,10 @@ class Redfish:
              if boot_orders:
                  boot_db={'Boot':{'BootOrder':boot_orders}}
                  return self.Post('Systems/1',json=boot_db,mode='patch')
-             printf('ERROR: Not found boot order information',log=self.log,log_level=1,mode='d')
+             printf('ERROR: Not found boot order information',log=env_bmc.get('log'),log_level=1,mode='d')
              return False
         else:
-             printf('Not support Systems/1/BootOptions on this BMC',log=self.log,log_level=1,mode='d')
+             printf('Not support Systems/1/BootOptions on this BMC',log=env_bmc.get('log'),log_level=1,mode='d')
              return None
 
     def _Boot_Name(self,boot):
@@ -1288,7 +1526,7 @@ class Redfish:
         if (pre is False and IsSame(keep,'Once') and boot_order_enable == 'Disabled') or (IsSame(self._Boot_Keep(keep),boot_order_enable) and boot_order_enable == 'Continuous'):
             if _o_.get('1','') == self._Boot_Name(boot) and self._Boot_Mode(mode) == _o_.get('mode'):
                 msg='Redfish: Set BootOrder condition with {}, {}, {}'.format(self._Boot_Mode(mode),self._Boot_Name(boot),self._Boot_Keep(keep))
-                printf(msg,log=self.log,mode='d')
+                printf(msg,log=env_bmc.get('log'),mode='d')
                 return True,msg
         return False,'Can not set bootsourceoverride'
 
@@ -1346,7 +1584,7 @@ class Redfish:
                     if chk in _b_.get('support'):
                         return True
 #                        return _b_ #Setup
-                printf('.',direct=True,log=self.log,log_level=1)
+                printf('.',direct=True,log=env_bmc.get('log'),log_level=1)
                 time.sleep(10)
             return False # Not setup
         else:
@@ -1373,16 +1611,16 @@ class Redfish:
 
         net_boot=self._Boot_NetworkBootOrder(pxe_boot_mac=pxe_boot_mac,http=http,ipv=ipv)
         if net_boot is False: #Error
-            printf('Network Boot(PXE) setting Error: Not found Network Boot Source',log=self.log,mode='d')
+            printf('Network Boot(PXE) setting Error: Not found Network Boot Source',log=env_bmc.get('log'),mode='d')
             return False,'Network Boot(PXE) setting Error: Not found Network Boot Source'
         else:
             if net_boot is None:
-                printf(f'Network Boot(PXE) setting : Not support PXE Boot for {pxe_boot_mac} with http:{http} on this BMC',log=self.log,mode='d')
+                printf(f'Network Boot(PXE) setting : Not support PXE Boot for {pxe_boot_mac} with http:{http} on this BMC',log=env_bmc.get('log'),mode='d')
             if not isinstance(_b_,dict): _b_=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
         #Check BIOS Boot order 
         if pxe_boot_mac:
             if self._Boot_BiosBootOrderCheck_(pxe_boot_mac,_b_=_b_)[0] is True:
-                printf(f'Alreay Same PXE Boot Condition({pxe_boot_mac})',log=self.log,mode='d')
+                printf(f'Alreay Same PXE Boot Condition({pxe_boot_mac})',log=env_bmc.get('log'),mode='d')
                 return True,f'Already Same PXE Boot Condition({pxe_boot_mac})'
         #Support only /redfish/v1/Systems/1/Oem/Supermicro/FixedBootOrder
         if _b_.get('pxe_boot_mac') and IsInt(_b_.get('pxe_boot_id')):
@@ -1399,15 +1637,15 @@ class Redfish:
                 time.sleep(2)
                 _b_=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
                 if _b_.get('pxe_boot_id') == 0:
-                    printf('Set {} Boot with {}'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE',pxe_boot_mac),log=self.log,mode='d')
+                    printf('Set {} Boot with {}'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE',pxe_boot_mac),log=env_bmc.get('log'),mode='d')
                     return True,'Set {} Boot with {}'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE',pxe_boot_mac)
                 else:
-                    printf('Can not set {} Boot at BIOS'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE'),log=self.log,mode='d')
+                    printf('Can not set {} Boot at BIOS'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE'),log=env_bmc.get('log'),mode='d')
                     return False,'Can not set {} Boot at BIOS'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE')
             else:
-                printf('Not support /Systems/1/Oem/Supermicro/FixedBootOrder command',log=self.log,mode='d')
+                printf('Not support /Systems/1/Oem/Supermicro/FixedBootOrder command',log=env_bmc.get('log'),mode='d')
                 return None,'Not support /Systems/1/Oem/Supermicro/FixedBootOrder command'
-        printf('Not found any updating parameters',log=self.log,mode='d')
+        printf('Not found any updating parameters',log=env_bmc.get('log'),mode='d')
         return None,'Not found any updating parameters'
         
         #Directly Change Systems/1/Bios. but it something mixed the order(duplicated). So not good
@@ -1600,7 +1838,7 @@ class Redfish:
         #################################################
         # Setting 
         #Check
-        if pxe_boot_mac is None: pxe_boot_mac=self.pxe_boot_mac
+        if pxe_boot_mac is None: pxe_boot_mac=self.Vars('pxe_boot_mac')
         rf_boot_info={'order':self._Boot_BootSourceOverrideInfo(),'bios':self._Boot_BiosBootInfo(pxe_boot_mac=MacV4(pxe_boot_mac))}
         if not rf_boot_info['order'] and not rf_boot_info['bios']:
             #Redfish issue
@@ -1638,24 +1876,24 @@ class Redfish:
     def BmcVer(self):
         ok,aa=self.Get('UpdateService/FirmwareInventory/BMC')
         if not ok:
-#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#            printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
             return None
         if isinstance(aa,dict): return aa.get('Version')
         ok,aa=self.Get('Managers/1')
         if not ok:
-#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#            printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
             return None
         if isinstance(aa,dict): return aa.get('FirmwareVersion')
 
     def BiosVer(self):
         ok,aa=self.Get('UpdateService/FirmwareInventory/BIOS')
         if not ok:
-#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#            printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
             return None
         if isinstance(aa,dict): return aa.get('Version')
         ok,aa=self.Get('Systems/1')
         if not ok:
-#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#            printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
             return None
         if isinstance(aa,dict): return aa.get('BiosVersion')
 
@@ -1707,7 +1945,7 @@ class Redfish:
         naa={}
         ok,aa=self.Get('Managers/1')
         if not ok:
-#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#            printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
             return naa
         if isinstance(aa,dict):
             naa['bmc']=MacV4(Get(Split(aa.get('UUID'),'-'),-1))
@@ -1715,7 +1953,7 @@ class Redfish:
         if not naa['lan']:
             ok,aa=self.Get('Systems/1')
             if not ok:
-#                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#                printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
                 return naa
             if isinstance(aa,dict):
                 naa['lan']=MacV4(Get(Split(aa.get('UUID'),'-'),-1))
@@ -1737,13 +1975,13 @@ class Redfish:
         naa={}
         ok,aa=self.Get('Chassis/1/NetworkAdapters')
         if not ok:
-#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#            printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
             return naa
         if isinstance(aa,dict):
             for ii in Iterable(aa.get('Members',[])):
                 ok,ai=self.Get(ii.get('@odata.id'))
                 if not ok:
-#                    printf('Redfish ERROR: {}'.format(ai),log=self.log,log_level=1,mode='d')
+#                    printf('Redfish ERROR: {}'.format(ai),log=env_bmc.get('log'),log_level=1,mode='d')
                     return naa
                 if isinstance(ai,dict):
                     ai_id=ai.get('Id')
@@ -1765,13 +2003,13 @@ class Redfish:
                             ok=np_rc[0]
                             port=np_rc[1]
                         if not ok:
-#                            printf('Redfish ERROR: {}'.format(port),log=self.log,log_level=1,mode='d')
+#                            printf('Redfish ERROR: {}'.format(port),log=env_bmc.get('log'),log_level=1,mode='d')
                             return naa
                         if isinstance(port,dict):
                             for pp in Iterable(port.get('Members')):
                                 ok,port_q=self.Get(pp.get('@odata.id'))
                                 if not ok:
-#                                   printf('Redfish ERROR: {}'.format(port_q),log=self.log,log_level=1,mode='d')
+#                                   printf('Redfish ERROR: {}'.format(port_q),log=env_bmc.get('log'),log_level=1,mode='d')
                                    return naa
                                 naa[ai_id]['port'][port_q.get('Id')]={}
                                 naa[ai_id]['port'][port_q.get('Id')]['mac']=port_q.get('AssociatedNetworkAddresses')[0]
@@ -1782,13 +2020,13 @@ class Redfish:
         naa={}
         ok,aa=self.Get('Systems/1/Memory')
         if not ok:
-#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#            printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
             return naa
         if isinstance(aa,dict):
             for ii in Iterable(aa.get('Members',[])):
                 ok,ai=self.Get(ii.get('@odata.id'))
                 if not ok:
-#                    printf('Redfish ERROR: {}'.format(ai),log=self.log,log_level=1,mode='d')
+#                    printf('Redfish ERROR: {}'.format(ai),log=env_bmc.get('log'),log_level=1,mode='d')
                     return naa
                 if isinstance(ai,dict):
                     idx=ai.get('Id')
@@ -1806,13 +2044,13 @@ class Redfish:
         naa={}
         ok,aa=self.Get('Systems/1/Processors')
         if not ok:
-#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#            printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
             return naa
         if isinstance(aa,dict):
             for ii in Iterable(aa.get('Members',[])):
                 ok,ai=self.Get(ii.get('@odata.id'))
                 if not ok:
-#                    printf('Redfish ERROR: {}'.format(ai),log=self.log,log_level=1,mode='d')
+#                    printf('Redfish ERROR: {}'.format(ai),log=env_bmc.get('log'),log_level=1,mode='d')
                     return naa
                 if isinstance(ai,dict):
                     idx=ai.get('Id')
@@ -1837,14 +2075,14 @@ class Redfish:
         naa['cpu']=self.Cpu()
         ok,aa=self.Get('Managers/1')
         if not ok:
-#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#            printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
             return naa
         naa['mac']={}
         if isinstance(aa,dict):
             naa['mac']['bmc']=MacV4(Get(Split(aa.get('UUID'),'-'),-1))
         ok,aa=self.Get('Systems/1')
         if not ok:
-#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#            printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
             return naa
         if isinstance(aa,dict):
             naa['mac']['lan']=MacV4(Get(Split(aa.get('UUID'),'-'),-1))
@@ -1853,7 +2091,7 @@ class Redfish:
             naa['UUID']=aa.get('UUID')
         ok,aa=self.Get('Chassis/1')
         if not ok:
-#            printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#            printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
             return naa
         if isinstance(aa,dict):
             manufacturer=aa.get('Manufacturer')
@@ -1880,7 +2118,7 @@ class Redfish:
         info=[]
         ok,vv=self.Get('Managers/1/VirtualMedia')
         if not ok:
-#            printf('Redfish ERROR: {}'.format(vv),log=self.log,log_level=1,mode='d')
+#            printf('Redfish ERROR: {}'.format(vv),log=env_bmc.get('log'),log_level=1,mode='d')
             return False
         if isinstance(vv,dict):
             for ii in Iterable(vv.get('Members',[])):
@@ -1894,7 +2132,7 @@ class Redfish:
                 if redfish_path:
                     ok,aa=self.Get(redfish_path)
                     if not ok:
-#                        printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#                        printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
                         return False
                     if aa:
                         if aa.get('Inserted'):
@@ -1911,11 +2149,11 @@ class Redfish:
         while TIME().Int() - old < timeout:
             ok,aa=self.Get('Systems')
             if not ok:
-#                printf('Redfish ERROR: {}'.format(aa),log=self.log,log_level=1,mode='d')
+#                printf('Redfish ERROR: {}'.format(aa),log=env_bmc.get('log'),log_level=1,mode='d')
                 return False
             if not isinstance(aa,dict):
                 #StdOut('.')
-                printf('.',direct=True,log=self.log,log_level=1)
+                printf('.',direct=True,log=env_bmc.get('log'),log_level=1)
                 time.sleep(1)
                 continue
             else:
@@ -1929,10 +2167,10 @@ class Redfish:
             if aa[0]:
                 if aa[1].get('Current interface') == 'HTML 5':
                     if mode == 'url':
-                        return True,'https://{}/{}'.format(self.Ip(),aa[1].get('URI'))
+                        return True,'https://{}/{}'.format(env_ipmi.get('ip'),aa[1].get('URI'))
                     else:
                         import webbrowser
-                        webbrowser.open_new('https://{}/{}'.format(self.Ip(),aa[1].get('URI')))
+                        webbrowser.open_new('https://{}/{}'.format(env_ipmi.get('ip'),aa[1].get('URI')))
                         return True,'ok'
                 else:
                     if self.Post(rf_key,json={'Current interface':'HTML 5'},mode='patch') is False:
@@ -1966,16 +2204,16 @@ class Redfish:
         return out
 
     def McResetCold(self,keep_on=30):
-        printf("""Reset BMC by redfish""",log=self.log,dsp='d')
+        printf("""Reset BMC by redfish""",log=env_bmc.get('log'),dsp='d')
         rc=self.Post('/Managers/1/Actions/Manager.Reset')
         if rc is True:
              time.sleep(5)
-             printf("""Wait until response from BMC""",log=self.log,dsp='d')
-             return ping(self.Ip(),keep_good=keep_on,timeout=self.timeout,cancel_func=self.cancel_func,cancel_args=self.cancel_args,log=self.log)
+             printf("""Wait until response from BMC""",log=env_bmc.get('log'),dsp='d')
+             return Ping(keep_good=keep_on)
         return rc
 
     def FactoryDefault(self,keep_on=30):
-        printf("""Reset BMC to Factory Default by redfish""",log=self.log,dsp='d')
+        printf("""Reset BMC to Factory Default by redfish""",log=env_bmc.get('log'),dsp='d')
         rc=self.Post('/Managers/1/Actions/Oem/SmcManagerConfig.Reset')
         if rc is True:
             time.sleep(5)
@@ -1983,7 +2221,7 @@ class Redfish:
         return rc
 
     def LoadDefaultBios(self,keep_on=30): #Good
-        printf("""Load Default BIOS by redfish""",log=self.log,dsp='d')
+        printf("""Load Default BIOS by redfish""",log=env_bmc.get('log'),dsp='d')
         rc=self.Post('/Systems/1/Bios/Actions/Bios.ResetBios')
         if rc is True:
             time.sleep(5)
@@ -1994,16 +2232,16 @@ class Redfish:
         return LoadDefaultBios()
 
     def AccountLockoutThreshold(self,count=0): # 0: Not lockout, 3: 3 times failed then lockout account
-        printf("""Set Redfish Account Lockout Threshold""",log=self.log,dsp='d')
+        printf("""Set Redfish Account Lockout Threshold""",log=env_bmc.get('log'),dsp='d')
         count_num=Int(count,default=3)
         account_info=self.Get('AccountService')
         if account_info[0]:
             if account_info[1].get('AccountLockoutThreshold') == count_num:
-                printf("""Already same""",log=self.log,dsp='d')
+                printf("""Already same""",log=env_bmc.get('log'),dsp='d')
                 return True
             else:
                 return self.Post('AccountService',json={'AccountLockoutThreshold':count_num},mode='patch')
-        printf("""Not support Account in the Redfish""",log=self.log,dsp='d')
+        printf("""Not support Account in the Redfish""",log=env_bmc.get('log'),dsp='d')
         return False
 
     def FindUserPassword(self,test_user=['ADMIN'],test_password=['ADMIN'],split=None): # 0: Not lockout, 3: 3 times failed then lockout account
@@ -2015,73 +2253,74 @@ class Redfish:
         for uu in test_user:
             for pp in test_password:
                 tested.append((uu,pp))
-                if not chk: printf('Try with "{}" and "{}"'.format(uu,pp),log=self.log,no_intro=None,mode='d')
+                if not chk: printf('Try with "{}" and "{}"'.format(uu,pp),log=env_bmc.get('log'),no_intro=None,mode='d')
                 _tmp_=self.Get('Systems/1',user=uu,passwd=pp)
                 chk=True
                 if _tmp_[0]:
-                    printf("Found {}'s new password: {}".format(uu,pp),log=self.log)
+                    printf("Found {}'s new password: {}".format(uu,pp),log=env_bmc.get('log'))
                     return True
                 else:
-                    printf('p',log=self.log,direct=True,mode='n')
-                    printf('Redfish Issue: {}'.format(_tmp_[1]),log=self.log,no_intro=None,mode='d')
+                    printf('p',log=env_bmc.get('log'),direct=True,mode='n')
+                    printf('Redfish Issue: {}'.format(_tmp_[1]),log=env_bmc.get('log'),no_intro=None,mode='d')
                     time.sleep(1)
         if tested:
-            printf('Can not found any working user and password in {}'.format(tested),log=self.log)
+            printf('Can not found any working user and password in {}'.format(tested),log=env_bmc.get('log'))
             return False
     
 class kBmc:
     def __init__(self,*inps,**opts):
         self.find_user_passwd_with_redfish=opts.get('find_user_passwd_with_redfish',False)
-        self.power_on_tag='¯'
-        self.power_up_tag='∸'
-        self.power_off_tag='_'
-        self.power_down_tag='⨪'
-        self.power_unknown_tag='·'
         env=Get(inps,0) if Get(inps,0,err=True) else Get(opts,['ip','ipmi_ip'],default=None,err=True,peel='force')
+        ip=None
         if isinstance(env,dict):
             if opts: env.update(opts)
             opts=env
-            self.ip=Get(opts,['ip','ipmi_ip'],default=None,err=True,peel='force')
-        else:
-            self.ip=env
-        self.port=Get(opts,['port','ipmi_port'],default=(623,664,443),err=True,peel='force')
-        self.mac=Get(opts,['mac','ipmi_mac','bmc_mac'],default=None,err=True,peel='force')
-        self.eth_mac=opts.get('eth_mac')
-        self.eth_ip=opts.get('eth_ip')
-        self.err={}
-        self.warning={}
-        self.canceling={}
-        self.cancel_func=opts.get('cancel_func',opts.get('stop_func',None))
-        self.cancel_args=opts.get('cancel_args',opts.get('stop_args',opts.get('cancel_arg',opts.get('stop_arg',{}))))
+        ip=IpV4(Get(opts,['ip','ipmi_ip'],default=None,err=True,peel='force'))
+        if ip:
+            env_ipmi.set('ip',ip)
+            env_ipmi.get('org_ip',ip)
+        port=Get(opts,['port','ipmi_port'],default=(623,664,443),err=True,peel='force')
+        if port: env_ipmi.set('port',port)
+        mac=MacV4(Get(opts,['mac','ipmi_mac','bmc_mac'],default=None,err=True,peel='force'))
+        if mac: env_ipmi.set('mac',mac)
+        eth_mac=MacV4(opts.get('eth_mac'))
+        if eth_mac: env_ipmi.set('eth_mac',eth_mac)
+        eth_ip=IpV4(opts.get('eth_ip'))
+        if eth_ip: env_ipmi.set('eth_ip',eth_ip)
         self.bgpm={}
         self.mac2ip=opts.get('mac2ip',None)
         self.find_user_pass_interval=opts.get('find_user_pass_interval',None)
         self.no_find_user_pass=opts.get('no_find_user_pass',False)
-        self.log=opts.get('log',None)
+        log=opts.get('log',None)
+        if log: env_bmc.set('log',log)
+        user=Get(inps,1) if Get(inps,1,err=True) else Get(opts,['user','ipmi_user','bmc_user'],default='ADMIN',err=True,peel='force')
+        if user: env_ipmi.set('user',user)
+        passwd=Get(inps,2) if Get(inps,2,err=True) else Get(opts,['password','passwd','ipmi_pass','bmc_pass','ipmi_passwd','ipmi_password','bmc_passwd','bmc_password'],default='ADMIN',err=True,peel='force')
+        if passwd: env_ipmi.set('passwd',passwd)
+        org_user=opts.get('org_user',user)       #copy user to org_user
+        if org_user: env_bmc.set('org_user',org_user)
+        org_passwd=opts.get('org_passwd',passwd) #copy password to org_passwd
+        if org_passwd: env_bmc.set('org_passwd',org_passwd)
+        upasswd=Get(opts,['ipmi_upass','upasswd','unique_password','unique_passwd'],default=None,err=True,peel='force')
+        if upasswd: env_bmc.set('upasswd',upasswd)
+        default_passwd=Get(opts,['ipmi_dpass','dpasswd','default_password'],default='ADMIN',err=True,peel='force')
+        if default_passwd: env_bmc.set('default_passwd',default_passwd)
+        hardcode=Get(opts,['rpass','rpasswd','recover_password','recover_pass','recover_passwd','hardcode'],default='ADMIN1234',peel='force')
+        test_user=opts.get('test_user')
+        if isinstance(test_user,str): test_user=test_user.split(',')
+        if not isinstance(test_user,list) or not test_user:
+            test_user=['ADMIN','Admin','admin','root','Administrator']
+        env_bmc.set('test_user',test_user)
 
-        self.user=Get(inps,1) if Get(inps,1,err=True) else Get(opts,['user','ipmi_user','bmc_user'],default='ADMIN',err=True,peel='force')
-        self.passwd=Get(inps,2) if Get(inps,2,err=True) else Get(opts,['password','passwd','ipmi_pass','bmc_pass','ipmi_passwd','ipmi_password','bmc_passwd','bmc_password'],default='ADMIN',err=True,peel='force')
-        self.org_user=opts.get('org_user',self.user)       #copy user to org_user
-        self.org_passwd=opts.get('org_passwd',self.passwd) #copy password to org_passwd
-
-        self.upasswd=Get(opts,['ipmi_upass','upasswd','unique_password','unique_passwd'],default=None,err=True,peel='force')
-        self.default_passwd=Get(opts,['ipmi_dpass','dpasswd','default_password'],default='ADMIN',err=True,peel='force')
-
-        self.hardcode=Get(opts,['rpass','rpasswd','recover_password','recover_pass','recover_passwd','hardcode'],default='ADMIN1234',peel='force')
-        self.test_user=opts.get('test_user')
-        if isinstance(self.test_user,str): self.test_user=self.test_user.split(',')
-        if not isinstance(self.test_user,list) or not self.test_user:
-            self.test_user=['ADMIN','Admin','admin','root','Administrator']
-
-        self.test_passwd=Get(opts,['test_pass','test_passwd','test_password'],err=True,default=[],peel='force')
-        if isinstance(self.test_passwd,str): self.test_passwd=self.test_passwd.split(',')
-        if not isinstance(self.test_passwd,list) or not self.test_passwd:
-            self.test_passwd=['ADMIN','Admin','admin','root','Administrator']
-
+        test_passwd=Get(opts,['test_pass','test_passwd','test_password'],err=True,default=[],peel='force')
+        if isinstance(test_passwd,str): test_passwd=test_passwd.split(',')
+        if not isinstance(test_passwd,list) or not test_passwd:
+            test_passwd=['ADMIN','Admin','admin','root','Administrator']
+        env_bmc.set('test_passwd',test_passwd)
         #Hard coding for ADMIN1234. So do not remove it
-        if self.hardcode not in self.test_passwd: self.test_passwd.append(self.hardcode)
-        if self.user in self.test_user: self.test_user.remove(self.user)
-        if self.passwd in self.test_passwd: self.test_passwd.remove(self.passwd)
+        if hardcode not in env_bmc.get('test_passwd'): env_bmc.get('test_passwd').append(hardcode)
+        if env_ipmi.get('user') in env_bmc.get('test_user',default=[]): env_bmc.get('test_user').remove(env_ipmi.get('user'))
+        if env_ipmi.get('passwd') in env_bmc.get('test_passwd',default=[]): env_bmc.get('test_passwd').remove(env_ipmi.get('passwd'))
 
         self.cmd_module=[Ipmitool()]
         if opts.get('cmd_module') and isinstance(opts.get('cmd_module'),list):
@@ -2092,8 +2331,8 @@ class kBmc:
             else:
                 self.cmd_module=[Ipmitool(),Smcipmitool(smc_file=opts.get('smc_file'))]
 
-        self.log_level=opts.get('log_level',5)
-        if self.log is None:
+        env_bmc.set('log_level',opts.get('log_level',5))
+        if env_bmc.get('log') is None:
             global printf_log_base
             printf_log_base=6
             global printf_caller_detail
@@ -2101,7 +2340,6 @@ class kBmc:
         self.timeout=opts.get('timeout',1800)
         self.checked_ip=False
         self.checked_port=False
-        self.org_ip='{}'.format(self.ip)
         # Redfish Support
         self.redfish=opts.get('redfish') if isinstance(opts.get('redfish'),bool) else True if opts.get('redfish_hi') is True else None
         self.rf=None
@@ -2122,67 +2360,155 @@ class kBmc:
         self.power_get_sensor=opts.get('power_get_sensor',True)
         self.power_get_tools=opts.get('power_get_tools',True)
 
+    def Vars(self,key=None,value={None},append=False,default=None,shared_name=None):
+        # if exist shared_name then adding/updating data at the shared global variable in all module of single program
+        # Vars(key) : searching shared global variable and my class's global variable
+        # Vars(key,value) : put value at exisint shared global variable or create/update in my class's global variable
+        # append=True: if list then append
+        # default : not found key then return the default
+        if key:
+            if env_ipmi.exist(key):
+                if value != {None}:
+                    if append:
+                        if isinstance(env_ipmi.get(key),list):
+                            env_ipmi.get(key).append(value)
+                            return True
+                        else:
+                            return default
+                    else:
+                        env_ipmi.set(key,value)
+                        return True
+                else:
+                    return env_ipmi.get(key)
+            elif env_bmc.exist(key):
+                if value != {None}:
+                    if append:
+                        if isinstance(env_bmc.get(key),list):
+                            env_bmc.get(key).append(value)
+                            return True
+                        else:
+                            return default
+                    else:
+                        env_bmc.set(key,value)
+                        return True
+                else:
+                    return env_bmc.get(key)
+            elif value != {None}:
+                if shared_name in ['env_ipmi','ipmi','env_bmc','bmc']:
+                    if shared_name in ['env_ipmi','ipmi']:
+                        if append:
+                            if env_ipmi.exist(key):
+                                if isinstance(env_ipmi.get(key),list):
+                                    env_ipmi.get(key).append(value)
+                                    return True
+                                else:
+                                    return default
+                            else:
+                                env_ipmi.set(key,[value])
+                                return True
+                        else:
+                            env_ipmi.set(key,value)
+                            return True
+                    else:
+                        if append:
+                            if env_ipmi.exist(key):
+                                if isinstance(env_bmc.get(key),list):
+                                    env_bmc.get(key).append(value)
+                                    return True
+                                else:
+                                    return default
+                            else:
+                                env_bmc.set(key,[value])
+                                return True
+                        else:
+                            env_bmc.set(key,value)
+                            return True
+                else:
+                    if append:
+                        if isinstance(self.__dict__[key],list):
+                            self.__dict__[key].append(value)
+                            return True
+                        else:
+                            return default
+                    else:
+                        self.__dict__[key]=value
+                        return True
+            elif key in self.__dict__:
+                return self.__dict__[key]
+            return default
+        else:
+            out={}
+            for i in self.__dict__:
+                out[i]=self.__dict__.get(i)
+            for i in env_bmc.get():
+                if i not in out:
+                    out[i]=env_bmc.get(i)
+            for i in env_ipmi.get():
+                if i not in out:
+                    out[i]=env_ipmi.get(i)
+            return out
+
     def CallRedfish(self,force=False,check=True,no_ipmitool=True,detail_log=False,timeout=None,keep_ping=0):
-        if not force and self.rf: return self.rf
-        if self.redfish is False and not force:
-             printf("Not support redfish({}) and not force({}) check redfish".format(self.redfish,force),log=self.log,log_level=1,dsp='d')
+        if not force and self.Vars('rf'): return self.Vars('rf')
+        if self.Vars('redfish') is False and not force:
+             printf("Not support redfish({}) and not force({}) check redfish".format(self.Vars('redfish'),force),log=env_bmc.get('log'),log_level=1,dsp='d')
              return False
 
         if force or check:
             # when it called from here and there. So too much logging
             # Get IP
-            ip=IpV4(self.ip)
-            if not ip and IsFunction(self.mac2ip) and MacV4(self.mac):
-                printf("Searching IP from mac({})".format(self.mac),log=self.log,log_level=1,dsp='d',end='')
-                ip=self.mac2ip(self.mac) if self.checked_ip is False  else None
-            if detail_log: printf("Check Ping to the IP({}):".format(ip),log=self.log,log_level=1,dsp='d',end='')
+            ip=env_ipmi.get('ip')
+            if not ip and IsFunction(self.Vars('mac2ip')) and MacV4(self.Vars('mac')):
+                printf("Searching IP from mac({})".format(self.Vars('mac')),log=env_bmc.get('log'),log_level=1,dsp='d',end='')
+                ip=self.mac2ip(self.Vars('mac')) if self.Vars('checked_ip') is False  else None
+            if detail_log: printf("Check Ping to the IP({}):".format(ip),log=env_bmc.get('log'),log_level=1,dsp='d',end='')
             # Check ping
             if IpV4(ip):
-                ping_rc=self.Ping(host=ip,keep_good=Int(keep_ping,0),timeout=Int(timeout,self.timeout),log=self.log)
+                ping_rc=Ping(keep_good=Int(keep_ping,0),timeout=timeout)
                 if not ping_rc:
-                    err_msg="Can not ping to {} from {} over {}sec".format(ip,IpV4('my_ip'),Int(timeout,self.timeout))
-                    printf(err_msg,log=self.log,log_level=1,dsp='e')
-                    self.error(_type='net',msg=err_msg)
+                    err_msg="Can not ping to {} from {} over {}sec".format(ip,IpV4('my_ip'),Int(timeout,self.Vars('timeout')))
+                    printf(err_msg,log=env_bmc.get('log'),log_level=1,dsp='e')
+                    env_errors.set('net',err_msg)
                     return False
-                self.checked_ip=True
+                self.Vars('checked_ip',True)
 
             wrong_ip=True
             for i in range(5):
-                if IpV4(ip,port=self.port):
+                if IpV4(ip,port=env_ipmi.get('port')):
                     wrong_ip=False
                     break
                 time.sleep(3)
             if wrong_ip:
-                printf("{} is not BMC IP".format(ip),log=self.log,log_level=1,dsp='e')
-                self.error(_type='ip',msg="{} is not BMC IP".format(ip))
+                printf("{} is not BMC IP".format(ip),log=env_bmc.get('log'),log_level=1,dsp='e')
+                env_errors.set('ip',"{} is not BMC IP".format(ip))
                 return False
             
-            printf("Call Redfish",log=self.log,log_level=1,dsp='d',end='')
+            printf("Call Redfish",log=env_bmc.get('log'),log_level=1,dsp='d',end='')
             for i in range(0,2):
                 # Define Redfish
-                rf=Redfish(bmc=self)
+                rf=Redfish()
                 # Call Simple command of Redfish
                 if rf:
                     rf_system=rf.Get('/Systems')
                     if krc(rf_system,chk=True):
-                        self.rf=rf
-                        return rf
+                        self.Vars('rf',rf)
+                        return self.Vars('rf')
                 # Check BMC User/Password with ipmitool command
-                printf("Check User/Password with IPMITOOL",log=self.log,dsp='d')
-                if no_ipmitool or self.no_find_user_pass is True: break
-                ok,user,passwd=self.find_user_pass(ip,no_redfish=True)
+                printf("Check User/Password with IPMITOOL",log=env_bmc.get('log'),dsp='d')
+                if no_ipmitool or self.Vars('no_find_user_pass') is True: break
+                ok,user,passwd=self.find_user_pass(no_redfish=True)
                 if ok is False:
-                    printf("Can not find working user and password",log=self.log,log_level=1,dsp='e')
+                    printf("Can not find working user and password",log=env_bmc.get('log'),log_level=1,dsp='e')
                     return False
                 continue
-            printf("Maybe not support redfish on this system or wrong USER({})/Password({})".format(self.user,self.passwd),log=self.log,log_level=1,dsp='d')
+            printf("Maybe not support redfish on this system or wrong USER({})/Password({})".format(env_ipmi.get('user'),env_ipmi.get('passwd')),log=env_bmc.get('log'),log_level=1,dsp='d')
             return False
         else:
-            if detail_log: printf("directly call Redfish without check",log=self.log,log_level=1,dsp='d')
-            self.rf=Redfish(bmc=self)
-            return self.rf
+            if detail_log: printf("directly call Redfish without check",log=env_bmc.get('log'),log_level=1,dsp='d')
+            self.Vars('rf',Redfish())
+            return self.Vars('rf')
         #Not support redfish
-        if detail_log: printf("Not support redfish and not force check redfish",log=self.log,log_level=1,dsp='d')
+        if detail_log: printf("Not support redfish and not force check redfish",log=env_bmc.get('log'),log_level=1,dsp='d')
         return False
 
     def SystemReadyState(self,cmd_str,name,ipmitoolonly=False,before=None):
@@ -2222,7 +2548,7 @@ class kBmc:
                         elif 'C/' in tmp and 'F' in tmp: # Up state
                             return 'up'
                         elif tmp == 'No Reading':
-                            self.warn(_type='sensor',msg="Can not read sensor data")
+                            env_errors.set('sensor',"Can not read sensor data")
                     else: #ipmitool
                         tmp=Strip(ii_a[3])
                         tmp2=Strip(ii_a[4])
@@ -2241,9 +2567,9 @@ class kBmc:
 
 
     def power_get_status(self,redfish=None,sensor=None,tools=None,**opts):
-        if redfish is None: redfish=self.power_get_redfish
-        if sensor is None: sensor=self.power_get_sensor
-        if tools is None: tools=self.power_get_tools
+        if redfish is None: redfish=self.Vars('power_get_redfish')
+        if sensor is None: sensor=self.Vars('power_get_sensor')
+        if tools is None: tools=self.Vars('power_get_tools')
         redfish_sensor=opts.get('redfish_sensor',True)
         before_mon=opts.get('before',opts.get('before_mon',opts.get('before_state')))
 
@@ -2251,9 +2577,9 @@ class kBmc:
         # _: Down, ¯: Up, ·: Unknown sensor data, !: ipmi sensor command error
         out=['none','none','none'] # [Sensor(ipmitool/SMCIPMITool), Redfish, ipmitool/SMCIPMITool]
         if sensor:
-            for mm in Iterable(self.cmd_module):
+            for mm in Iterable(self.Vars('cmd_module')):
                 #It is only ipmitool only result. So denided using redfish ,So don't need before power state in here.
-                rt=self.SystemReadyState(mm.cmd_str('ipmi sensor',passwd=self.passwd),mm.__name__,ipmitoolonly=True)
+                rt=self.SystemReadyState(mm.cmd_str('ipmi sensor'),mm.__name__,ipmitoolonly=True)
                 if IsIn(rt,['up','on']):
                     out[0]=rt
                     break
@@ -2273,8 +2599,8 @@ class kBmc:
                 if out[1] not in ['on','off','up']: # wrong data then not checked redfish
                     checked_redfish=False
         if tools:
-            for mm in Iterable(self.cmd_module):
-                rt=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
+            for mm in Iterable(self.Vars('cmd_module')):
+                rt=self.run_cmd(mm.cmd_str('ipmi power status'))
                 if krc(rt,chk=True):
                     aa=Split(rt[1][1])
                     if aa:
@@ -2296,7 +2622,7 @@ class kBmc:
         #Default values parameters
         #define get power status function
         get_current_power_status=opts.get('get_current_power_status')
-        if IsNone(get_current_power_status): get_current_power_status=self.power_get_status
+        if IsNone(get_current_power_status): get_current_power_status=self.Vars('power_get_status')
         on_off_keep_counts=[0,0] # Keep on or off counting number according to the before state in is_on_off_up()
         on_off_keep_count_for_before=Int(opts.get('on_off_keep_count_for_before'),3) # Keep on or off state count limit to the before state in is_on_off_up()
         status_log=opts.get('status_log',True)
@@ -2492,10 +2818,10 @@ class kBmc:
                 data['done_reason']='cancel'
                 if 'worker' in data: data.pop('worker')
                 if status_log:
-                    printf('.',no_intro=True,log=self.log,log_level=1)
+                    printf('.',no_intro=True,log=env_bmc.get('log'),log_level=1)
                 return
             if not data.get('start'): # not start tag then wait
-                #printf(',',no_intro=True,log=self.log,mode='d')
+                #printf(',',no_intro=True,log=env_bmc.get('log'),mode='d')
                 time.sleep(1)
                 continue
             elif data.get('stop') is True:
@@ -2503,9 +2829,9 @@ class kBmc:
                 data['done_reason']='stop'
                 if 'worker' in data: data.pop('worker')
                 if status_log:
-                    printf('.',no_intro=True,log=self.log,log_level=1)
+                    printf('.',no_intro=True,log=env_bmc.get('log'),log_level=1)
                 return
-            elif not ping(self.ip,keep_good=0,timeout=4): # not ping then wait
+            elif not Ping(keep_good=0,timeout=4): # not ping then wait
                 data['symbol']='x'
                 time.sleep(3)
                 continue
@@ -2522,8 +2848,8 @@ class kBmc:
                 #or all off or on
                 if 'up' in curr_power_status[0:2]: #if up state in temp and redfish
                     if not Time.Out(wait_on_for_up,name='wait_up'): #waiting (time out) for on when initial state has 'up' 
-                        data['symbol']=self.power_up_tag 
-                        if status_log: printf(data['symbol'],log=self.log,direct=True,log_level=1)
+                        data['symbol']=env_bmc.get('power_up_tag')
+                        if status_log: printf(data['symbol'],log=env_bmc.get('log'),direct=True,log_level=1)
                         time.sleep(3)
                         continue # wait until right initial state (on/off)
                     #Timeout for 'up' state. So, it will keep monitoring with 'up' state in start condition. This will understand to on
@@ -2533,7 +2859,7 @@ class kBmc:
                             right_start_on-=1
                             right_start_off-=20
                             data['symbol']='.'
-                            if status_log: printf(data['symbol'],log=self.log,direct=True,log_level=1)
+                            if status_log: printf(data['symbol'],log=env_bmc.get('log'),direct=True,log_level=1)
                             time.sleep(3)
                             continue # 
                 elif curr_power_status.count('on') == 0:
@@ -2542,7 +2868,7 @@ class kBmc:
                             right_start_off-=1
                             right_start_on-=20
                             data['symbol']='.'
-                            if status_log: printf(data['symbol'],log=self.log,direct=True,log_level=1)
+                            if status_log: printf(data['symbol'],log=env_bmc.get('log'),direct=True,log_level=1)
                             time.sleep(3)
                             continue
                 data['init']['start']={'time':TIME().Int(),'status':curr_power_status}
@@ -2577,15 +2903,15 @@ class kBmc:
                 data['done_reason']='timeout'
                 if B:
                     if B[-1] == 'on':
-                        data['symbol']=self.power_on_tag
+                        data['symbol']=env_bmc.get('power_on_tag')
                     elif B[-1] == 'off':
-                        data['symbol']=self.power_off_tag
+                        data['symbol']=env_bmc.get('power_off_tag')
                     elif B[-1] == 'up':
-                        data['symbol']=self.power_up_tag
+                        data['symbol']=env_bmc.get('power_up_tag')
                 if 'symbol' not in data:
-                    data['symbol']=self.power_unknown_tag
+                    data['symbol']=env_bmc.get('power_unknown_tag')
                 if status_log:
-                    printf(data['symbol'],log=self.log,direct=True,log_level=1)
+                    printf(data['symbol'],log=env_bmc.get('log'),direct=True,log_level=1)
                 return
             ############################################
             # Monitoring condition
@@ -2631,29 +2957,29 @@ class kBmc:
             #Design for status printing
             if on_off == 'on':
                 if status_log:
-                    printf(self.power_on_tag,log=self.log,direct=True,log_level=1)
-                data['symbol']=self.power_on_tag
+                    printf(env_bmc.get('power_on_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
+                data['symbol']=env_bmc.get('power_on_tag')
             elif on_off == 'off':
                 if monitoring_state == 'on' and len(data['monitoring'])-1 == monitor_id:
                     if status_log:
-                        printf('+',log=self.log,direct=True,log_level=1)
+                        printf('+',log=env_bmc.get('log'),direct=True,log_level=1)
                     data['symbol']='+'
                 else:
                     if status_log:
-                        printf(self.power_off_tag,log=self.log,direct=True,log_level=1)
-                    data['symbol']=self.power_off_tag
+                        printf(env_bmc.get('power_off_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
+                    data['symbol']=env_bmc.get('power_off_tag')
             elif on_off == 'up':
                 if status_log:
-                    printf(self.power_up_tag,log=self.log,direct=True,log_level=1)
-                data['symbol']=self.power_up_tag
+                    printf(env_bmc.get('power_up_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
+                data['symbol']=env_bmc.get('power_up_tag')
             elif on_off == 'dn':
                 if status_log:
-                    printf(self.power_down_tag,log=self.log,direct=True,log_level=1)
-                data['symbol']=self.power_down_tag
+                    printf(self.Vars('power_down_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
+                data['symbol']=self.Vars('power_down_tag')
             else:
                 if status_log:
-                    printf(self.power_unknown_tag,log=self.log,direct=True,log_level=1)
-                data['symbol']=self.power_unknown_tag
+                    printf(env_bmc.get('power_unknown_tag'),log=env_bmc.get('log'),direct=True,log_level=1)
+                data['symbol']=env_bmc.get('power_unknown_tag')
             ################################################
             # if same condition then add to monitored status(Next step monitoring)
             if on_off == data['monitoring'][monitor_id]:
@@ -2701,7 +3027,7 @@ class kBmc:
         if 'worker' in data: data.pop('worker')
         # end of status printing condition
         #if status_log:
-        #    printf('',log=self.log,no_intro=True,ignore_empty=False)
+        #    printf('',log=env_bmc.get('log'),no_intro=True,ignore_empty=False)
         # convert monitored_status to searial ordering
         A={}
         for i in Iterable(data['monitored_status']):
@@ -2722,7 +3048,7 @@ class kBmc:
             data_info=data_info+'\nkeep time of last state  : {}'.format(data.get('keep_last_state_time'))
             data_info=data_info+'\nFinished time  : {}'.format(next(iter(data.get('done'))))
             data_info=data_info+'\nFinished Reason: {} ({})'.format(data.get('done_reason'),data.get('done')[next(iter(data.get('done')))])
-            printf(data_info,log=self.log,log_level=1)
+            printf(data_info,log=env_bmc.get('log'),log_level=1)
 
     def power_monitor(self,timeout=1800,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=900,sensor_off_monitor=0,monitor_interval=5,reset_after_unknown=0,start=True,background=False,status_log=False,**opts):
         #timeout       : monitoring timeout
@@ -2759,17 +3085,17 @@ class kBmc:
                 else:
                     running=self.bgpm['worker'].is_alive()
                 if running:
-                    printf('Already running',log=self.log)
+                    printf('Already running',log=env_bmc.get('log'))
                     return self.bgpm
             # if new monitoring then initialize data
-            self.bgpm={'status':{},'repeat':0,'stop':False,'count':0,'start':start,'timeout':timeout,'cancel_func':self.cancel_func}
-            self.bgpm['worker']=threading.Thread(target=self.power_status_monitor_t,args=(monitor_status,self.bgpm,keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,monitor_interval,timeout,0,opts.get('mode','a')))
-            self.bgpm['worker'].start()
-            return self.bgpm
+            self.bgpm={'status':{},'repeat':0,'stop':False,'count':0,'start':start,'timeout':timeout,'cancel_func':env_breaking.get('cancel_func')}
+            self.bgpm['worker']=threading.Thread(target=self.Vars('power_status_monitor_t'),args=(monitor_status,self.Vars('bgpm'),keep_off,keep_on,sensor_on_monitor,sensor_off_monitor,monitor_interval,timeout,0,opts.get('mode','a')))
+            self.Vars('bgpm')['worker'].start()
+            return self.Vars('bgpm')
         else:
             #foreground should be different
             #act foreground then immediately start monitoring and return the output
-            fgpm={'status':{},'repeat':0,'stop':False,'count':0,'start':True,'timeout':timeout,'cancel_func':self.cancel_func,'init_power_state':opts.get('init_power_state')}
+            fgpm={'status':{},'repeat':0,'stop':False,'count':0,'start':True,'timeout':timeout,'cancel_func':env_breaking.get('cancel_func'),'init_power_state':opts.get('init_power_state')}
             self.power_status_monitor(monitor_status,fgpm,keep_off=keep_off,keep_on=keep_on,sensor_monitor=sensor_on_monitor,sensor_off_monitor=sensor_off_monitor,status_log=status_log,monitor_interval=monitor_interval,timeout=timeout,reset_after_unknown=reset_after_unknown,mode=opts.get('mode','a'))
             return fgpm
 
@@ -2780,79 +3106,78 @@ class kBmc:
 
     def check(self,mac2ip=None,cancel_func=None,trace=False,timeout=None):
         #This function check ip,user,password
-        if timeout is None: timeout=self.timeout
-        rc=False
-        ip='{}'.format(self.ip)
-        if self.checked_ip is False:
-            if mac2ip:
-                if not MacV4(self.mac):
-                    mac_ok,mac_addr=self.get_mac(ip,user=self.user,passwd=self.passwd)
-                    if mac_ok:
-                        self.mac=mac_addr
-                        #Already checked IP,user,passwd in get_mac()
-                        return True,self.ip,self.user,self.passwd
-                    else:
-                        self.error(_type='mac',msg='Can not find BMC Mac address')
-                        printf("Can not find BMC Mac address",log=self.log,log_level=1,mode='e')
-                        return False,self.ip,self.user,self.passwd
-                ip=mac2ip(self.mac)
-                self.checked_port=False
-        #ping_rc=ping(ip,keep_good=0,timeout=timeout,log=self.log,cancel_func=cancel_func)
-        ping_rc=self.Ping(host=ip,keep_good=0,timeout=timeout,log=self.log,cancel_func=cancel_func)
+        if timeout is None: timeout=self.Vars('timeout')
+        ip=env_ipmi.get('ip')
+        #rc=False
+        #if self.checked_ip is False:
+        #    if mac2ip:
+        #        if not MacV4(self.mac):
+        #            mac_ok,mac_addr=self.get_mac(ip,user=self.user,passwd=self.passwd)
+        #            if mac_ok:
+        #                self.mac=mac_addr
+        #                #Already checked IP,user,passwd in get_mac()
+        #                return True,env_ipmi.get('ip'),env_ipmi.get('user'),env_ipmi.get('passwd')
+        #            else:
+        #                self.error(_type='mac',msg='Can not find BMC Mac address')
+        #                printf("Can not find BMC Mac address",log=env_bmc.get('log'),log_level=1,mode='e')
+        #                return False,self.ip,self.user,self.passwd
+        #        ip=mac2ip(self.mac)
+        #        self.checked_port=False
+        ping_rc=Ping(keep_good=0,timeout=timeout)
         if ping_rc is True:
-            if self.checked_port is False:
+            if self.Vars('checked_port') is False:
                 cc=False
                 direct_print=False
                 for i in range(0,10):
-                    if IpV4(ip,port=self.port):
-                        self.checked_ip=True
-                        self.checked_port=True
+                    if IpV4(ip,port=env_ipmi.get('port')):
+                        self.Vars('checked_ip',True)
+                        self.Vars('checked_port',True)
                         cc=True
                         break
-                    printf(".",log=self.log,direct=True)
+                    printf(".",log=env_bmc.get('log'),direct=True)
                     direct_print=True
                     time.sleep(3)
-                if direct_print: printf(".",no_intro=True,log=self.log,log_level=1)
+                if direct_print: printf(".",no_intro=True,log=env_bmc.get('log'),log_level=1)
                 if cc is False:
-                    printf("{} is not IPMI IP(2)".format(ip),log=self.log,log_level=1,dsp='e')
-                    self.error(_type='ip',msg="{} is not IPMI IP(2)".format(ip))
-                    return False,self.ip,self.user,self.passwd
-            ok,user,passwd=self.find_user_pass(ip,trace=trace,cancel_func=cancel_func,check_only=True if self.no_find_user_pass else False)
+                    printf("{} is not IPMI IP(2)".format(ip),log=env_bmc.get('log'),log_level=1,dsp='e')
+                    env_errors.set('ip',"{} is not IPMI IP(2)".format(ip))
+                    return False,env_ipmi.get('ip'),env_ipmi.get('user'),env_ipmi.get('passwd')
+            ok,user,passwd=self.find_user_pass(trace=trace,check_only=True if self.Vars('no_find_user_pass') else False)
             if ok:
                 #Update IP,User,Password
-                if self.ip != ip:
-                    printf('Update IP from {} to {}'.format(ip,self.ip),log=self.log,log_level=1,dsp='e')
-                    self.ip=ip
-                if self.user != user:
-                    printf('Update User from {} to {}'.format(user,self.user),log=self.log,log_level=1,dsp='e')
-                    self.user=user
-                if self.passwd!= passwd:
-                    printf('Update Password from {} to {}'.format(passwd,self.passwd),log=self.log,log_level=1,dsp='e')
-                    self.passwd=passwd
+                #if self.ip != ip:
+                #    printf('Update IP from {} to {}'.format(ip,self.ip),log=env_bmc.get('log'),log_level=1,dsp='e')
+                #    self.ip=ip
+                if env_ipmi.get('user') != user:
+                    printf('Update User from {} to {}'.format(user,env_ipmi.get('user')),log=env_bmc.get('log'),log_level=1,dsp='e')
+                    env_ipmi.set('user',user)
+                if env_ipmi.get('passwd')!= passwd:
+                    printf('Update Password from {} to {}'.format(passwd,env_ipmi.get('passwd')),log=env_bmc.get('log'),log_level=1,dsp='e')
+                    env_ipmi.set('passwd',passwd)
                 rc=True
         else:
-            printf('Destination Host({}) Unreachable/Network problem'.format(self.ip),log=self.log,log_level=1,dsp='e')
-            self.error(_type='net',msg='Destination Host({}) Unreachable/Network problem'.format(self.ip))
-        return rc,self.ip,self.user,self.passwd
+            printf('Destination Host({}) Unreachable/Network problem'.format(env_ipmi.get('ip')),log=env_bmc.get('log'),log_level=1,dsp='e')
+            env_errors.set('net','Destination Host({}) Unreachable/Network problem'.format(env_ipmi.get('ip')))
+        return rc,env_ipmi.get('ip'),env_ipmi.get('user'),env_ipmi.get('passwd')
 
     def get_cmd_module_name(self,name):
-        if isinstance(self.cmd_module,list):
-            for mm in Iterable(self.cmd_module):
+        if isinstance(self.Vars('cmd_module'),list):
+            for mm in Iterable(self.Vars('cmd_module')):
                 if Type(mm,('classobj','instance')) and IsSame(mm.__name__,name):
                     if mm.ready:
                         return mm,'Found'
                     else:
                         if mm.__name == 'ipmitool':
                             lmmsg='Please install ipmitool package!!'
-                            printf(lmmsg,log=self.log,log_level=1,dsp='e')
+                            printf(lmmsg,log=env_bmc.get('log'),log_level=1,dsp='e')
                         elif mm.smc_file:
                             lmmsg='SMCIPMITool file ({}) not found!!'.format(mm.smc_file)
-                            printf(lmmsg,log=self.log,log_level=1,dsp='e')
+                            printf(lmmsg,log=env_bmc.get('log'),log_level=1,dsp='e')
                         else:
                             lmmsg='NOT defined SMCIPMITool file parameter'
                         return False,lmmsg
             return None,'not defined module {}'.format(name)
-        printf('wrong cmd_module',log=self.log,log_level=1,dsp='e')
+        printf('wrong cmd_module',log=env_bmc.get('log'),log_level=1,dsp='e')
         return None,'wrong cmd_module'
 
     def find_uefi_legacy(self,bioscfg=None): # Get UEFI or Regacy mode
@@ -2926,29 +3251,27 @@ class kBmc:
         return False,('','','','')
 
     def find_user_pass(self,ip=None,default_range=12,check_cmd='ipmi power status',cancel_func=None,cancel_args=None,error=True,trace=False,extra_test_user=[],extra_test_pass=[],no_redfish=False,first_user=None,first_passwd=None,failed_passwd=None,mc_reset=False,monitor_interval=None,check_only=False):
-        if not monitor_interval: monitor_interval=Int(self.find_user_pass_interval,default=2)
+        if not monitor_interval: monitor_interval=Int(self.Vars('find_user_pass_interval'),default=2)
         # Check Network
-        chk_err=self.error(_type='net')
-        if chk_err[0]: return False,None,None
-        if cancel_func is None: cancel_func=self.cancel_func
-        if ip is None: ip=self.ip
-        if not IpV4(ip): return False,None,None
+        if env_errors.exist('net') or env_errors.exist('ip'):
+            return False,None,None
+        if ip is None: ip=env_ipmi.get('ip')
 
         #Manage user
-        test_user=self.test_user[:]
+        test_user=env_bmc.get('test_user',default=[])[:]
         if extra_test_user:
             if isinstance(extra_test_user,str):
                 extra_test_user=extra_test_user.split(',')
             for i in Iterable(extra_test_user):
                 if i not in test_user: test_user.append(i)
         if 'ADMIN' not in test_user: test_user.append('ADMIN')
-        test_user=MoveData(test_user[:],self.user,to='first')      #move current user to first
+        test_user=MoveData(test_user[:],env_ipmi.get('user'),to='first')      #move current user to first
         if isinstance(first_user,str) and first_user:
             test_user=MoveData(test_user[:],first_user,to='first') #move want user to first
         test_user=Uniq(test_user)
 
         #Manage password
-        test_passwd=self.test_passwd[:]
+        test_passwd=env_bmc.get('test_passwd',default=[])[:]
         if extra_test_pass:
             if isinstance(extra_test_pass,str):
                 extra_test_pass=extra_test_pass.split(',')
@@ -2959,12 +3282,12 @@ class kBmc:
                 failed_passwd=failed_passwd.split(',')
             for i in Iterable(failed_passwd): # Append base password
                 test_passwd=MoveData(test_passwd,i,to='last') # move failed passwd to last
-        if self.upasswd: test_passwd=MoveData(test_passwd,self.upasswd,to='first') # move uniq passwd
-        if self.org_passwd: test_passwd=MoveData(test_passwd,self.org_passwd,to='first') # move original passwd
-        if self.default_passwd:
-            test_passwd=MoveData(test_passwd,self.default_passwd,to='first')
+        if env_bmc.get('upasswd'): test_passwd=MoveData(test_passwd,env_bmc.get('upasswd'),to='first') # move uniq passwd
+        if env_bmc.get('org_passwd'): test_passwd=MoveData(test_passwd,env_bmc.get('org_passwd'),to='first') # move original passwd
+        if env_bmc.get('default_passwd'):
+            test_passwd=MoveData(test_passwd,env_bmc.get('default_passwd'),to='first')
         test_passwd=MoveData(test_passwd,'ADMIN',to='first')
-        test_passwd=MoveData(test_passwd,self.passwd,to='first') # move current passwd
+        test_passwd=MoveData(test_passwd,env_ipmi.get('passwd'),to='first') # move current passwd
         if isinstance(first_passwd,str) and first_passwd:
             test_passwd=MoveData(test_passwd,first_passwd,to='first') # move want first check passwd
         test_passwd=Uniq(test_passwd)
@@ -2975,18 +3298,18 @@ class kBmc:
         tested_user_pass=[]
         print_msg=False
 
-        for mm in Iterable(self.cmd_module):
+        for mm in Iterable(self.Vars('cmd_module')):
             for t in range(0,tt):
                 if t == 0:
                     test_pass_sample=test_passwd[:default_range]
                 else:
                     # If checkup error right password at initial time, So, keep try again the last possible passwords
                     # because, OpenBMC case, some slow after power reset. So failed with right password (sometimes)
-                    test_pass_sample=MoveData(test_passwd[default_range*t:default_range*(t+1)],self.upasswd,to='first') # move uniq passwd
-                    test_pass_sample=MoveData(test_pass_sample,self.default_passwd,to='first') # move default passwd
-                    test_pass_sample=MoveData(test_pass_sample,self.org_passwd,to='first') # move original passwd
-                test_pass_sample=MoveData(test_pass_sample,self.passwd,to='first') # move current passwd for make sure
-                test_pass_sample=[self.passwd]+test_pass_sample  # Testing two time for current password. Some time it timing issue.
+                    test_pass_sample=MoveData(test_passwd[default_range*t:default_range*(t+1)],env_bmc.get('upasswd'),to='first') # move uniq passwd
+                    test_pass_sample=MoveData(test_pass_sample,env_bmc.get('default_passwd'),to='first') # move default passwd
+                    test_pass_sample=MoveData(test_pass_sample,env_bmc.get('org_passwd'),to='first') # move original passwd
+                test_pass_sample=MoveData(test_pass_sample,env_ipmi.get('passwd'),to='first') # move current passwd for make sure
+                test_pass_sample=[env_ipmi.get('passwd')]+test_pass_sample  # Testing two time for current password. Some time it timing issue.
                 # Two times check for uniq,current,temporary password
                 for uu in test_user:
                     #If user is None then skip
@@ -2996,7 +3319,7 @@ class kBmc:
                         #If password is None then skip
                         if IsNone(test_pass_sample[pp]): continue
                         #Check ping first before try password
-                        ping_rc=self.Ping(host=ip,keep_good=0,timeout=300,log=self.log,cancel_func=cancel_func,cancel_args=cancel_args) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
+                        ping_rc=Ping(keep_good=0,timeout=300) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
                         if ping_rc is True:
                             tested_user_pass.append((uu,test_pass_sample[pp]))
                             cmd_str=mm.cmd_str(check_cmd,passwd=test_pass_sample[pp])
@@ -3017,166 +3340,167 @@ class kBmc:
 #                                        chk_user_pass=True
                             if chk_user_pass:
                                 #Found Password. 
-                                if self.user != uu: #If changed user
-                                    printf('.',log=self.log,no_intro=True)
-                                    printf("""[BMC]Found New User({})""".format(uu),log=self.log,log_level=3)
-                                    self.user=uu
-                                if self.passwd != test_pass_sample[pp]: #If changed password
-                                    printf('.',log=self.log,no_intro=True)
-                                    printf("""[BMC]Found New Password({})""".format(test_pass_sample[pp]),log=self.log,log_level=3)
-                                    self.passwd=test_pass_sample[pp]
+                                if env_ipmi.get('user') != uu: #If changed user
+                                    printf('.',log=env_bmc.get('log'),no_intro=True)
+                                    printf("""[BMC]Found New User({})""".format(uu),log=env_bmc.get('log'),log_level=3)
+                                    env_ipmi.set('user',uu)
+                                if env_ipmi.get('passwd') != test_pass_sample[pp]: #If changed password
+                                    printf('.',log=env_bmc.get('log'),no_intro=True)
+                                    printf("""[BMC]Found New Password({})""".format(test_pass_sample[pp]),log=env_bmc.get('log'),log_level=3)
+                                    env_ipmi.set('passwd',test_pass_sample[pp])
                                 return True,uu,test_pass_sample[pp]
                             #If it has multi test password then mark to keep testing password
                             elif len(test_pass_sample) > 1:
                                 #If not found current password then try next
                                 if not print_msg:
-                                    printf("""Check BMC USER and PASSWORD from the POOL:""",end='',log=self.log,log_level=3)
+                                    printf("""Check BMC USER and PASSWORD from the POOL:""",end='',log=env_bmc.get('log'),log_level=3)
                                     print_msg=True
-                                printf("""p""",log=self.log,direct=True,log_level=3,dsp='n')
-                                printf('''Try with "{}" and "{}" (Previously result:{})'''.format(uu,test_pass_sample[pp],Get(rc,2)),no_intro=None,log=self.log,dsp='d')
+                                printf("""p""",log=env_bmc.get('log'),direct=True,log_level=3,dsp='n')
+                                printf('''Try with "{}" and "{}" (Previously result:{})'''.format(uu,test_pass_sample[pp],Get(rc,2)),no_intro=None,log=env_bmc.get('log'),dsp='d')
                                 time.sleep(monitor_interval) # make to some slow check for BMC locking
                             if check_only is True:
                                 return False,uu,test_pass_sample[pp]
                         else:
-                            printf("""Can not ping to the destination IP({}). So check over 30min to stable ping (over 30seconds)""".format(ip),log=self.log,log_level=1,dsp='d')
-                            ping_rc=self.Ping(host=ip,keep_good=30,timeout=1800,log=self.log,cancel_func=cancel_func,cancel_args=cancel_args) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
+                            printf("""Can not ping to the destination IP({}). So check over 30min to stable ping (over 30seconds)""".format(ip),log=env_bmc.get('log'),log_level=1,dsp='d')
+                            ping_rc=Ping(keep_good=30,timeout=1800) # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
                             if ping_rc:
                                 # Comeback ping
                                 # Try again with same password
                                 continue
                             # Ping error or timeout
-                            printf("""WARN: Can not ping to the destination IP({})""".format(ip),log=self.log,log_level=1,dsp='w')
+                            printf("""WARN: Can not ping to the destination IP({})""".format(ip),log=env_bmc.get('log'),log_level=1,dsp='w')
                             if error:
-                                self.error(_type='net',msg="Can not ping to the destination IP({})".format(ip))
+                                env_errors.set('net',"Can not ping to the destination IP({})".format(ip))
                             return False,None,None
                         pp+=1
+                        if self.cancel(): #Canceled
+                            printf(f"Last Tested user({uu}) password({test_pass_sample[pp]}) before stopped by cancel",log=env_bmc.get('log'),log_level=3)
+                            return False,None,None
                     #If it has multi test user then mark to changed user for testing
                     if len(test_user) > 1:
-                        if self.log_level < 7 and not trace:
-                            printf("""u""",log=self.log,direct=True,log_level=3)
+                        if env_bmc.get('log_level') < 7 and not trace:
+                            printf("""u""",log=env_bmc.get('log'),direct=True,log_level=3)
                         #maybe reduce affect to BMC
                         time.sleep(monitor_interval)
-                printf("""-Tried with module {} in password section {}/{}""".format(mm.__name__,t,tt),log=self.log,mode='d',no_intro=True)
+                printf("""-Tried with module {} in password section {}/{}""".format(mm.__name__,t,tt),log=env_bmc.get('log'),mode='d',no_intro=True)
         
         #Whole tested but can not find
         # Reset BMC and try again
-        printf(""".""",log=self.log,no_intro=True)
-        printf("""no_redfish:{}""".format(no_redfish),log=self.log,dsp='d')
+        printf(""".""",log=env_bmc.get('log'),no_intro=True)
+        printf("""no_redfish:{}""".format(no_redfish),log=env_bmc.get('log'),dsp='d')
         if mc_reset:
-            if not no_redfish and self.redfish:
-                printf("""Try McResetCold by redfish, Looks BMC issue for ipmitool""",log=self.log)
+            if not no_redfish and self.Vars('redfish'):
+                printf("""Try McResetCold by redfish, Looks BMC issue for ipmitool""",log=env_bmc.get('log'))
                 if self.McResetCold(no_ipmitool=True): # Block Loop
-                    printf("""Reset done. Try again searching user/password""",log=self.log)
-                    return self.find_user_pass(ip=ip,default_range=default_range,check_cmd=check_cmd,cancel_func=cancel_func,error=error,trace=trace,no_redfish=True)
+                    printf("""Reset done. Try again searching user/password""",log=env_bmc.get('log'))
+                    return self.find_user_pass(default_range=default_range,check_cmd=check_cmd,error=error,trace=trace,no_redfish=True)
                 else:
-                    printf("""Can not reset the BMC by redfish""",log=self.log)
-        printf("""WARN: Can not find working BMC User or password from Password POOL""",log=self.log,log_level=1,dsp='w')
-        printf(""" - Password POOL  : {}""".format(test_passwd),log=self.log,dsp='d',no_intro=True)
-        printf(""" - Tested Password: {}""".format(tested_user_pass),log=self.log,dsp='d',no_intro=True)
+                    printf("""Can not reset the BMC by redfish""",log=env_bmc.get('log'))
+        printf("""WARN: Can not find working BMC User or password from Password POOL""",log=env_bmc.get('log'),log_level=1,dsp='w')
+        printf(""" - Password POOL  : {}""".format(test_passwd),log=env_bmc.get('log'),dsp='d',no_intro=True)
+        printf(""" - Tested Password: {}""".format(tested_user_pass),log=env_bmc.get('log'),dsp='d',no_intro=True)
         if error:
-            self.error(_type='user_pass',msg="Can not find working BMC User or password from POOL\n{}".format(tested_user_pass))
+            env_errors.set('user_pass',"Can not find working BMC User or password from POOL\n{}".format(tested_user_pass))
         return False,None,None
 
     def McResetCold(self,keep_on=20,no_ipmitool=False,**opts):
-        printf("""Call Redfish""",log=self.log,log_level=1,dsp='d')
+        printf("""Call Redfish""",log=env_bmc.get('log'),log_level=1,dsp='d')
         rf=self.CallRedfish(no_ipmitool=no_ipmitool)
         if rf:
-            printf("""Mc Reset Cold with Redfish""",log=self.log,log_level=1,dsp='d')
+            printf("""Mc Reset Cold with Redfish""",log=env_bmc.get('log'),log_level=1,dsp='d')
             return rf.McResetCold(keep_on=keep_on)
         if not no_ipmitool:
-            if self.error(_type='net')[0]: return False # if error then error
-            printf("""Mc Reset Cold with ipmitool""",log=self.log,log_level=1,dsp='d')
-            return self.reset(cancel_func=self.cancel_func,post_keep_up=keep_on)
-        printf("""E: Can not Reset BMC""",log=self.log,log_level=1,dsp='d')
+            if env_errors.exist('net'): return False # if error then error
+            printf("""Mc Reset Cold with ipmitool""",log=env_bmc.get('log'),log_level=1,dsp='d')
+            return self.reset(post_keep_up=keep_on)
+        printf("""E: Can not Reset BMC""",log=env_bmc.get('log'),log_level=1,dsp='d')
         return False
 
     def recover_user_pass(self):
         mm,msg=self.get_cmd_module_name('smc')
         if not mm:
             return False,msg,None
-        was_user='''{}'''.format(self.user)
-        was_passwd='''{}'''.format(self.passwd)
+        was_user='''{}'''.format(env_ipmi.get('user'))
+        was_passwd='''{}'''.format(env_ipmi.get('passwd'))
         ok,user,passwd=self.find_user_pass()
         if ok:
-            printf("""Previous User({}), Password({}). Found available current User({}), Password({})\n****** Start recovering user/password from current available user/password......\n""".format(was_user,was_passwd,user,passwd),log=self.log,log_level=3)
+            printf("""Previous User({}), Password({}). Found available current User({}), Password({})\n****** Start recovering user/password from current available user/password......\n""".format(was_user,was_passwd,user,passwd),log=env_bmc.get('log'),log_level=3)
         else:
-            if self.error(_type='net')[0]: 
+            if env_errors.exist('net'): 
                 return False,'Network issue',None
             else:
                 return False,'Can not find current available user and password',None
-        if user == self.org_user:
-            if passwd == self.org_passwd:
-                printf("""Same user and passwrd. Do not need recover""",log=self.log,log_level=4)
+        if user == env_bmc.get('org_user'):
+            if passwd == env_bmc.get('org_passwd'):
+                printf("""Same user and passwrd. Do not need recover""",log=env_bmc.get('log'),log_level=4)
                 return True,user,passwd
             else:
                 #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
-                recover_cmd=mm.cmd_str("""user setpwd 2 {}""".format(FixApostrophe(self.org_passwd)))
+                recover_cmd=mm.cmd_str("""user setpwd 2 {}""".format(FixApostrophe(env_bmc.get('org_passwd'))))
         else:
             #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
-            recover_cmd=mm.cmd_str("""user add 2 {} {} 4""".format(self.org_user,FixApostrophe(self.org_passwd)))
+            recover_cmd=mm.cmd_str("""user add 2 {} {} 4""".format(env_bmc.get('org_user'),FixApostrophe(env_bmc.get('org_passwd'))))
         printf("""Recover command: {}""".format(recover_cmd),log_level=7)
         rc=self.run_cmd(recover_cmd)
 
         if krc(rc,chk='error'):
-            printf("""BMC Password: Recover fail""",log=self.log,log_level=1)
-            self.warn(_type='ipmi_user',msg="BMC Password: Recover fail")
+            printf("""BMC Password: Recover fail""",log=env_bmc.get('log'),log_level=1)
+            env_errors.set('ipmi_user',"BMC Password: Recover fail")
             return 'error',user,passwd
         if krc(rc,chk=True):
-            printf("""Recovered BMC: from User({}) and Password({}) to User({}) and Input Password({})""".format(user,passwd,self.org_user,self.org_passwd),log=self.log,log_level=4)
+            printf("""Recovered BMC: from User({}) and Password({}) to User({}) and Input Password({})""".format(user,passwd,env_bmc.get('org_user'),env_bmc.get('org_passwd')),log=env_bmc.get('log'),log_level=4)
             ok2,user2,passwd2=self.find_user_pass()
             if ok2:
-                printf("""Confirmed changed user password to {}:{}""".format(user2,passwd2),log=self.log,log_level=4)
+                printf("""Confirmed changed user password to {}:{}""".format(user2,passwd2),log=env_bmc.get('log'),log_level=4)
             else:
                 return False,"Looks changed command was ok. but can not found acceptable user or password"
-            self.user='{}'.format(user2)
-            self.passwd='{}'.format(passwd2)
-            return True,self.user,self.passwd
+            env_ipmi.set('user',user2)
+            env_ipmi.set('passwd',passwd2)
+            return True,user2,passwd2
         else:
-            if self.default_passwd:
-                printf("""Not support {}. Try again with default password({})""".format(self.org_passwd,self.default_passwd),log=self.log,log_level=4)
-                if self.user == self.org_user:
+            if env_bmc.get('default_passwd'):
+                printf("""Not support {}. Try again with default password({})""".format(env_bmc.get('org_passwd'),env_bmc.get('default_passwd')),log=env_bmc.get('log'),log_level=4)
+                if env_ipmi.get('user') == env_bmc.get('org_user'):
                     #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
-                    recover_cmd=mm.cmd_str("""user setpwd 2 {}""".format(FixApostrophe(self.default_passwd)))
+                    recover_cmd=mm.cmd_str("""user setpwd 2 {}""".format(FixApostrophe(env_bmc.get('default_passwd'))))
                 else:
                     #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
-                    recover_cmd=mm.cmd_str("""user add 2 {} {} 4""".format(self.org_user,FixApostrophe(self.default_passwd)))
+                    recover_cmd=mm.cmd_str("""user add 2 {} {} 4""".format(env_bmc.get('org_user'),FixApostrophe(env_bmc.get('default_passwd'))))
                 printf("""Recover command: {}""".format(recover_cmd),log_level=7)
                 rrc=self.run_cmd(recover_cmd)
                 if krc(rrc,chk=True):
-                    printf("""Recovered BMC: from User({}) and Password({}) to User({}) and Default Password({})""".format(self.user,self.passwd,self.org_user,self.default_passwd),log=self.log,log_level=4)
+                    printf("""Recovered BMC: from User({}) and Password({}) to User({}) and Default Password({})""".format(env_ipmi.get('user'),env_ipmi.get('passwd'),env_bmc.get('org_user'),env_bmc.get('default_passwd')),log=env_bmc.get('log'),log_level=4)
                     ok2,user2,passwd2=self.find_user_pass()
                     if ok2:
-                        printf("""Confirmed changed user password to {}:{}""".format(user2,passwd2),log=self.log,log_level=4)
-                        self.user='''{}'''.format(user2)
-                        self.passwd='''{}'''.format(passwd2)
-                        return True,self.user,self.passwd
-            printf(f"""Not support original/default password. Looks need more length. So Try again with {self.hardcode}""",log=self.log,log_level=4)
-            if self.user == self.org_user:
+                        printf("""Confirmed changed user password to {}:{}""".format(user2,passwd2),log=env_bmc.get('log'),log_level=4)
+                        env_ipmi.set('user',user2)
+                        env_ipmi.set('passwd',passwd2)
+                        return True,user2,passwd2
+            printf(f"""Not support original/default password. Looks need more length. So Try again with {env_bmc.get('hardcode')}""",log=env_bmc.get('log'),log_level=4)
+            if env_ipmi.get('user') == env_bmc.get('org_user'):
                 #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
-                recover_cmd=mm.cmd_str(f"""user setpwd 2 {self.hardcode}""")
+                recover_cmd=mm.cmd_str(f"""user setpwd 2 {env_bmc.get('hardcode')}""")
             else:
                 #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
-                recover_cmd=mm.cmd_str(f"""user add 2 {self.org_user} {self.hardcode} 4""")
+                recover_cmd=mm.cmd_str(f"""user add 2 {env_bmc.get('org_user')} {env_bmc.get('hardcode')} 4""")
             printf(f"""Recover command: {recover_cmd}""",mode='d')
             rrc=self.run_cmd(recover_cmd)
             if krc(rrc,chk=True):
-                printf(f"""Recovered BMC: from User({self.user}) and Password(original/default) to User({self.org_user}) and Password({self.hardcode})""",log=self.log,log_level=4)
+                printf(f"""Recovered BMC: from User({env_ipmi.get('user')}) and Password(original/default) to User({env_bmc.get('org_user')}) and Password({env_bmc.get('hardcode')})""",log=env_bmc.get('log'),log_level=4)
                 ok2,user2,passwd2=self.find_user_pass()
                 if ok2:
-                    printf(f"""Confirmed changed user password to {user2}:{passwd2}""",log=self.log,log_level=4)
-                    self.user=f'''{user2}'''
-                    self.passwd=f'''{passwd2}'''
-                    return True,self.user,self.passwd
-        self.warn(_type='ipmi_user',msg="Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.")
-        printf("""BMC Password: Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.""",log=self.log,log_level=1)
-        return False,self.user,self.passwd
+                    printf(f"""Confirmed changed user password to {user2}:{passwd2}""",log=env_bmc.get('log'),log_level=4)
+                    env_ipmi.set('user',f'''{user2}''')
+                    env_ipmi.set('passwd',f'''{passwd2}''')
+                    return True,user2,passwd2
+        warn.set('ipmi_user',msg="Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.")
+        printf("""BMC Password: Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.""",log=env_bmc.get('log'),log_level=1)
+        return False,env_ipmi.get('user'),env_ipmi.get('passwd')
 
     def run_cmd(self,cmd,append=None,path=None,retry=0,timeout=None,return_code={'ok':[0,True],'fail':[]},show_str=False,dbg=False,mode='app',cancel_func=None,peeling=False,progress=False,ip=None,user=None,passwd=None,cd=False,keep_cwd=False,check_password_rc=[],trace_passwd=False,output_log_size=0,auto_reset_bmc_when_bmc_redfish_error=False):
         #output_log_size=0 # print full
-        if cancel_func is None: cancel_func=self.cancel_func
-        error=self.error()
-        if error[0]:
-            return 'error','''{}'''.format(error[1])
+        if env_errors.exist('net'):
+            return False,(-1,'Network Error: {}'.format(error[1]),'Network Error: {}'.format(error[1]),0,0,cmd,path),'Network Error: {}'.format(error[1])
         while peeling:
             if type(cmd)is tuple and len(cmd) == 1:
                 cmd=cmd[0]
@@ -3186,10 +3510,10 @@ class kBmc:
             ok,cmd,path,return_code,timeout_i=Get(cmd,[0,1,2,3,4],err=True,fill_up=None)
             if timeout_i: timeout=timeout_i
             if not ok:
-                self.warn(_type='cmd',msg="command({}) format error".format(cmd))
+                env_errors.set('cmd',"command({}) format error".format(cmd))
                 return False,(-1,'command format error(2)','command format error',0,0,cmd,path),'command({}) format error'.format(cmd)
         elif not isinstance(cmd,str):
-            self.warn(_type='cmd',msg="command({}) format error".format(cmd))
+            env_errors.set('cmd',"command({}) format error".format(cmd))
             return False,(-1,'command format error(3)','command format error',0,0,cmd,path),'command({}) format error'.format(cmd)
         if not isinstance(return_code,dict):
             return_code={}
@@ -3203,9 +3527,9 @@ class kBmc:
         rc_err_bmc_user=return_code.get('err_bmc_user',[])
         rc_err_bmc_redfish=return_code.get('err_bmc_redfish',[])
         rc_err_bmc_user_times=0
-        if ip is None: ip=self.ip
-        if user is None: user=self.user
-        if passwd is None: passwd=self.passwd
+        if ip is None: ip=env_ipmi.get('ip')
+        if user is None: user=env_ipmi.get('user')
+        if passwd is None: passwd=env_ipmi.get('passwd')
         if type(append) is not str:
             append=''
         rc=None
@@ -3220,7 +3544,7 @@ class kBmc:
         cmd_show='s' if show_str and not dbg else 'd' if dbg else 'i'
         for x in range(0,1+retry):
             if x > 0:
-                printf('Re-try command [{}/{}]'.format(x,retry),log=self.log,log_level=1,dsp='d',start_newline=True)
+                printf('Re-try command [{}/{}]'.format(x,retry),log=env_bmc.get('log'),log_level=1,dsp='d',start_newline=True)
             for i in range(0,retry_passwd):
                 if isinstance(cmd,dict):
                     base_cmd=sprintf(cmd['base'],**{'ip':ip,'user':user,'passwd':passwd})
@@ -3240,29 +3564,28 @@ class kBmc:
                     printf('''** Do CMD   : %s
  - Path     : %s
  - Timeout  : %-15s  - Progress : %s
- - Check_RC : %s'''%(cmd_str,path,timeout,progress,return_code),log=self.log,log_level=1,dsp=cmd_show)
-                if self.cancel(cancel_func=cancel_func):
-                    printf(' !! Canceling Job',start_newline=True,log=self.log,log_level=1,dsp='d')
-                    self.warn(_type='cancel',msg="Canceling")
+ - Check_RC : %s'''%(cmd_str,path,timeout,progress,return_code),log=env_bmc.get('log'),log_level=1,dsp=cmd_show)
+                if self.cancel():
+                    printf(' !! Canceling Job',start_newline=True,log=env_bmc.get('log'),log_level=1,dsp='d')
+                    env_breaking.set('break',"Canceling")
                     return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
                 #BMC Remote shell need network
-                chk_err=self.error(_type='net')
-                if chk_err[0]:
+                if env_errors.exist('net'):
                     return False,(-1,'error:{}'.format(chk_err[1]),'error:{}'.format(chk_err[1]),0,0,cmd_str,path),'error'
                 try:
-                    rc=rshell(cmd_str,path=path,timeout=timeout,progress=progress,log=self.log,cd=cd,keep_cwd=keep_cwd)
+                    rc=rshell(cmd_str,path=path,timeout=timeout,progress=progress,log=env_bmc.get('log'),cd=cd,keep_cwd=keep_cwd)
                     if Get(rc,0) == -2 : return False,rc,'Timeout({})'.format(timeout)
                     if rc[0] !=0 and rc[0] in check_password_rc:
                         if self.no_find_user_pass is True:
                             return 'error',rc,'Your command got Password error'
-                        printf('Password issue, try again after check BMC user/password',start_newline=True,log=self.log,log_level=4,dsp='d')
-                        ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=cancel_func,trace=trace_passwd)
+                        printf('Password issue, try again after check BMC user/password',start_newline=True,log=env_bmc.get('log'),log_level=4,dsp='d')
+                        ok,ip,user,passwd=self.check(mac2ip=self.Vars('mac2ip'),trace=trace_passwd)
                         time.sleep(2)
                         continue
                 except:
                     e = ExceptMessage()
-                    printf('[ERR] Your command({}) got error\n{}'.format(cmd_str,e),start_newline=True,log=self.log,log_level=4,dsp='f')
-                    self.warn(_type='cmd',msg="Your command({}) got error\n{}".format(cmd_str,e))
+                    printf('[ERR] Your command({}) got error\n{}'.format(cmd_str,e),start_newline=True,log=env_bmc.get('log'),log_level=4,dsp='f')
+                    env_errors.set('cmd',"Your command({}) got error\n{}".format(cmd_str,e))
                     return 'error',(-1,'Your command({}) got error\n{}'.format(cmd_str,e),'unknown',0,0,cmd_str,path),'Your command got error'
 
                 rc_0=Int(Get(rc,0))
@@ -3271,12 +3594,12 @@ class kBmc:
                     if output_log and isinstance(output_log_size,int) and output_log_size > 10 and isinstance(output_log,str) and len(output_log) > output_log_size:
                         output_log=output_log[:output_log_size]+f'\n\n* Reduced Big log size to under {output_log_size} on this printing'
 
-                    printf(' - RT_CODE : {}\n - Spend   : {}\n - Output  : {}'.format(rc_0,Human_Unit(Int(Get(rc,4),0)-Int(Get(rc,3),0),unit='S'),output_log),log=self.log,log_level=1, dsp=cmd_show,no_intro=None)
+                    printf(' - RT_CODE : {}\n - Spend   : {}\n - Output  : {}'.format(rc_0,Human_Unit(Int(Get(rc,4),0)-Int(Get(rc,3),0),unit='S'),output_log),log=env_bmc.get('log'),log_level=1, dsp=cmd_show,no_intro=None)
                 else:
                     if cmd_show == 'i':
-                        printf('* Do CMD : {}\n - RT_CODE : {}\n - Spend   : {}\n - Output  : {}'.format(cmd_str,rc_0,Human_Unit(Int(Get(rc,4),0)-Int(Get(rc,3),0),unit='S'),Get(rc,1)),log=self.log,log_level=1, dsp='d',no_intro=None)
+                        printf('* Do CMD : {}\n - RT_CODE : {}\n - Spend   : {}\n - Output  : {}'.format(cmd_str,rc_0,Human_Unit(Int(Get(rc,4),0)-Int(Get(rc,3),0),unit='S'),Get(rc,1)),log=env_bmc.get('log'),log_level=1, dsp='d',no_intro=None)
                     else:
-                        printf(' - RT_CODE : {}\n - Spend   : {}\n - Output  : {}'.format(rc_0,Human_Unit(Int(Get(rc,4),0)-Int(Get(rc,3),0),unit='S'),Get(rc,1)),log=self.log,log_level=1, dsp=cmd_show,no_intro=None)
+                        printf(' - RT_CODE : {}\n - Spend   : {}\n - Output  : {}'.format(rc_0,Human_Unit(Int(Get(rc,4),0)-Int(Get(rc,3),0),unit='S'),Get(rc,1)),log=env_bmc.get('log'),log_level=1, dsp=cmd_show,no_intro=None)
 
                 if 'Function access denied' in Get(rc,1):
                     return False,rc,'Locked BMC'
@@ -3285,85 +3608,82 @@ class kBmc:
                 elif rc_0 == 0 or IsIn(rc_0,rc_ok):
                     return True,rc,'ok'
                 elif IsIn(rc_0,rc_err_bmc_redfish): # retry after reset the BMC
-                    printf(f'Looks Stuck at BMC because rc({rc_0}) in the condition {rc_err_bmc_redfish}',log=self.log,log_level=1,dsp='d')
+                    printf(f'Looks Stuck at BMC because rc({rc_0}) in the condition {rc_err_bmc_redfish}',log=env_bmc.get('log'),log_level=1,dsp='d')
                     if auto_reset_bmc_when_bmc_redfish_error:
-                        printf('Try to Reset BMC(Cold) according to auto_reset_bmc_when_bmc_redfish_error option',log=self.log,log_level=1,dsp='d')
+                        printf('Try to Reset BMC(Cold) according to auto_reset_bmc_when_bmc_redfish_error option',log=env_bmc.get('log'),log_level=1,dsp='d')
                         if not self.McResetCold():
                             return False,(-1,'Looks Stuck at BMC and Can not reset the BMC','Looks Stuck at BMC and Can not reset the BMC',0,0,cmd_str,path),'reset bmc'
                     else:
                         return False,(-1,'Looks Stuck at BMC','Looks Stuck at BMC',0,0,cmd_str,path),'bmc error'
                 elif IsIn(rc_0,rc_err_connection): # retry condition1
                     msg='err_connection'
-                    printf('Connection error condition:{}, return:{}'.format(rc_err_connection,Get(rc,0)),start_newline=True,log=self.log,log_level=7)
-                    printf('Connection Error:',log=self.log,log_level=1,dsp='d',direct=True)
+                    printf('Connection error condition:{}, return:{}'.format(rc_err_connection,Get(rc,0)),start_newline=True,log=env_bmc.get('log'),log_level=7)
+                    printf('Connection Error:',log=env_bmc.get('log'),log_level=1,dsp='d',direct=True)
                     #Check connection
                     ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                    #ping_rc=ping(self.ip,keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
-                    ping_rc=self.Ping(keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],keep_good=0,timeout=self.timeout)
+                    ping_rc=Ping(keep_bad=1800,keep_good=0)
                     ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                     if ping_rc == 0:
-                        printf(' !! Canceling Job',start_newline=True,log=self.log,log_level=1,dsp='d')
-                        self.warn(_type='cancel',msg="Canceling")
+                        printf(' !! Canceling Job',start_newline=True,log=env_bmc.get('log'),log_level=1,dsp='d')
+                        env_breaking.set('break',"Canceling")
                         return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
                     elif ping_rc is False:
-                        printf('Lost Network',start_newline=True,log=self.log,log_level=1,dsp='d')
-                        self.error(_type='net',msg="{} lost network (over 30min)(1)({} - {})".format(self.ip,ping_start,ping_end))
+                        printf('Lost Network',start_newline=True,log=env_bmc.get('log'),log_level=1,dsp='d')
+                        env_errors.set('net',"{} lost network (over 30min)(1)({} - {})".format(env_ipmi.get('ip'),ping_start,ping_end))
                         return False,rc,'Lost Network, Please check your server network(1)'
                 elif IsIn(rc_0,rc_err_bmc_user) and retry_passwd > 1 and i < 1: # retry condition1
-                    printf('Issue in BMC Login issue({})'.format(rc_err_bmc_user),log=self.log,log_level=1,dsp='d')
+                    printf('Issue in BMC Login issue({})'.format(rc_err_bmc_user),log=env_bmc.get('log'),log_level=1,dsp='d')
                     #Check connection
                     ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                    #ping_rc=ping(self.ip,keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
-                    ping_rc=self.Ping(keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],keep_good=0,timeout=self.timeout)
+                    ping_rc=Ping(keep_bad=1800,keep_good=0)
                     ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                     if ping_rc == 0:
-                        printf(' !! Canceling Job',start_newline=True,log=self.log,log_level=1,dsp='d')
-                        self.warn(_type='cancel',msg="Canceling")
+                        printf(' !! Canceling Job',start_newline=True,log=env_bmc.get('log'),log_level=1,dsp='d')
+                        env_breaking.set('break',"Canceling")
                         return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
                     elif ping_rc is False:
-                        printf('Lost Network',start_newline=True,log=self.log,log_level=1,dsp='d')
-                        self.error(_type='net',msg="{} lost network (over 30min)(2)({}-{})".format(self.ip,ping_start,ping_end))
+                        printf('Lost Network',start_newline=True,log=env_bmc.get('log'),log_level=1,dsp='d')
+                        env_errors.set('net',"{} lost network (over 30min)(2)({}-{})".format(env_ipmi.get('ip'),ping_start,ping_end))
                         return False,rc,'Lost Network, Please check your server network(2)'
                     # Find Password
-                    if self.no_find_user_pass is True:
+                    if self.Vars('no_find_user_pass') is True:
                         return False,rc,'Error for IPMI USER or PASSWORD','user error'
-                    cur_user=self.__dict__.get('user')
-                    cur_pass=self.__dict__.get('passwd')
+                    cur_user=env_ipmi.get('user')
+                    cur_pass=env_ipmi.get('passwd')
                     ok,ipmi_user,ipmi_pass=self.find_user_pass(failed_passwd=cur_pass)
                     if not ok:
-                        self.error(_type='user_pass',msg="Can not find working IPMI USER and PASSWORD")
+                        env_errors.set('user_pass',"Can not find working IPMI USER and PASSWORD")
                         return False,rc,'Can not find working IPMI USER and PASSWORD','user error'
-                    printf('Check IPMI User and Password by {}: Found ({}/{})'.format(rc_err_bmc_user,ipmi_user,ipmi_pass),log=self.log,log_level=1,dsp='d')
+                    printf('Check IPMI User and Password by {}: Found ({}/{})'.format(rc_err_bmc_user,ipmi_user,ipmi_pass),log=env_bmc.get('log'),log_level=1,dsp='d')
                     if cur_user == ipmi_user and cur_pass == ipmi_pass:
-                        printf('Looks Stuck at BMC, So reset the BMC and try again',start_newline=True,log=self.log,log_level=1,dsp='d')
+                        printf('Looks Stuck at BMC, So reset the BMC and try again',start_newline=True,log=env_bmc.get('log'),log_level=1,dsp='d')
                         if not self.McResetCold():
                             return False,(-1,'Looks Stuck at BMC and Can not reset the BMC','Looks Stuck at BMC and Can not reset the BMC',0,0,cmd_str,path),'reset bmc'
                     user='{}'.format(ipmi_user)
                     passwd='''{}'''.format(ipmi_pass)
                 else:
                     if 'ipmitool' in cmd_str and retry_passwd > 1 and i < 1:
-                        printf('Issue of ipmitool command',log=self.log,log_level=1,dsp='d')
+                        printf('Issue of ipmitool command',log=env_bmc.get('log'),log_level=1,dsp='d')
                         #Check connection
                         ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                        #ping_rc=ping(self.ip,keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=self.cancel(cancel_func=cancel_func),keep_good=0,timeout=self.timeout)
-                        ping_rc=self.Ping(keep_bad=1800,log=self.log,stop_func=self.error(_type='break')[0],keep_good=0,timeout=self.timeout)
+                        ping_rc=Ping(keep_bad=1800,keep_good=0)
                         ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                         if ping_rc == 0:
-                            printf(' !! Canceling Job',log=self.log,log_level=1,dsp='d')
-                            self.warn(_type='cancel',msg="Canceling")
+                            printf(' !! Canceling Job',log=env_bmc.get('log'),log_level=1,dsp='d')
+                            env_breaking.set('break',"Canceling")
                             return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
                         elif ping_rc is False:
-                            printf('Lost Network',log=self.log,log_level=1,dsp='d')
-                            self.error(_type='net',msg="{} lost network (over 30min)(3)({} - {})".format(self.ip,ping_start,ping_end))
+                            printf('Lost Network',log=env_bmc.get('log'),log_level=1,dsp='d')
+                            env_errors.set('net',"{} lost network (over 30min)(3)({} - {})".format(env_ipmi.get('ip'),ping_start,ping_end))
                             return False,rc,'Lost Network, Please check your server network(3)'
                         # Find Password
-                        if self.no_find_user_pass is True:
+                        if self.Vars('no_find_user_pass') is True:
                             return False,rc,'Error for IPMI USER or PASSWORD','user error'
                         ok,ipmi_user,ipmi_pass=self.find_user_pass()
                         if not ok:
-                            self.error(_type='user_pass',msg="Can not find working IPMI USER and PASSWORD")
+                            env_errors.set('user_pass',"Can not find working IPMI USER and PASSWORD")
                             return False,rc,'Can not find working IPMI USER and PASSWORD','user error'
-                        printf('Check IPMI User and Password by ipmitool command: Found ({}/{})'.format(ipmi_user,ipmi_pass),log=self.log,log_level=1,dsp='d')
+                        printf('Check IPMI User and Password by ipmitool command: Found ({}/{})'.format(ipmi_user,ipmi_pass),log=env_bmc.get('log'),log_level=1,dsp='d')
                         user='{}'.format(ipmi_user)
                         passwd='''{}'''.format(ipmi_pass)
                     else:
@@ -3394,25 +3714,22 @@ class kBmc:
 
     def reset(self,retry=0,post_keep_up=20,pre_keep_up=0,retry_interval=5,cancel_func=None,timeout=1800):
         # Check Network
-        chk_err=self.error(_type='net')
-        if chk_err[0]: return False,chk_err[1]
+        if env_errors.exist('net'): return False,chk_err[1]
         for i in range(0,1+retry):
             rc=None
-            for mm in Iterable(self.cmd_module):
-                #ping_rc=ping(self.ip,timeout=timeout,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
-                ping_rc=self.Ping(timeout=timeout,keep_good=pre_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
+            for mm in Iterable(self.Vars('cmd_module')):
+                ping_rc=Ping(keep_good=pre_keep_up)
                 if ping_rc == 0:
                     return 0,'Canceled'
                 elif ping_rc is False:
-                    printf('R',log=self.log,log_level=1,direct=True)
+                    printf('R',log=env_bmc.get('log'),log_level=1,direct=True)
                 else:
                     rc=self.run_cmd(mm.cmd_str('ipmi reset'))
                     if krc(rc,chk='error'):
                         continue # try with next module
                     elif krc(rc,chk=True):
                         time.sleep(5)
-                        #ping_rc=ping(self.ip,timeout=timeout,keep_good=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
-                        ping_rc=self.Ping(timeout=timeout,keep_good=post_keep_up,log=self.log,stop_func=self.error(_type='break')[0],cancel_func=cancel_func)
+                        ping_rc=Ping(keep_good=post_keep_up)
                         if ping_rc == 0:
                             return 0,'Canceled'
                         elif ping_rc is True:
@@ -3425,46 +3742,44 @@ class kBmc:
         return False,'Can not Pinging to BMC. I am not reset the BMC. please check the network first!'
 
     def get_mac(self,ip=None,user=None,passwd=None):
-        if self.mac:
-            return True,self.mac
-        if not IpV4(ip): ip=self.ip
-        if not user: user=self.user
-        if not passwd: passwd=self.passwd
+        if self.Vars('mac'):
+            return True,self.Vars('mac')
+        if not IpV4(ip): ip=env_ipmi.get('ip')
+        if not user: user=env_ipmi.get('user')
+        if not passwd: passwd=env_ipmi.get('passwd')
         # Check Network
-        chk_err=self.error(_type='net')
-        if chk_err[0]: return False,None
-        if not self.checked_ip:
-            if IpV4(ip,port=self.port):
-                self.checked_ip=True
-                self.checked_port=True
-        for mm in Iterable(self.cmd_module):
+        if env_errors.exist('net'): return False,None
+        if not self.Vars('checked_ip'):
+            if IpV4(ip,port=env_ipmi.get('port')):
+                self.Vars('checked_ip',True)
+                self.Vars('checked_port',True)
+        for mm in Iterable(self.Vars('cmd_module')):
             for i in range(0,2):
-                #ping_rc=ping(ip,keep_good=0,timeout=self.timeout,log=self.log,cancel_func=self.cancel_func)
-                ping_rc=self.Ping(host=ip,keep_good=0,timeout=self.timeout,log=self.log)
+                ping_rc=Ping(keep_good=0)
                 if ping_rc is False: return False,None
                 
                 name=mm.__name__
-                cmd_str=mm.cmd_str('ipmi lan mac',passwd=passwd)
+                cmd_str=mm.cmd_str('ipmi lan mac')
                 full_str=cmd_str[1]['base'].format(ip=ip,user=user,passwd=passwd)+' '+cmd_str[1]['cmd']
-                rc=rshell(full_str,log=self.log)
+                rc=rshell(full_str,log=env_bmc.get('log'))
                 if krc(rc[0],chk=True):
                     if name == 'smc':
                         mac=MacV4(rc[1])
                         if mac:
-                            self.mac=mac
-                            return True,self.mac
+                            self.Vars('mac',mac)
+                            return True,self.Vars('mac')
                     elif name == 'ipmitool':
                         for ii in Split(rc[1],'\n'):
                             ii_a=Split(ii)
                             if IsIn('MAC',ii_a,idx=0) and IsIn('Address',ii_a,idx=1) and IsIn(':',ii_a,idx=2):
                                 mac=MacV4(ii_a[-1])
                                 if mac:
-                                    self.mac=mac
-                                    return True,self.mac
+                                    self.Vars('mac',mac)
+                                    return True,self.Vars('mac')
                 else:
                     if (name == 'smc' and rc[0] == 146) or (name=='ipmitool' and rc[0] == 1):
                         #If password fail or something wrong then try again after checkup password
-                        if self.no_find_user_pass is True:
+                        if self.Vars('no_find_user_pass') is True:
                             break
                         ok,user,passwd=self.find_user_pass()
                         if not ok:
@@ -3472,13 +3787,12 @@ class kBmc:
         return False,None
 
     def dhcp(self):
-        for mm in Iterable(self.cmd_module):
+        for mm in Iterable(self.Vars('cmd_module')):
             # Check Network
-            chk_err=self.error(_type='net')
-            if chk_err[0]: return False,None
+            if env_errors.exist('net'): return False,None
 
             name=mm.__name__
-            rc=self.run_cmd(mm.cmd_str('ipmi lan dhcp',passwd=self.passwd))
+            rc=self.run_cmd(mm.cmd_str('ipmi lan dhcp'))
             if krc(rc,chk='error'):
                 return rc
             if krc(rc,chk=True):
@@ -3492,13 +3806,12 @@ class kBmc:
         return False,None
 
     def gateway(self):
-        for mm in Iterable(self.cmd_module):
+        for mm in Iterable(self.Vars('cmd_module')):
             # Check Network
-            chk_err=self.error(_type='net')
-            if chk_err[0]: return False,None
+            if env_errors.exist('net'): return False,None
 
             name=mm.__name__
-            rc=self.run_cmd(mm.cmd_str('ipmi lan gateway',passwd=self.passwd))
+            rc=self.run_cmd(mm.cmd_str('ipmi lan gateway'))
             if krc(rc,chk='error'):
                 return rc
             if krc(rc,chk=True):
@@ -3512,12 +3825,11 @@ class kBmc:
         return False,None
 
     def netmask(self):
-        for mm in Iterable(self.cmd_module):
+        for mm in Iterable(self.Vars('cmd_module')):
             # Check Network
-            chk_err=self.error(_type='net')
-            if chk_err[0]: return False,None
+            if env_errors.exist('net'): return False,None
             name=mm.__name__
-            rc=self.run_cmd(mm.cmd_str('ipmi lan netmask',passwd=self.passwd))
+            rc=self.run_cmd(mm.cmd_str('ipmi lan netmask'))
             if krc(rc,chk='error'):
                 return rc
             if krc(rc,chk=True):
@@ -3538,22 +3850,21 @@ class kBmc:
         # 4. Check correctly setup or not
         # 5. Return
         # Check Network
-        chk_err=self.error(_type='net')
-        if chk_err[0]: return False,chk_err[1],chk_err[1]
+        if env_errors.exist('net'): return False,chk_err[1],chk_err[1]
 
         if not force:
             crc=self.bootorder(mode='status')
-            printf('Current Boot order is {}{}'.format(crc[0],' with UEFI mode' if crc[1] else ''),log=self.log,log_level=6)
+            printf('Current Boot order is {}{}'.format(crc[0],' with UEFI mode' if crc[1] else ''),log=env_bmc.get('log'),log_level=6)
             if crc[0] == 'pxe':
                 if ipxe:
                     if crc[1]:
-                        printf('Already it has PXE Config with UEFI mode',log=self.log,log_level=6)
+                        printf('Already it has PXE Config with UEFI mode',log=env_bmc.get('log'),log_level=6)
                         return True,'Already it has PXE Config with UEFI mode',crc[2]
                 else:
                     if not crc[1]:
-                        printf('Already it has PXE Config',log=self.log,log_level=6)
+                        printf('Already it has PXE Config',log=env_bmc.get('log'),log_level=6)
                         return True,'Already it has PXE Config',crc[2]
-                printf('Wrong Configuration({}PXE)'.format('i' if crc[1] else ''),log=self.log,log_level=3)
+                printf('Wrong Configuration({}PXE)'.format('i' if crc[1] else ''),log=env_bmc.get('log'),log_level=3)
         #if self.power('off',verify=True):
         #    if self.is_down(timeout=1200,interval=5,sensor_off_monitor=5,keep_off=5)[0]:
 
@@ -3567,44 +3878,44 @@ class kBmc:
                     if frc[0] == 'pxe':
                         if ipxe:
                             if frc[1]: 
-                                printf('Set to PXE Config with UEFI mode',log=self.log,log_level=6)
+                                printf('Set to PXE Config with UEFI mode',log=env_bmc.get('log'),log_level=6)
                                 return True,'Set to PXE Config with UEFI mode',frc[2]
                         else:
                             if not frc[1]:
-                                printf('Set to PXE Config',log=self.log,log_level=6)
+                                printf('Set to PXE Config',log=env_bmc.get('log'),log_level=6)
                                 return True,'Set to PXE Config',frc[2]
-                    printf('.',direct=True,log=self.log,log_level=1)
+                    printf('.',direct=True,log=env_bmc.get('log'),log_level=1)
                     frc_msg='got {} Config{}'.format(frc[0],' with UEFI mode' if crc[1] else '')
                     time.sleep(6)
-                printf('Can not find {}PXE Config, Currently it {}'.format('i' if ipxe else '',frc_msg),log=self.log,log_level=6)
+                printf('Can not find {}PXE Config, Currently it {}'.format('i' if ipxe else '',frc_msg),log=env_bmc.get('log'),log_level=6)
                 return False,'Can not find {}PXE Config, Currently it {}'.format('i' if ipxe else '',frc_msg),False
             else:
-                printf('Can not power on the server',log=self.log,log_level=6)
+                printf('Can not power on the server',log=env_bmc.get('log'),log_level=6)
                 return False,'Can not power on the server',False
         else:
-            printf(br_rc[1],log=self.log,log_level=6)
+            printf(br_rc[1],log=env_bmc.get('log'),log_level=6)
             return False,br_rc[1],False
 
 
         #    else:
-        #        printf('The server still UP over 20min',log=self.log,log_level=6)
+        #        printf('The server still UP over 20min',log=env_bmc.get('log'),log_level=6)
         #        return False,'The server still UP over 20min',False
         #else:
-        #    printf('Can not power off the server',log=self.log,log_level=6)
+        #    printf('Can not power off the server',log=env_bmc.get('log'),log_level=6)
         #    return False,'Can not power off the server',False
 
     def bootorder(self,mode=None,ipxe=False,persistent=False,force=False,boot_mode={'smc':['pxe','bios','hdd','cd','usb'],'ipmitool':['pxe','ipxe','bios','hdd']},bios_cfg=None,set_bios_uefi=True,pxe_boot_mac=None):
         rc=False,"Unknown boot mode({})".format(mode)
-        ipmi_ip=self.ip
+        ipmi_ip=env_ipmi.get('ip')
         if not MacV4(pxe_boot_mac):
-            pxe_boot_mac=self.eth_mac
+            pxe_boot_mac=self.Vars('eth_mac')
 
         def ipmitool_bootorder_setup(mm,mode,persistent,ipxe,pxe_boot_mac):
             #######################
             # Setup Boot order
             #######################
             rf=self.CallRedfish()
-            if self.redfish and rf:
+            if self.Vars('redfish') and rf:
                 # Update new information
                 rfp=rf.Power(cmd='on',sensor_up=10,sensor=True)
                 if rfp is True:
@@ -3614,22 +3925,21 @@ class kBmc:
                     else:
                         boot=mode
                         mode='UEFI'
-                    printf("[RF] Boot: boot:{}, mode:{}, keep:{}, force:{}".format(boot,mode,True if persistent else False,force),log=self.log,mode='d')
+                    printf("[RF] Boot: boot:{}, mode:{}, keep:{}, force:{}".format(boot,mode,True if persistent else False,force),log=env_bmc.get('log'),mode='d')
                     ok,rf_boot=rf.Boot(boot=boot,mode=mode,keep='keep' if persistent else 'Once',force=force,set_bios_uefi=set_bios_uefi,pxe_boot_mac=pxe_boot_mac)
                     if ok in [True,None]: ok=True
-                    printf("[RF] SET : {}".format(ok),log=self.log,mode='d')
+                    printf("[RF] SET : {}".format(ok),log=env_bmc.get('log'),mode='d')
                     rc=ok,(ok,'{} set {} to {}'.format('Persistently' if persistent else 'Temporarily',boot,mode) if ok else rf_boot)
                     if krc(rc,chk=True):
                         return True,rc[1][1]
                     return rc
                 elif rfp is None:
-                    printf('Can not power on the server',log=self.log,log_level=6)
+                    printf('Can not power on the server',log=env_bmc.get('log'),log_level=6)
                     return False,'Can not power on the server'
                 #Error then next
 
             # Check Network
-            chk_err=self.error(_type='net')
-            if chk_err[0]: return False,chk_err[1]
+            if env_errors.exist('net'): return False,chk_err[1]
             if self.power('off',verify=True):
                 if self.is_down(timeout=1200,interval=5,sensor_off_monitor=5,keep_off=5)[0]:
 
@@ -3639,45 +3949,43 @@ class kBmc:
                             ipmi_cmd='raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00'
                         else:
                             ipmi_cmd='chassis bootdev {0} options=efiboot'.format(mode)
-                        rc=self.run_cmd(mm.cmd_str(ipmi_cmd,passwd=self.passwd))
-                        printf("{1} Boot mode set to iPXE at {0}".format(ipmi_ip,'Persistently' if persistent else 'Temporarily'),log=self.log,log_level=7)
+                        rc=self.run_cmd(mm.cmd_str(ipmi_cmd))
+                        printf("{1} Boot mode set to iPXE at {0}".format(ipmi_ip,'Persistently' if persistent else 'Temporarily'),log=env_bmc.get('log'),log_level=7)
                     else:
-                        rc=self.run_cmd(mm.cmd_str('chassis bootdev {0}{1}'.format(mode,' options=persistent' if persistent else ''),passwd=self.passwd))
-                        printf("{2} Boot mode set to {0} at {1}".format(mode,ipmi_ip,'Persistently' if persistent else 'Temporarily'),log=self.log,log_level=7)
+                        rc=self.run_cmd(mm.cmd_str('chassis bootdev {0}{1}'.format(mode,' options=persistent' if persistent else '')))
+                        printf("{2} Boot mode set to {0} at {1}".format(mode,ipmi_ip,'Persistently' if persistent else 'Temporarily'),log=env_bmc.get('log'),log_level=7)
                     if krc(rc,chk=True):
                         return True,rc[1][1]
                     return rc
                 else:
-                    printf('The server still UP over 20min',log=self.log,log_level=6)
+                    printf('The server still UP over 20min',log=env_bmc.get('log'),log_level=6)
                     return False,'The server still UP over 20min'
             else:
-                printf('Can not power off the server',log=self.log,log_level=6)
+                printf('Can not power off the server',log=env_bmc.get('log'),log_level=6)
                 return False,'Can not power off the server'
 
         def smcipmitool_bootorder_setup(mm,mode,persistent,ipxe):
             # Check Network
-            chk_err=self.error(_type='net')
-            if chk_err[0]: return False,chk_err[1]
+            if env_errors.exist('net'): return False,chk_err[1]
 
             #SMCIPMITool command : Setup
             if mode == 'pxe':
-                rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 1',passwd=self.passwd))
+                rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 1'))
             elif mode == 'hdd':
-                rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 2',passwd=self.passwd))
+                rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 2'))
             elif mode == 'cd':
-                rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 3',passwd=self.passwd))
+                rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 3'))
             elif mode == 'bios':
-                rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 4',passwd=self.passwd))
+                rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 4'))
             elif mode == 'usb':
-                rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 6',passwd=self.passwd))
+                rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 6'))
             if krc(rc,chk=True):
                 return True,rc[1][1]
             return rc
 
         def ipmitool_bootorder_status(mm,mode,bios_cfg):
             # Check Network
-            chk_err=self.error(_type='net')
-            if chk_err[0]: return False,None,False
+            if env_errors.exist('net'): return False,None,False
 
             #IPMITOOL command
             if IsIn(mode,['order',None]): # Show Boot Order
@@ -3686,9 +3994,8 @@ class kBmc:
                 if rf:
                     # return <RC>,<boot order information>,persistant
                     rc=rf.Boot(boot='order')
-                    #print('>>>>>rf boot.order:',rc)
                     return rc[0],rc[1],None
-                rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5',passwd=self.passwd))
+                rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5'))
                 #print('>>>>>chassis bootparam get 5:',rc)
                 # Boot Flags :
                 #   - Boot Flag Invalid                # Invalid :not setup, Valid : Setup
@@ -3760,14 +4067,14 @@ class kBmc:
                             elif 'Boot Device Selector :' in ii:
                                 status=Split(ii,':')[1]
                                 break
-                        printf("Boot mode Status:{}, EFI:{}, Persistent:{}".format(status,efi,persistent),log=self.log,log_level=7)
+                        printf("Boot mode Status:{}, EFI:{}, Persistent:{}".format(status,efi,persistent),log=env_bmc.get('log'),log_level=7)
                     if krc(bios_cfg,chk=True): #BIOS CFG file
                         bios_uefi=Get(bios_cfg,1)
                         if 'EFI' in bios_uefi[0:-1] or 'UEFI' in bios_uefi[0:-1] or 'IPXE' in bios_uefi[0:-1]:
                             efi=True
                 #If not special, so get information from ipmitool
                 else:
-                    rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5',passwd=self.passwd))
+                    rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5'))
                     # Boot Flags :
                     #   - Boot Flag Invalid                # Invalid :not setup, Valid : Setup
                     #   - Options apply to only next boot  # only next boot: one time at next time, all tuture boots : persistent boot
@@ -3822,7 +4129,7 @@ class kBmc:
                                     status=False
                 return [status,efi,persistent]
 
-        for mm in Iterable(self.cmd_module):
+        for mm in Iterable(self.Vars('cmd_module')):
             name=mm.__name__
             chk_boot_mode=boot_mode.get(name,{})
             if name == 'smc' and mode in chk_boot_mode:
@@ -3835,7 +4142,7 @@ class kBmc:
                     return ipmitool_bootorder_status(mm,mode,bios_cfg)
                 # If unknown mode then error
                 elif mode not in chk_boot_mode:
-                    self.warn(_type='boot',msg="Unknown boot mode({}) at {}".format(mode,name))
+                    env_errors.set('boot',"Unknown boot mode({}) at {}".format(mode,name))
                     return False,'Unknown boot mode({}) at {}'.format(mode,name)
                 else:
                     # Setup Boot order
@@ -3845,13 +4152,13 @@ class kBmc:
         return False,rc[-1]
 
     def get_eth_mac(self,port=None):
-        if self.eth_mac:
-            return True,self.eth_mac
+        if env_ipmi.get('eth_mac'):
+            return True,env_ipmi.get('eth_mac')
         rc=False,[]
-        for mm in Iterable(self.cmd_module):
+        for mm in Iterable(self.Vars('cmd_module')):
             name=mm.__name__
             if name == 'ipmitool':
-                aaa=mm.cmd_str('''raw 0x30 0x21''',passwd=self.passwd)
+                aaa=mm.cmd_str('''raw 0x30 0x21''')
                 rc=self.run_cmd(aaa)
                 if krc(rc,chk=True) and rc[1][1]:
                     mac_src_a=Split(rc[1][1],'\n')
@@ -3871,10 +4178,10 @@ class kBmc:
                                     if MacV4(mac) and mac!= '00:00:00:00:00:00':
                                         eth_mac=mac
                             if eth_mac and eth_mac != '00:00:00:00:00:00':
-                                self.eth_mac=eth_mac
-                                return True,self.eth_mac
+                                env_ipmi.set('eth_mac',eth_mac)
+                                return True,eth_mac
             elif name == 'smc':
-                rc=self.run_cmd(mm.cmd_str('ipmi oem summary | grep "System LAN"',passwd=self.passwd))
+                rc=self.run_cmd(mm.cmd_str('ipmi oem summary | grep "System LAN"'))
                 if krc(rc,chk=True):
                     #rrc=[]
                     #for ii in rc[1].split('\n'):
@@ -3884,8 +4191,8 @@ class kBmc:
                     if mac_src_a:
                         eth_mac=MacV4(mac_src_a[0])
                         if eth_mac and eth_mac != '00:00:00:00:00:00':
-                            self.eth_mac=eth_mac
-                            return True,self.eth_mac
+                            env_ipmi.set('eth_mac',eth_mac)
+                            return True,eth_mac
             #if krc(rc[0],chk='error'):
             #   return rc
         #If not found then try with redfish
@@ -3900,31 +4207,33 @@ class kBmc:
                         if port:
                             if '{}'.format(port) == '{}'.format(pp):
                                 if MacV4(rf_net[nid]['port'][pp].get('mac')):
-                                    self.eth_mac=rf_net[nid]['port'][pp].get('mac')
-                                    return True,self.eth_mac
+                                    eth_mac=rf_net[nid]['port'][pp].get('mac')
+                                    env_ipmi.set('eth_mac',eth_mac)
+                                    return True,eth_mac
                         elif isinstance(port_state,str) and port_state.lower() == 'up':
                             if MacV4(rf_net[nid]['port'][pp].get('mac')):
-                                self.eth_mac=rf_net[nid]['port'][pp].get('mac')
-                                return True,self.eth_mac
+                                eth_mac=rf_net[nid]['port'][pp].get('mac')
+                                env_ipmi.set('eth_mac',eth_mac)
+                                return True,eth_mac
             else:
                 if MacV4(rf_base.get('lan')):
                     return True,rf_base.get('lan')
         return False,None
 
     def get_eth_info(self):
-        ok,ip,user,passwd=self.check(mac2ip=self.mac2ip)
-        rf=Redfish(host=ip,user=user,passwd=passwd,log=self.log)
+        #ok,ip,user,passwd=self.check(mac2ip=self.mac2ip)
+        ok,ip,user,passwd=self.check()
+        rf=Redfish(host=ip,user=user,passwd=passwd,log=env_bmc.get('log'))
         return rf.Network()
 
     def summary(self): # BMC is ready(hardware is ready)
-        #if ping(self.ip,timeout=self.timeout,bad=30) is False:
-        if self.Ping(timeout=self.timeout,bad=30) is False:
+        if Ping(bad=30) is False:
             print('%10s : %s'%("Ping","Fail"))
             return False
         print('%10s : %s'%("Ping","OK"))
-        self.check(mac2ip=self.mac2ip,cancel_func=self.cancel_func)
-        print('%10s : %s'%("User",self.user))
-        print('%10s : %s'%("Password",self.passwd))
+        self.check(mac2ip=self.Vars('mac2ip'))
+        print('%10s : %s'%("User",env_ipmi.get('user')))
+        print('%10s : %s'%("Password",env_ipmi.get('passwd')))
         ok,mac=self.get_mac()
         print('%10s : %s'%("Bmc Mac",'{}'.format(mac)))
         ok,eth_mac=self.get_eth_mac()
@@ -3948,7 +4257,7 @@ class kBmc:
         # So, adding option to redfish only option. if somebody want check only redfishonly data then check here
         if rf_only:
             rf=self.CallRedfish()
-            if self.redfish and rf:
+            if self.Vars('redfish') and rf:
                 rfp=rf.IsUp(timeout=timeout,keep_up=keep_on,keep_down=keep_off,sensor=True if opts.get('mode','s') in ['s','a'] else False)
                 if rfp is True:
                     return True,'Node is UP' 
@@ -3995,7 +4304,7 @@ class kBmc:
         if 'mode' not in opts: opts['mode']='s'
         if rf_only:
             rf=self.CallRedfish()
-            if self.redfish and rf:
+            if self.Vars('redfish') and rf:
                 rfp=rf.IsDown(timeout=timeout,keep_up=keep_on,keep_down=keep_off,sensor=True if opts.get('mode','s') in ['s','a'] else False)
                 if rfp is True:
                     return True,'Node is DOWN' 
@@ -4033,11 +4342,10 @@ class kBmc:
         post_keep_up=Int(post_keep_up,default=20) # required post condition to keep up time(over keep up then pass)
         post_keep_down=Int(post_keep_down,default=0) # required post condition to keep down time(over keep down then pass)
         rf=self.CallRedfish()
-        if cancel_func is None: cancel_func=self.cancel_func
         if not isinstance(cmd,str): cmd='status'
         cmd=cmd.lower()
         if cmd == 'status':
-            if self.redfish and rf:
+            if self.Vars('redfish') and rf:
                 rfp=rf.Power('status')
                 if IsIn(rfp,['on','off']): return rfp
             aa=self.do_power('status',verify=verify)
@@ -4050,13 +4358,12 @@ class kBmc:
             if boot_mode == 'ipxe' or ipxe:
                 ipxe=True
                 boot_mode='pxe'
-            ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=cancel_func)
+            ok,ip,user,passwd=self.check(mac2ip=self.Vars('mac2ip'))
             if not ok:
                 return False,'Error for BMC USER or Password'
             for ii in range(0,retry+1):
                 # Find ipmi information
-                printf('Set {}{}{} boot mode ({}/{})'.format('force ' if force else '','i' if ipxe else '',boot_mode,ii+1,retry),log=self.log,log_level=3)
-                #ok,ip,user,passwd=self.check(mac2ip=self.mac2ip,cancel_func=cancel_func)
+                printf('Set {}{}{} boot mode ({}/{})'.format('force ' if force else '','i' if ipxe else '',boot_mode,ii+1,retry),log=env_bmc.get('log'),log_level=3)
                 #Check Status
                 boot_mode_state=self.bootorder(mode='status')
                 if IsSame(boot_mode,boot_mode_state[0]) and IsSame(ipxe,boot_mode_state[1]):
@@ -4064,52 +4371,52 @@ class kBmc:
                         break
                 rc=self.bootorder(mode=boot_mode,ipxe=ipxe,persistent=True,force=True)
                 if rc[0]:
-                    printf('Set Done: {}'.format(rc[1]),log=self.log,log_level=3)
+                    printf('Set Done: {}'.format(rc[1]),log=env_bmc.get('log'),log_level=3)
                     time.sleep(30)
                     break
                 if 'Not licensed to perform' in rc[1]:
-                    printf('Product KEY ISSUE. Set ProdKey and try again.....',log=self.log,log_level=3)
+                    printf('Product KEY ISSUE. Set ProdKey and try again.....',log=env_bmc.get('log'),log_level=3)
                     #return False,rc[1],-1
                     return False,rc[1]
-                printf('Set BootOrder output: {}'.format(rc),log=self.log,mode='d')
+                printf('Set BootOrder output: {}'.format(rc),log=env_bmc.get('log'),mode='d')
                 time.sleep(10)
         return self.do_power(cmd,retry=retry,verify=verify,timeout=timeout,post_keep_up=post_keep_up,post_keep_down=post_keep_down,lanmode=lanmode,fail_down_time=fail_down_time,mode=monitor_mode,command_gap=command_gap,error=error,mc_reset=mc_reset,off_on_interval=off_on_interval,sensor=sensor,keep_init_state_timeout_rf=keep_init_state_timeout_rf,monitor_timeout_rf=monitor_timeout_rf,failed_timeout_keep_off=failed_timeout_keep_off,failed_timeout_keep_on=failed_timeout_keep_on)
 
     def IsStuckOrNotIpmitool(self):
         mm=Ipmitool()
-        init_rc=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
-        printf('BMC Power Stuck check with ipmitool command',log=self.log,mode='d')
+        init_rc=self.run_cmd(mm.cmd_str('ipmi power status'))
+        printf('BMC Power Stuck check with ipmitool command',log=env_bmc.get('log'),mode='d')
         if krc(init_rc[0],chk=True):
             cur_stat=Get(init_rc[1][1].split(),-1)
             test_power='off' if IsIn(cur_stat,['on']) else 'on'
-            printf(' Test to {} from {} state'.format(test_power,cur_stat),log=self.log,no_intro=None,mode='d')
-            test_rc=self.run_cmd(mm.cmd_str(mm.power_mode[test_power][0],passwd=self.passwd))
+            printf(' Test to {} from {} state'.format(test_power,cur_stat),log=env_bmc.get('log'),no_intro=None,mode='d')
+            test_rc=self.run_cmd(mm.cmd_str(mm.power_mode[test_power][0]))
             if not krc(test_rc[0],chk=True):
-                printf(" ipmitool can't set power '{}'\n{}".format(test_power,test_rc),log=self.log,mode='d')
-                printf(' Try again test to {} from {} state'.format(test_power,cur_stat),log=self.log,no_intro=None,mode='d')
+                printf(" ipmitool can't set power '{}'\n{}".format(test_power,test_rc),log=env_bmc.get('log'),mode='d')
+                printf(' Try again test to {} from {} state'.format(test_power,cur_stat),log=env_bmc.get('log'),no_intro=None,mode='d')
                 time.sleep(5)
-                test_rc=self.run_cmd(mm.cmd_str(mm.power_mode[test_power][0],passwd=self.passwd))
+                test_rc=self.run_cmd(mm.cmd_str(mm.power_mode[test_power][0]))
                 if not krc(test_rc[0],chk=True):
-                    printf(' ipmitool command is not works to power handle: {}'.format(test_rc),log=self.log,mode='d')
+                    printf(' ipmitool command is not works to power handle: {}'.format(test_rc),log=env_bmc.get('log'),mode='d')
                     return True #Stuck
 
             time.sleep(5)
             cnt=0
             for i in range(0,10):
-                c=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
+                c=self.run_cmd(mm.cmd_str('ipmi power status'))
                 if krc(c[0],chk=True):
                     cc=Get(c[1][1].split(),-1)
-                    printf(' current power stat is {}'.format(cc),log=self.log,no_intro=None,mode='d')
+                    printf(' current power stat is {}'.format(cc),log=env_bmc.get('log'),no_intro=None,mode='d')
                     if IsIn(cc,[test_power]):
                         cnt+=1
                         if cnt > 5:
-                            printf(' Confirm it works',log=self.log,no_intro=None,mode='d')
+                            printf(' Confirm it works',log=env_bmc.get('log'),no_intro=None,mode='d')
                             return False #is is working
-                printf('.',log=self.log,direct=True,mode='d')
+                printf('.',log=env_bmc.get('log'),direct=True,mode='d')
                 time.sleep(3)
             return True #Stuck
         else:
-            printf(' ipmitool command is not works : {}'.format(init_rc),log=self.log,mode='d')
+            printf(' ipmitool command is not works : {}'.format(init_rc),log=env_bmc.get('log'),mode='d')
             return True
 
     def do_power(self,cmd,retry=0,verify=False,timeout=1200,post_keep_up=40,post_keep_down=0,pre_keep_up=0,lanmode=None,cancel_func=None,fail_down_time=300,fail_up_time=300,mode=None,command_gap=5,error=True,mc_reset=False,off_on_interval=0,sensor=None,end_newline=True,keep_init_state_timeout_rf=60,monitor_timeout_rf=300,failed_timeout_keep_off=240,failed_timeout_keep_on=120):
@@ -4131,27 +4438,31 @@ class kBmc:
             cur_lan_mode=self.Lanmode()
             if cur_lan_mode[0]:
                 if self.LanmodeConvert(lanmode) == self.LanmodeConvert(cur_lan_mode[1]):
-                    printf(' Already {}'.format(self.LanmodeConvert(lanmode,string=True)),log=self.log,log_level=7)
+                    printf(' Already {}'.format(self.LanmodeConvert(lanmode,string=True)),log=env_bmc.get('log'),log_level=7)
                     return self.LanmodeConvert(cur_lan_mode[1],string=True)
                 else:
                     rc=self.Lanmode(lanmode)
                     if rc[0]:
-                        printf(' Set to {}'.format(Get(rc,1)),log=self.log,log_level=5)
+                        printf(' Set to {}'.format(Get(rc,1)),log=env_bmc.get('log'),log_level=5)
 
                         return Get(rc,1)
                     else:
-                        printf(' Can not set to {}'.format(self.LanmodeConvert(lanmode,string=True)),log=self.log,log_level=1)
+                        printf(' Can not set to {}'.format(self.LanmodeConvert(lanmode,string=True)),log=env_bmc.get('log'),log_level=1)
         chkd=False
         _cc_=False
 
         curr_power_status,checked_redfish=self.power_get_status(checked_redfish=False)
+        if curr_power_status[0]==curr_power_status[1]==curr_power_status[2]=='none':
+            #if password issue(???) then checkup password
+            self.find_user_pass()
+            curr_power_status,checked_redfish=self.power_get_status(checked_redfish=False)
         init_power_state={'time':TIME().Int(),'status':curr_power_status}
 
-        for mm in Iterable(self.cmd_module):
+        for mm in Iterable(self.Vars('cmd_module')):
             name=mm.__name__
             if cmd not in ['status','off_on'] + list(mm.power_mode):
-                printf('Unknown command({})'.format(cmd),no_intro=True,log=self.log,log_level=1)
-                self.warn(_type='power',msg="Unknown command({})".format(cmd))
+                printf('Unknown command({})'.format(cmd),no_intro=True,log=env_bmc.get('log'),log_level=1)
+                env_errors.set('power',"Unknown command({})".format(cmd))
                 return False,'Unknown command({})'.format(cmd)
 
             if not isinstance(cmd,str): cmd='status'
@@ -4162,30 +4473,30 @@ class kBmc:
                 rfp=None
                 ok=True
                 err=None
-                if self.redfish and rf:
+                if self.Vars('redfish') and rf:
                     rfp=rf.Power('status')
                 if not IsIn(rfp,['on','off']):
-                    init_rc=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
+                    init_rc=self.run_cmd(mm.cmd_str('ipmi power status'))
                     rfp=init_rc[1][1]
                     ok=init_rc[0]
                     err=init_rc[-1]
                 #ERROR
                 if krc(ok,chk='error'):
-                    printf('Power status got some error',log=self.log,log_level=3)
-                    printf(' - reason : {}'.format(err),log=self.log,no_intro=True,mode='d')
+                    printf('Power status got some error',log=env_bmc.get('log'),log_level=3)
+                    printf(' - reason : {}'.format(err),log=env_bmc.get('log'),no_intro=True,mode='d')
                     if error:
-                        self.error(_type='power',msg=err)
+                        env_errors.set('power',err)
                     #return init_rc[0],init_rc[1] # error the nstop
                     return ok,rfp
                 #Fail
                 elif ok is False:
                     if err == 'canceling':
-                        printf(' Canceling',no_intro=True,log=self.log,log_level=1)
+                        printf(' Canceling',no_intro=True,log=env_bmc.get('log'),log_level=1)
                         return True,'canceling' #cancel
                     else:
-                        printf('Power status got some error',slog=self.log,log_level=3)
-                        printf(' - reason : {}'.format(err),slog=self.log,no_intro=True,mode='d')
-                        self.warn(_type='power',msg="Power status got some error ({})".format(err))
+                        printf('Power status got some error',slog=env_bmc.get('log'),log_level=3)
+                        printf(' - reason : {}'.format(err),slog=env_bmc.get('log'),no_intro=True,mode='d')
+                        env_errors.set('power',"Power status got some error ({})".format(err))
                         time.sleep(3) 
                         continue #Trye with next command
                 #True condition
@@ -4199,11 +4510,11 @@ class kBmc:
                     cmd='on'
                 # Check Pre-Keep up time
                 if pre_keep_up > 0:
-                    chk_pre_keep_up=self.is_up(timeout=pre_keep_up+fail_down_time+300,keep_up=pre_keep_up,cancel_func=cancel_func,keep_down=fail_down_time,mode=mode,init_power_state=init_power_state)
+                    chk_pre_keep_up=self.is_up(timeout=pre_keep_up+fail_down_time+300,keep_up=pre_keep_up,keep_down=fail_down_time,mode=mode,init_power_state=init_power_state)
                     if chk_pre_keep_up[0] is False:
                         return False,chk_pre_keep_up[-1] # pre-keep up condition fail
             #Everything OK then do power 
-            printf('Power {} at {} (limit:{} sec)'.format(cmd,self.ip,timeout),log=self.log,log_level=3)
+            printf('Power {} at {} (limit:{} sec)'.format(cmd,env_ipmi.get('ip'),timeout),log=env_bmc.get('log'),log_level=3)
             chk=0
             rr=0
             fail_down=0
@@ -4215,7 +4526,7 @@ class kBmc:
                 if verify:
                     #if chk == 0 and init_rc[0] and init_status == verify_status:
                     if chk == 0 and ok and init_status == verify_status:
-                        printf('* Already power {}'.format(verify_status),no_intro=None,log=self.log,log_level=1)
+                        printf('* Already power {}'.format(verify_status),no_intro=None,log=env_bmc.get('log'),log_level=1)
                         if chk == verify_num: #Single command then return
                             return True,verify_status
                         #Check next command
@@ -4225,38 +4536,38 @@ class kBmc:
                     # BMC Lan mode Checkup before power on/cycle/reset
                     if checked_lanmode is None and self.LanmodeConvert(lanmode) in [0,1,2] and verify_status in ['on','reset','cycle']:
                        lanmode_rt=LanmodeCheck(lanmode)
-                       printf('Lanmode:{}'.format(lanmode_rt),log=self.log,mode='d')
+                       printf('Lanmode:{}'.format(lanmode_rt),log=env_bmc.get('log'),mode='d')
 
                     if verify_status in ['reset','cycle']:
                          if init_status == 'off':
-                             printf('!! Node state is off. So try power ON instead {}'.format(verify_status),log=self.log,log_level=1)
+                             printf('!! Node state is off. So try power ON instead {}'.format(verify_status),log=env_bmc.get('log'),log_level=1)
                              verify_status='on'
-                printf('* Turn power {}{} '.format(verify_status,'({})'.format(fail_down) if fail_down > 0 else ''),start_newline='auto',end='',log=self.log,log_level=3,scr_dbg=False)
+                printf('* Turn power {}{} '.format(verify_status,'({})'.format(fail_down) if fail_down > 0 else ''),start_newline='auto',end='',log=env_bmc.get('log'),log_level=3,scr_dbg=False)
                 ok=False
                 err_msg=''
                 #_cc_=False
-                if not _cc_ and self.redfish and rf:
-                    printf(' Redfish : Try {}'.format(verify_status),log=self.log,no_intro=None,mode='d')
+                if not _cc_ and self.Vars('redfish') and rf:
+                    printf(' Redfish : Try {}'.format(verify_status),log=env_bmc.get('log'),no_intro=None,mode='d')
                     #_cc_=True
                     ok=rf.Power(verify_status,keep_up=0,keep_down=0,retry=2,timeout=60,keep_init_state_timeout=keep_init_state_timeout_rf,monitor_timeout=monitor_timeout_rf)
                     err_msg=''
                     rc_msg=verify_status
-                    printf(' RF Out: {}'.format(ok),log=self.log,no_intro=None,mode='d')
+                    printf(' RF Out: {}'.format(ok),log=env_bmc.get('log'),no_intro=None,mode='d')
                 #if ok is False:
                 if ok in [False,None]: # Timeout(None) or Error(False) then try with ipmitool command instead Redfish
                     _cc_=True
-                    if  self.redfish and rf:
-                        printf('{} : Try again {}'.format(mm.__name__,verify_status),log=self.log,no_intro=None,mode='d')
+                    if  self.Vars('redfish') and rf:
+                        printf('{} : Try again {}'.format(mm.__name__,verify_status),log=env_bmc.get('log'),no_intro=None,mode='d')
                     else:
-                        printf('{} : Try {}'.format(mm.__name__,verify_status),log=self.log,no_intro=None,mode='d')
-                    rc=self.run_cmd(mm.cmd_str(do_power_mode[rr],passwd=self.passwd),retry=2)
+                        printf('{} : Try {}'.format(mm.__name__,verify_status),log=env_bmc.get('log'),no_intro=None,mode='d')
+                    rc=self.run_cmd(mm.cmd_str(do_power_mode[rr]),retry=2)
                     ok=Get(rc,0)
                     err_msg=Get(Get(rc,1),2,default=Get(Get(rc,1),1))
                     rc_msg=Get(Get(rc,1),1)
                 if krc(ok,chk='error'):
-                    printf(' ! power {} error\n{}'.format(verify_status,err_msg),log=self.log,log_level=3)
+                    printf(' ! power {} error\n{}'.format(verify_status,err_msg),log=env_bmc.get('log'),log_level=3)
                     if error:
-                        self.error(_type='power',msg=err_msg)
+                        env_errors.set('power',err_msg)
                     return ok,err_msg
                 if krc(ok,chk=True):
                     if verify_status in ['reset','cycle']:
@@ -4264,27 +4575,27 @@ class kBmc:
                         if verify:
                             time.sleep(10)
                 else:
-                    printf(' ! power {} fail\n{}'.format(verify_status,err_msg),log=self.log,log_level=3)
-                    self.warn(_type='power',msg="power {} fail".format(verify_status))
+                    printf(' ! power {} fail\n{}'.format(verify_status,err_msg),log=env_bmc.get('log'),log_level=3)
+                    env_errors.set('power',"power {} fail".format(verify_status))
                     time.sleep(5)
                     break # try next command
                 if verify:
-                    printf(' Verify power status : {}'.format(verify_status),log=self.log,no_intro=None,mode='d')
+                    printf(' Verify power status : {}'.format(verify_status),log=env_bmc.get('log'),no_intro=None,mode='d')
                     if verify_status in ['on','up']:
                         cc=TIME().Int()
-                        is_up=self.is_up(timeout=timeout,keep_up=post_keep_up,cancel_func=cancel_func,keep_down=failed_timeout_keep_off,mode=mode,init_power_state=init_power_state)
+                        is_up=self.is_up(timeout=timeout,keep_up=post_keep_up,keep_down=failed_timeout_keep_off,mode=mode,init_power_state=init_power_state)
                         if is_up[0]:
                             kfdt=TIME().Int() # keep fail down time
                             if chk < verify_num:
                                 # It need new line for the next command
-                                printf(self.power_on_tag,no_intro=True,log=self.log,log_level=1)
+                                printf(env_bmc.get('power_on_tag'),no_intro=True,log=env_bmc.get('log'),log_level=1)
                             else: # chk >= verify_num
-                                if end_newline: printf(self.power_on_tag,no_intro=True,log=self.log,log_level=1)
+                                if end_newline: printf(env_bmc.get('power_on_tag'),no_intro=True,log=env_bmc.get('log'),log_level=1)
                                 return True,'on'
                         elif IsIn(Get(Split(is_up[1],'-'),-1),['down','off']) and not chkd:
                             msg=''
                             high_temp=None
-                            sensor_temp=self.run_cmd(mm.cmd_str('sensor',passwd=self.passwd),retry=2)
+                            sensor_temp=self.run_cmd(mm.cmd_str('sensor'),retry=2)
                             if sensor_temp[0]:
                                 for ssi in Split(sensor_temp[1][1],'\n'):
                                     ssi_a=Strip(ssi).split('|')
@@ -4309,17 +4620,17 @@ class kBmc:
                                 if fail_down_time > 0 and not high_temp:
                                     if  TIME().Int() - kfdt  > fail_down_time or (TIME().Int() - total_time / fail_down_time) > 1:
                                         if error:
-                                            self.error(_type='power',msg='Defined keep down(off) time({}sec) over. Maybe Stuck BMC (Try unplug and replug physical AC power for reset BMC)'.format(fail_down_time))
+                                            env_errors.set('power','Defined keep down(off) time({}sec) over. Maybe Stuck BMC (Try unplug and replug physical AC power for reset BMC)'.format(fail_down_time))
                                         return False,'Defined keep down(off) time({}sec) over. Maybe Stuck BMC (Try unplug and replug physical AC power for reset BMC)'.format(fail_down_time)
                                 else: 
                                     if error:
-                                        self.error(_type='power',msg=msg)
+                                        env_errors.set('power',msg)
                                     return False,'Can not make to power UP'
-                            self.warn(_type='power',msg=msg)
-                            printf('{}\n - try again power {} after {}sec{}.'.format(msg,verify_status,retry_sleep,msg_ext),start_newline=True,log=self.log,log_level=1)
+                            env_errors.set('power',msg)
+                            printf('{}\n - try again power {} after {}sec{}.'.format(msg,verify_status,retry_sleep,msg_ext),start_newline=True,log=env_bmc.get('log'),log_level=1)
                             if not high_temp and mc_reset:
                                 if fail_down > 1 and fail_down%2==0 and fail_down < retry:
-                                    printf(' - Mc Reset Cold',no_intro=True,log=self.log,log_level=1)
+                                    printf(' - Mc Reset Cold',no_intro=True,log=env_bmc.get('log'),log_level=1)
                                     self.McResetCold(keep_on=retry_sleep)
                             else:
                                 time.sleep(retry_sleep)
@@ -4327,21 +4638,21 @@ class kBmc:
                             continue
                     elif verify_status in ['off','down']:
                         cc=TIME().Int()
-                        is_down=self.is_down(timeout=timeout,keep_down=post_keep_down,keep_on=failed_timeout_keep_on,cancel_func=cancel_func,mode=mode,init_power_state=init_power_state)
+                        is_down=self.is_down(timeout=timeout,keep_down=post_keep_down,keep_on=failed_timeout_keep_on,mode=mode,init_power_state=init_power_state)
                         if is_down[0]:
                             kfut=TIME().Int() # keep fail up time
                             if chk == len(mm.power_mode[cmd]):
-                                if end_newline: printf(self.power_off_tag,no_intro=True,log=self.log,log_level=1)
+                                if end_newline: printf(env_bmc.get('power_off_tag'),no_intro=True,log=env_bmc.get('log'),log_level=1)
                                 return True,'off'
                             if chk < verify_num:
                                 # It need new line for the next command
                                 if isinstance(off_on_interval,int) and off_on_interval > 0 :
-                                    printf('{} (Wait Interval-Time to ON({}s)...'.format(self.power_off_tag,off_on_interval),no_intro=True,log=self.log,log_level=1)
+                                    printf('{} (Wait Interval-Time to ON({}s)...'.format(env_bmc.get('power_off_tag'),off_on_interval),no_intro=True,log=env_bmc.get('log'),log_level=1)
                                     time.sleep(off_on_interval)
                                 else:
-                                    printf(self.power_off_tag,no_intro=True,log=self.log,log_level=1)
+                                    printf(env_bmc.get('power_off_tag'),no_intro=True,log=env_bmc.get('log'),log_level=1)
                             else: # chk >= verify_num
-                                if end_newline: printf(self.power_off_tag,no_intro=True,log=self.log,log_level=1)
+                                if end_newline: printf(env_bmc.get('power_off_tag'),no_intro=True,log=env_bmc.get('log'),log_level=1)
                                 return True,'off'
                         elif IsIn(Get(Split(is_down[1],'-'),-1),['up','on']) and not chkd:
                             pre_msg=' - Suddenly on' if IsIn(Get(Split(is_down[1],'-'),-2),['off','down']) else ' - Keep on(never off)'
@@ -4349,17 +4660,17 @@ class kBmc:
                                 if fail_up_time > 0:
                                     if  TIME().Int() - kfut  > fail_up_time or (TIME().Int() - total_time / fail_up_time) > 1:
                                         if error:
-                                            self.error(_type='power',msg='Defined keep up(on) time({}sec) over. Maybe Stuck BMC (Try unplug and replug physical AC power for reset BMC)'.format(fail_up_time))
+                                            env_errors.set('power','Defined keep up(on) time({}sec) over. Maybe Stuck BMC (Try unplug and replug physical AC power for reset BMC)'.format(fail_up_time))
                                         return False,'Defined keep up(on) time({}sec) over. Maybe Stuck BMC (Try unplug and replug physical AC power for reset BMC)'.format(fail_up_time)
                                 else:
                                     if error:
-                                        self.error(_type='power',msg='{} and Can not make to power DOWN'.format(pre_msg))
+                                        env_errors.set('power','{} and Can not make to power DOWN'.format(pre_msg))
                                     return False,'{} and Can not make to power DOWN'.format(pre_msg)
-                            self.warn(_type='power',msg="Something weird. Looks BMC issue, {} and can't power down".format(pre_msg))
-                            printf(" - Something weird. Looks BMC issue, {} and can't power down after power {} command.\n - Try again power {}".format(pre_msg,verify_status,verify_status),start_newline=True,log=self.log,log_level=1)
+                            env_errors.set('power',"Something weird. Looks BMC issue, {} and can't power down".format(pre_msg))
+                            printf(" - Something weird. Looks BMC issue, {} and can't power down after power {} command.\n - Try again power {}".format(pre_msg,verify_status,verify_status),start_newline=True,log=env_bmc.get('log'),log_level=1)
                             if mc_reset:
                                 if fail_down > 1 and fail_down%2==0 and fail_down < retry:
-                                    printf(' - Mc Reset Cold',no_intro=True,log=self.log,log_level=1)
+                                    printf(' - Mc Reset Cold',no_intro=True,log=env_bmc.get('log'),log_level=1)
                                     self.McResetCold(keep_on=20)
                             else:
                                 time.sleep(20)
@@ -4374,35 +4685,35 @@ class kBmc:
                             for i in range(0,60):
                                 i_rc=False
                                 i_rc_msg_a=[]
-                                if self.redfish and rf:
+                                if self.Vars('redfish') and rf:
                                     rfp=rf.Power('status')
                                     if IsIn(rfp,['on','off']):
                                        i_rc=True
                                        i_rc_msg_a=rfp.split()
                                 if i_rc is False:
-                                    i_rc=self.run_cmd(mm.cmd_str('ipmi power status',passwd=self.passwd))
+                                    i_rc=self.run_cmd(mm.cmd_str('ipmi power status'))
                                     i_rc_msg=Get(Get(i_rc,1),1)
                                     i_rc_msg_a=Split(i_rc_msg)
                                 if krc(i_rc,chk=True) and i_rc_msg_a: 
                                     if i_rc_msg_a[-1] == 'off':
-                                        printf( self.power_off_tag ,no_intro=True,log=self.log,log_level=1)
+                                        printf(env_bmc.get('power_off_tag') ,no_intro=True,log=env_bmc.get('log'),log_level=1)
                                         chkd=True
                                         rr+=1
                                         chk+=1
                                         break
-                                    printf(self.power_on_tag if i_rc_msg_a[-1] == 'on' else self.power_off_tag ,direct=True,log=self.log,log_level=1)
+                                    printf(env_bmc.get('power_on_tag') if i_rc_msg_a[-1] == 'on' else env_bmc.get('power_off_tag') ,direct=True,log=env_bmc.get('log'),log_level=1)
                                 else:
-                                    printf(self.power_unknown_tag,direct=True,log=self.log,log_level=1)
+                                    printf(env_bmc.get('power_unknown_tag'),direct=True,log=env_bmc.get('log'),log_level=1)
                                 time.sleep(2)
                             continue
-                    if end_newline: printf(self.power_on_tag if verify_status== 'on' else self.power_off_tag ,no_intro=True,log=self.log,log_level=1)
+                    if end_newline: printf(env_bmc.get('power_on_tag') if verify_status== 'on' else env_bmc.get('power_off_tag') ,no_intro=True,log=env_bmc.get('log'),log_level=1)
                     #return True,Get(Get(rc,1),1)
                     return True,rc_msg
             #can not verify then try with next command
             time.sleep(3)
         if chkd:
-            printf(' - It looks BMC issue. (Need reset the physical power)',log=self.log,log_level=1)
-            self.error(_type='power',msg="It looks BMC issue. (Need reset the physical power)")
+            printf(' - It looks BMC issue. (Need reset the physical power)',log=env_bmc.get('log'),log_level=1)
+            env_errors.set('power',"It looks BMC issue. (Need reset the physical power)")
             return False,'It looks BMC issue. (Need reset the physical power)'
         return False,'time out'
 
@@ -4431,13 +4742,13 @@ class kBmc:
         if not mm:
             return False,msg
         if self.LanmodeConvert(lanmode) in [0,1,2]:
-            rc=self.run_cmd(mm.cmd_str("""ipmi oem lani {}""".format(self.LanmodeConvert(lanmode)),passwd=self.passwd),timeout=5)
+            rc=self.run_cmd(mm.cmd_str("""ipmi oem lani {}""".format(self.LanmodeConvert(lanmode))),timeout=5)
             if krc(rc,chk=True):
                 return True,self.LanmodeConvert(lanmode,string=True)
             #return rc
             return False,Get(Get(rc,1),1)
         else:
-            rc=self.run_cmd(mm.cmd_str("""ipmi oem lani""",passwd=self.passwd))
+            rc=self.run_cmd(mm.cmd_str("""ipmi oem lani"""))
             if krc(rc,chk=True):
                 if IsIn(lanmode,['info','support']):
                     return True,Get(Get(rc,1),1)
@@ -4447,73 +4758,15 @@ class kBmc:
                         return True,a[0]
             return False,None
 
-    def error(self,_type=None,msg=None,clear=False,_type_output=None,log_mode='d'):
-        # _type:
-        #  ip : ip address issue (format, port issue)
-        #  net : network issue (can't ping, can not access, ...)
-        #  user_pass : BMC user/password issue
-        #  power : Power control issue
-        #  break : make break to whole BMC process or not
-        #  None  : Any Error then error
-        # _type_output: str or value : return error value(dictionary's value)
-        #              None         : return error (dictionary type)
-        # clear: True: remove error condition
-        if _type and (msg or clear):
-            if clear:
-                if _type in self.err:
-                    printf("Remove '{}' from ERROR".format(_type),log=self.log,dsp=log_mode)
-                    self.err.pop(_type)
-            else:
-                printf("Mark '{}' to ERROR : {}".format(_type,msg),log=self.log,dsp=log_mode)
-                caller_name=FunctionName(parent=2)
-                caller_name='{}() : '.format(caller_name) if isinstance(caller_name,str) else ''
-                msg='{}{}'.format(caller_name,msg)
-                if _type in self.err:
-                    self.err[_type][TIME().Int()]=msg
-                else:
-                    self.err[_type]={TIME().Int():msg}
-        else:
-            if not _type:
-                if self.err: return True,self.err
-                return False,'OK'
-            else:
-                get_msg=self.err.get(_type,None)
-                if get_msg:
-                    if _type_output in [str,'str','value']:
-                        return True,list(get_msg.values())[-1]
-                    return True,get_msg
-                return False,None
-
-    def warn(self,_type=None,msg=None,log_mode='d'):
-        if _type and msg:
-            caller_name=FunctionName(parent=2)
-            caller_name='{}() : '.format(caller_name) if isinstance(caller_name,str) else ''
-            msg='{}{}'.format(caller_name,msg)
-            printf("Mark '{}' to WARN : {}".format(_type,msg),log=self.log,dsp=log_mode)
-            if _type in self.warning:
-                self.warning[_type][TIME().Int()]=msg
-            else:
-                self.warning[_type]={TIME().Int():msg}
-        else:
-            if not _type:
-                if self.warning: return True,self.warning
-                return False,None
-            else:
-                get_msg=self.warning.get(_type,None)
-                if get_msg: return True,get_msg
-                return False,None
-
-    def cancel(self,cancel_func=None,msg=None,log=None,log_level=1,log_mode='s',parent=2,task_all_stop=True,cancel_args={}):
+    def cancel(self,msg=None,log=None,log_level=1,log_mode='s',parent=2,task_all_stop=True,cancel_args={}):
         #task_all_stop : True, stop kBMc all, False, Only check current step for cancel() 
-        if log is None: log=self.log
-        if self.canceling:
-            printf('Already Canceled from somewhere!',log=log,mode='d')
-            return self.canceling
+        if env_breaking.exist('break'):
+            printf('Already Canceled from somewhere!',log=env_bmc.get('log'),mode='d')
+            return True
         else:
-            if cancel_func is None: cancel_func=self.cancel_func
-            if not cancel_args: cancel_args=self.cancel_args
-            if not isinstance(cancel_args,dict): cancel_args={}
-            if IsBreak(cancel_func,log=log,log_level=log_level,**cancel_args):
+            cancel_func=env_breaking.get('cancel_func')
+            cancel_args=env_breaking.get('cancel_args',default={})
+            if IsBreak(cancel_func,log=env_bmc.get('log'),log_level=log_level,**cancel_args):
                 caller_name=FunctionName(parent=parent)
                 caller_name='{}()'.format(caller_name) if isinstance(caller_name,str) else ''
                 if msg :
@@ -4521,15 +4774,15 @@ class kBmc:
                 else:
                     msg='{} : Got Cancel Signal'.format(caller_name)
                 printf(msg,log=log,log_level=log_level,mode=log_mode)
-                printf('It canceled by cancel method "{}"'.format(cancel_func),log=log,mode='d')
+                printf('It canceled by cancel method "{}" with {}'.format(cancel_func,cancel_args),log=env_bmc.get('log'),mode='d')
                 if task_all_stop:
-                    self.canceling[TIME().Int()]=msg
+                    env_breaking.set('break',msg)
                 return True
         return False
 
     def is_admin_user(self,**opts):
         admin_id=opts.get('admin_id',2)
-        defined_user=self.__dict__.get('user')
+        defined_user=env_ipmi.get('user')
         found=None
         for mm in Iterable(self.cmd_module):
             #name=mm.__name__
@@ -4541,10 +4794,10 @@ class kBmc:
                         if str(admin_id) in i_a:
                             if Get(i_a,-1) == 'ADMINISTRATOR':
                                 found=Get(i_a,1)
-                                if defined_user == Get(i_a,1):
+                                if defined_user == found:
                                     return True,found
                 else:
-                    if self.no_find_user_pass is True: break
+                    if self.Vars('no_find_user_pass') is True: break
                     ok,user,passwd=self.find_user_pass()
                     if not ok: break
         return False,found
@@ -4592,9 +4845,9 @@ class kBmc:
                     if os.path.isfile(screen_tmp_file): os.unlink(screen_tmp_file)
                     return False,msg
                 for i in range(0,2):
-                    cmd_str_dict=mm.cmd_str(cmd,passwd=self.passwd)
+                    cmd_str_dict=mm.cmd_str(cmd)
                     if cmd_str_dict[0]:
-                        base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':self.ip,'user':self.user,'passwd':self.passwd})
+                        base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':env_ipmi.get('ip'),'user':env_ipmi.get('user'),'passwd':env_ipmi.get('passwd')})
                         cmd_str='''{} {}'''.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
                     rc=rshell('''screen -c {} -dmSL {} {}'''.format(screen_tmp_file,FixApostrophe(title),cmd_str))
                     if rc[0] == 0:
@@ -4607,7 +4860,7 @@ class kBmc:
                         omsg=rc[2]
                         break
                     elif rc[0] == 1:
-                        if self.no_find_user_pass is True:
+                        if self.Vars('no_find_user_pass') is True:
                             return False,'Error for IPMI USER or Password'
                         ok,ipmi_user,ipmi_pass=self.find_user_pass()
                         if not ok:
@@ -4629,7 +4882,7 @@ class kBmc:
             mm,msg=self.get_cmd_module_name('ipmitool')
             if not mm:
                 return enable,rate,channel,port,'~~~ console=ttyS1,{}'.format(rate)
-            rc=self.run_cmd(mm.cmd_str("""sol info""",passwd=self.passwd))
+            rc=self.run_cmd(mm.cmd_str("""sol info"""))
             if krc(rc,chk=True):
                 for ii in Split(rc[1][1],'\n'):
                     ii_a=Split(ii)
@@ -4816,15 +5069,15 @@ class kBmc:
             if not mm:
                 return False,msg
             for i in range(0,2):
-                cmd_str_dict=mm.cmd_str('sol activate',passwd=self.passwd)
+                cmd_str_dict=mm.cmd_str('sol activate')
                 if cmd_str_dict[0]:
-                    base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':self.ip,'user':self.user,'passwd':self.passwd})
+                    base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':env_ipmi.get('ip'),'user':env_ipmi.get('user'),'passwd':env_ipmi.get('passwd')})
                     cmd_str='{} {}'.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
                     rc=rshell(cmd_str,interactive=True)
                     if krc(rc,chk=True):
                         return True,Get(rc,1)
                     elif i < 1:
-                        if self.no_find_user_pass is True:
+                        if self.Vars('no_find_user_pass') is True:
                             return False,'Error for IPMI USER or Password'
                         ok,user,passwd=self.find_user_pass()
                         if not ok:
@@ -4836,33 +5089,7 @@ class kBmc:
             return _monitor_(title,find,timeout,session_out,stdout)
 
     def Ping(self,host=None,**opts):
-        if not host: host=self.ip
-        if not opts.get('cancel_func'):
-            opts['cancel_func']=self.cancel
-        if opts.get('cancel_arg'):
-            opts['cancel_args']=opts.pop('cancel_arg')
-        elif not opts.get('cancel_args'):
-            opts['cancel_args']=self.cancel_args
-        opts['count']=1
-        opts['log_format']='i'
-        sping=ping(host,**opts) #check simple network (1 time ping check) for speed up check network
-        if sping: 
-            if isinstance(self.error,dict): #pinging now So remove network error when previously it has error
-                if 'net' in self.error:
-                    self.error.pop('net')
-            return True
-        else: # if failed simple network check then 
-            opts['timeout']=Int(opts.get('timeout'),1200)
-            if 'count' in opts: opts.pop('count') # remove count for check timeout
-            printf(' Check network of IP({}) (timeout:{}s)'.format(host,opts.get('timeout',1200)),log=self.log,log_level=4,dsp='f')
-            prc=ping(host,**opts)
-            if prc:
-                if isinstance(self.error,dict): #pinging now So remove network error when previously it has error
-                    if 'net' in self.error:
-                        self.error.pop('net')
-            return prc
-      
-
+        return Ping(host,**opts)
 ##############
 # Example)
 # bmc=kBmc.kBmc(ipmi_ip,ipmi_user,ipmi_pass,test_pass=['ADMIN','Admin'],test_user=['ADMIN','Admin'],timeout=1800,cmd_module=[Ipmitool(),Smcipmitool(smc_file=smc_file)])
