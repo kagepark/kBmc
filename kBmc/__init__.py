@@ -25,6 +25,9 @@ import json
 import kmport
 import threading
 from kmport import *
+printf_caller_detail=None
+printf_caller_tree=None
+printf_log_base=6
 kmport.krc_ext='shell'
 env_ipmi=Environment(name='__Ipmi__')
 env_global=Environment(name='__Global__')
@@ -42,8 +45,13 @@ env_bmc=Environment(name='__kBmc_Global__',
         tag_working='>',
         tag_fail='x',
         ipmi_interface='lanplus',
-        ipmi_cipher=3)
+        ipmi_cipher=3,
+        printf_caller_detail=printf_caller_detail,
+        printf_caller_tree=printf_caller_tree,
+        printf_log_base=printf_log_base
+        )
 
+bmc_ips=['ip','ipmi_ip','host','bmc_ip']
 #printf_ignore_empty=True
 
 # cancel() : True : Cancel whole bmc process
@@ -61,7 +69,7 @@ env_bmc=Environment(name='__kBmc_Global__',
 def Ping(host=None,**opts):
     log=opts.get('log',Vars('log'))
     error_category=opts.get('error_dest',opts.get('error_title',opts.get('error_category')))
-    if not host: host=opts.get('ip',opts.get('host',opts.get('ipmi_ip',Vars('ip,host'))))
+    if not host: host=opts.get('ip',opts.get('host',opts.get('ipmi_ip',Vars(bmc_ips))))
     if not IpV4(host,support_hostname=True):
         msg=f"destination({host}) is not IP format or hostname"
         if error_category:
@@ -120,169 +128,6 @@ def Ping(host=None,**opts):
         printf(env_bmc.get('tag_unknown'),log=log,direct=True)
         time.sleep(interval)
     return False
-
-#def Vars(obj=None,key=None,value={None},append=False,default=None,shared_name=None,read_key_split=','):
-#    bmc_available_share_name=['env_bmc','bmc','kBmc','kbmc']
-#    global_avail_share_name=['__Global__','env_ipmi','ipmi','env_eth','ethernet','eth','lan','__Lan__']
-#    available_share_name=bmc_available_share_name+global_avail_share_name
-#    # if exist shared_name then adding/updating data at the shared global variable in all module of single program
-#    # Vars(key) : searching shared global variable and my class's global variable
-#    # Vars(key,value) : put value at exisint shared global variable or create/update in my class's global variable
-#    # append=True: if list then append
-#    # default : not found key then return the default
-#    def _vars_(obj=None,key=None,value={None},append=False,default=None,shared_name=None,read_key_split=','):
-#        if key:
-#            if value != {None}:
-#                if (isinstance(key,str) and read_key_split in key) or isinstance(key,(list,tuple)):
-#                    return False
-#                #Write Data
-#                #if shared_name then adding data at shared(global) parameter
-#                if shared_name in available_share_name:
-#                    # Special set
-#                    if shared_name in global_avail_share_name:
-#                        if append: # for list
-#                            if env_ipmi.exists(key):
-#                                if isinstance(env_ipmi.get(key),list):
-#                                    if isinstance(value,list):
-#                                        a=env_ipmi.get(key)
-#                                        for i in value:
-#                                            a.append(i)
-#                                    else:
-#                                        env_ipmi.get(key).append(value)
-#                                    return True
-#                                else:
-#                                    return default
-#                            else:
-#                                if instance(value,list):
-#                                    env_ipmi.set(key,value)
-#                                else:
-#                                    env_ipmi.set(key,[value])
-#                                return True
-#                        else:
-#                            env_ipmi.set(key,value)
-#                            return True
-#                    else:
-#                        if append:
-#                            if env_ipmi.exists(key):
-#                                if isinstance(env_bmc.get(key),list):
-#                                    if isinstance(value,list):
-#                                        a=env_bmc.get(key)
-#                                        for i in value:
-#                                            a.append(i)
-#                                    else:
-#                                        env_bmc.get(key).append(value)
-#                                    return True
-#                                else:
-#                                    return default
-#                            else:
-#                                if isinstance(value,list):
-#                                    env_bmc.set(key,value)
-#                                else:
-#                                    env_bmc.set(key,[value])
-#                                return True
-#                        else:
-#                            env_bmc.set(key,value)
-#                            return True
-#                else:
-#                    # first find env_ipmi
-#                    if env_ipmi.exists(key):
-#                        if append:
-#                            if isinstance(env_ipmi.get(key),list):
-#                                if isinstance(value,list):
-#                                    a=env_ipmi.get(key)
-#                                    for i in value:
-#                                        a.append(i)
-#                                else:
-#                                    env_ipmi.get(key).append(value)
-#                                return True
-#                            else:
-#                                return default
-#                        else:
-#                            env_ipmi.set(key,value)
-#                            return True
-#                    # second find env_bmc
-#                    elif env_bmc.exists(key):
-#                        if append:
-#                            if isinstance(env_ipmi.get(key),list):
-#                                if isinstance(value,list):
-#                                    a=env_ipmi.get(key)
-#                                    for i in value:
-#                                        a.append(i)
-#                                else:
-#                                    env_ipmi.get(key).append(value)
-#                                return True
-#                            else:
-#                                return default
-#                        else:
-#                            env_ipmi.set(key,value)
-#                            return True
-#                    elif obj:
-#                        # if not shared(global) name then append at class's global value
-#                        if append:
-#                            if key in obj.__dict__:
-#                                if isinstance(obj.__dict__[key],list):
-#                                    if isinstance(value,list):
-#                                        for i in value:
-#                                            obj.__dict__[key].append(i)
-#                                    else:
-#                                        obj.__dict__[key].append(value)
-#                                    return True
-#                                else:
-#                                    return default
-#                            else:
-#                                obj.__dict__[key]=[value]
-#                        else:
-#                            obj.__dict__[key]=value
-#                            return True
-#            else: 
-#                # Read DATA
-#                if isinstance(key,str) and read_key_split in key:
-#                    key=key.split(read_key_split)
-#                #if being shared name (special reading
-#                if shared_name in available_share_name:
-#                    if shared_name in global_avail_share_name:
-#                        return env_ipmi.get(key,default)
-#                    else:
-#                        return env_bmc.get(key,default)
-#                else:
-#                    #1. env_ipmi's global value
-#                    if env_ipmi.exists(key):
-#                        return env_ipmi.get(key,default)
-#                    #2. env_bmc's global value
-#                    if env_bmc.exists(key):
-#                        return env_bmc.get(key,default)
-#                    #3. Class's global value
-#                    if obj:
-#                        if isinstance(key,list):
-#                            for k in key:
-#                                if k in obj.__dict__:
-#                                    return obj.__dict__[k]
-#                        else:
-#                            if key in obj.__dict__:
-#                                return obj.__dict__[key]
-#            return default
-#        else:
-#            #Get All DATA
-#            out={}
-#            if obj:
-#                for i in obj.__dict__:
-#                    out[i]=obj.__dict__.get(i)
-#            for i in env_bmc.get():
-#                if i not in out:
-#                    out[i]=env_bmc.get(i)
-#            for i in env_ipmi.get():
-#                if i not in out:
-#                    out[i]=env_ipmi.get(i)
-#            return out
-#    if isinstance(obj,(list,tuple)):
-#        for oo in obj:
-#            if not oo: continue
-#            rt=_vars_(oo,key,value,append,default,shared_name,read_key_split)
-#            if rt != default:
-#                return rt
-#        return default
-#    else:
-#        return _vars_(obj,key,value,append,default,shared_name,read_key_split)
 
 def Vars(key=None,value={None},default=None,name=None,read_key_split=',',class_obj=None):
     def _Set(obj,key,value,class_obj=None):
@@ -387,16 +232,17 @@ def Vars(key=None,value={None},default=None,name=None,read_key_split=',',class_o
     if value=={None}:
         if key:
             #Find any one
-            if key in ['ip','ipmi_ip']:
-                key='ipmi_ip,ip'
-            elif key in ['mac','ipmi_mac']:
-                key='ipmi_mac,mac'
-            elif key in ['user','ipmi_user']:
-                key='ipmi_user,user'
-            elif key in ['passwd','ipmi_pass']:
-                key='ipmi_pass,passwd'
-            elif key in ['passwd_len','ipmi_passwd_len']:
-                key='ipmi_passwd_len,passwd_len'
+            if isinstance(key,str):
+                if key in ['ip','ipmi_ip','bmc_ip']:
+                    key='ipmi_ip,ip'
+                elif key in ['mac','ipmi_mac','bmc_mac']:
+                    key='ipmi_mac,mac'
+                elif key in ['user','ipmi_user']:
+                    key='ipmi_user,user'
+                elif key in ['passwd','ipmi_pass']:
+                    key='ipmi_pass,passwd'
+                elif key in ['passwd_len','ipmi_passwd_len']:
+                    key='ipmi_passwd_len,passwd_len'
             a=_RVar(key,name=name,class_obj=class_obj)[2]
             if a == {None}: return default
             return a
@@ -419,9 +265,9 @@ def Vars(key=None,value={None},default=None,name=None,read_key_split=',',class_o
         _WVar(key,value,name=name,class_obj=class_obj)
 
 def GetBaseInfo(obj,**opts):
-    ip=opts.get('ip',opts.get('host',opts.get('ipmi_ip')))
-    if not IpV4(ip):
-        ip=Vars('host,ip,ipmi_ip',class_obj=obj)
+    ip=IpV4(opts.get('ip',opts.get('host',opts.get('ipmi_ip'))),support_hostname=True)
+    if not ip:
+        ip=IpV4(Vars(bmc_ips,class_obj=obj),support_hostname=True)
     user=opts.get('user',opts.get('ipmi_user',Vars('user',default='ADMIN',class_obj=obj)))
     passwd=opts.get('passwd',opts.get('ipmi_passwd',opts.get('ipmi_pass',Vars('passwd',default=None,class_obj=obj))))
     log=opts.get('log',Vars('log',class_obj=obj))
@@ -554,7 +400,7 @@ class Redfish:
                 'BootOption':'Systems/1/BootOptions',
             }
         self.bmc=opts['bmc'] if 'bmc' in opts else None
-        ip=Get(opts,['ip','host','ipmi_ip'],default=None,err=True,peel='force')
+        ip=Get(opts,bmc_ips,default=None,err=True,peel='force')
         if ip: self.ip=ip
         user=Get(opts,['user','ipmi_user'],default=None,err=True,peel='force')
         if user: self.user=user
@@ -627,7 +473,7 @@ class Redfish:
     def Get(self,cmd,auto_search_passwd_in_bmc=True,**opts):
         ip,user,passwd,log=GetBaseInfo((self,self.bmc),**opts)
         if not isinstance(cmd,str) or not cmd: return False
-        if not IpV4(ip):
+        if not IpV4(ip,support_hostname=True):
             printf("ERROR: Wrong IP({}) format".format(ip),log=log)
             return False,"ERROR: Wrong IP({}) format".format(ip)
         ok=False
@@ -2222,7 +2068,7 @@ class kBmc:
         self.find_user_pass_interval=opts.get('find_user_pass_interval',None)
         self.no_find_user_pass=opts.get('no_find_user_pass',False)
 
-        ip=IpV4(Get(opts,['ip','ipmi_ip','host'],default=None,err=True,peel='force'))
+        ip=IpV4(Get(opts,['ip','ipmi_ip','host','bmc_ip'],default=None,err=True,peel='force'),support_hostname=True)
         if ip: 
             if save_at_global:
                 env_ipmi.set('ip',ip)
@@ -2241,7 +2087,7 @@ class kBmc:
                 env_eth.set('eth_mac',eth_mac)
             else:
                 self.eth_mac=eth_mac
-        eth_ip=IpV4(opts.get('eth_ip'))
+        eth_ip=IpV4(opts.get('eth_ip'),support_hostname=True)
         if eth_ip: 
             if save_at_global:
                 env_eth.set('eth_ip',eth_ip)
@@ -2352,10 +2198,6 @@ class kBmc:
         else:
             self.redfish_hi=redfish_hi
 
-        global printf_log_base
-        printf_log_base=6
-        global printf_caller_detail
-        global printf_caller_tree
         self.checked_ip=False
         self.checked_port=False
         self.power_monitor_stop=False
@@ -2378,7 +2220,7 @@ class kBmc:
         if rf: return rf
         if not force and not self.Vars('redfish'):
             printf("Not support redfish({}) and not force({}) check redfish".format(self.Vars('redfish'),force),log=env_bmc.get('log'),log_level=1,dsp='d')
-            #return False
+            return False
         rf=Redfish(bmc=self)
         self.Vars('rf',rf)
         return rf
@@ -2919,6 +2761,11 @@ class kBmc:
             printf(data_info,log=self.Vars('log'),log_level=1)
 
     def power_monitor(self,timeout=1800,monitor_status=['off','on'],keep_off=0,keep_on=0,sensor_on_monitor=900,sensor_off_monitor=0,monitor_interval=5,reset_after_unknown=0,start=True,background=False,status_log=False,**opts):
+        ip,cur_user,cur_passwd,log=GetBaseInfo(self,**opts)
+        #Check Network Error Condition
+        err,msg=IsError(f'NET,IP,{ip},user_pass')
+        if err:
+            return False
         #timeout       : monitoring timeout
         #monitor_status: monitoring status off -> on : ['off','on'], on : ['on'], off:['off']
         #keep_off: off state keeping time : 0: detected then accept
@@ -2995,40 +2842,44 @@ class kBmc:
         return False
 
     def check(self,cancel_func=None,trace=False,timeout=None):
+        ip,cur_user,cur_passwd,log=GetBaseInfo(self,**opts)
+        #Check Network Error Condition
+        err,msg=IsError(f'NET,IP,{ip}')
+        if err:
+            return False
         #This function check ip,user,password
-        if timeout is None: timeout=self.Vars('timeout')
-        ip=self.Vars('host,ip')
-        ping_rc=Ping(keep_good=0,timeout=timeout)
-        if ping_rc is True:
+        timeout=Int(timeout,default=Int(self.Vars('timeout'),default=300))
+        if Ping(keep_good=0,timeout=timeout):
             if self.Vars('checked_port') is False:
                 cc=False
                 direct_print=False
                 for i in range(0,10):
-                    if IpV4(ip,port=self.Vars('port')):
+                    if IpV4(ip,port=self.Vars('port'),support_hostname=True):
                         self.Vars('checked_ip',True)
                         self.Vars('checked_port',True)
                         cc=True
                         break
-                    printf(".",log=self.Vars('log'),direct=True)
+                    printf(".",log=log,direct=True)
                     direct_print=True
                     time.sleep(3)
-                if direct_print: printf(".",no_intro=True,log=self.Vars('log'),log_level=1)
+                if direct_print: printf(".",no_intro=True,log=log,log_level=1)
                 if cc is False:
-                    printf("{} is not IPMI IP(2)".format(ip),log=self.Vars('log'),log_level=1,dsp='e')
-                    IsError('IP',"{} is not IPMI IP(2)".format(ip))
-                    return False,ip,self.Vars('user'),self.Vars('passwd')
+                    printf("{} is not IPMI IP(2)".format(ip),log=log,log_level=1,dsp='e')
+                    IsError('IP',f"{ip} is not IPMI IP")
+                    return False,ip,cur_user,cur_passwd
             ok,user,passwd=self.find_user_pass(trace=trace,check_only=True if self.Vars('no_find_user_pass') else False)
             if ok:
-                if self.Vars('user') != user:
-                    printf('Update User from {} to {}'.format(user,self.Vars('user')),log=self.Vars('log'),log_level=1,dsp='e')
+                if cur_user != user:
+                    printf(f'Update User from {cur_user} to {user}',log=log,log_level=1,dsp='e')
                     self.Vars('user',user)
-                if self.Vars('passwd')!= passwd:
-                    printf('Update Password from {} to {}'.format(passwd,self.Vars('passwd')),log=self.Vars('log'),log_level=1,dsp='e')
+                if cur_passwd!= passwd:
+                    printf(f'Update Password from {cur_passwd} to {passwd}',log=log,log_level=1,dsp='e')
                     self.Vars('passwd',passwd)
                 rc=True
         else:
-            printf('Destination Host({}) Unreachable/Network problem'.format(ip),log=self.Vars('log'),log_level=1,dsp='e')
-            IsError(ip,'Destination Host({}) Unreachable/Network problem'.format(ip))
+            msg=f'Unreachable/Network problem to {ip}'
+            printf(msg,log=log,log_level=1,dsp='e')
+            IsError(ip,msg)
         return rc,ip,self.Vars('user'),self.Vars('passwd')
 
     def get_cmd_module_name(self,name):
@@ -3128,7 +2979,7 @@ class kBmc:
         # None : Not found
         # True : Found
         ip,cur_user,cur_passwd,log=GetBaseInfo(self,**opts)
-        if IsInt(monitor_interval,mode=int): monitor_interval=Int(self.Vars('find_user_pass_interval'),default=3)
+        monitor_interval=Int(monitor_interval,default=Int(self.Vars('find_user_pass_interval'),default=3))
         # Check Network
         err,msg=IsError(f'NET,IP,{ip}')
         if err:
@@ -3161,7 +3012,6 @@ class kBmc:
         test_passwd=MoveData(test_passwd,cur_passwd,to='first') # move current passwd
         if isinstance(first_passwd,str) and first_passwd:
             test_passwd=MoveData(test_passwd,first_passwd,to='first') # move want first check passwd
- 
         tt=1
         #if len(self.test_passwd) > default_range: tt=2
         tt=(len(test_passwd) // default_range) + 1
@@ -3186,7 +3036,7 @@ class kBmc:
                     while pp < len(test_pass_sample):
                         if IsNone(test_pass_sample[pp]): continue  #If password is None then skip
                         #Check ping first before try password
-                        if Ping(ip,keep_good=0,timeout=300,log_info='i'): # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
+                        if Ping(ip,keep_good=0,timeout=6,log_info='i'): # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
                             tested_user_pass.append((uu,test_pass_sample[pp]))
                             cmd_str=mm.cmd_str(check_cmd,passwd=test_pass_sample[pp])
                             full_str=cmd_str[1]['base'].format(ip=ip,user=uu,passwd=test_pass_sample[pp])+' '+cmd_str[1]['cmd']
@@ -3214,6 +3064,7 @@ class kBmc:
                                     printf("""[BMC]Found New Password({})""".format(test_pass_sample[pp]),log=log,log_level=3,mode='d',no_intro=None)
                                     printf('.',log=log,no_intro=True)
                                     self.Vars('passwd',test_pass_sample[pp])
+                                IsError('user_pass',remove=True)
                                 return True,uu,test_pass_sample[pp]
                             #If it has multi test password then mark to keep testing password
                             else:
@@ -3227,22 +3078,24 @@ class kBmc:
                                     printf('''Failed message: {}\nTry with "{}" and "{}"'''.format(Get(rc,2),uu,test_pass_sample[pp]),no_intro=None,log=log,dsp='d')
                                     time.sleep(monitor_interval) # make to some slow check for BMC locking
                         else:
-                            printf("""Can not ping to the destination IP({}). So check over 30min to stable ping (over 30s)""".format(ip),log=log,log_level=1,dsp='d')
-                            err,msg=IsError(f'NET,IP,{ip}')
-                            if err:
+                            msg=f"""Can not ping to the {ip}"""
+                            if error:
                                 printf(msg,log=log,log_level=1,dsp='w')
+                                IsError(ip,msg)
                                 return False,None,None
-                            if Ping(ip,keep_good=30,timeout=1800,log_info='i'): # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
+
+                            printf("""So check to stable ping (timeout:30min)""",log=log,log_level=1,dsp='d',end='')
+                            if Ping(ip,keep_good=10,timeout=1800): # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
                                 # Comeback ping
                                 # Try again with same password
                                 continue
                             # Ping error or timeout
-                            printf("""WARN: Can not ping to the destination IP({})""".format(ip),log=log,log_level=1,dsp='w')
+                            msg=f"""WARN: Can not ping to the {ip} over 30min"""
+                            printf(msg,log=log,log_level=1,dsp='w')
                             if error:
-                                IsError(ip,"Can not ping to the destination IP({})".format(ip))
+                                IsError(ip,msg)
                             return False,None,None
                         pp+=1
-                        #if self.cancel(): #Canceled
                         if Cancel(self,**opts): #Canceled
                             printf(f"Last Tested user({uu}) password({test_pass_sample[pp]}) before stopped by cancel",log=log,log_level=3)
                             return False,None,None
@@ -3254,18 +3107,6 @@ class kBmc:
                         time.sleep(monitor_interval)
                 printf("""-Tried with module {} in password section {}/{}""".format(mm.__name__,t,tt),log=log,mode='d',no_intro=True)
         
-        ##Whole tested but can not find
-        ## Reset BMC and try again
-        #printf(""".""",log=log,no_intro=True)
-        #printf("""no_redfish:{}""".format(no_redfish),log=log,dsp='d')
-        #if mc_reset:
-        #    if not no_redfish and self.Vars('redfish'):
-        #        printf("""Try McResetCold by redfish, Looks BMC issue for ipmitool""",log=log)
-        #        if self.McResetCold(no_ipmitool=True): # Block Loop
-        #            printf("""Reset done. Try again searching user/password""",log=log)
-        #            return self.find_user_pass(default_range=default_range,check_cmd=check_cmd,error=error,trace=trace,no_redfish=True)
-        #        else:
-        #            printf("""Can not reset the BMC by redfish""",log=log)
         printf("""WARN: Can not find working BMC User or password from Password POOL""",log=log,log_level=1,dsp='w')
         printf(""" - Password POOL  : {}""".format(test_passwd),log=log,dsp='d',no_intro=True)
         printf(""" - Tested Password: {}""".format(tested_user_pass),log=log,dsp='d',no_intro=True)
@@ -3275,14 +3116,16 @@ class kBmc:
 
     def McResetCold(self,keep_on=20,no_ipmitool=False,**opts):
         ip,user,passwd,log=GetBaseInfo(self,**opts)
+        #Check Network Error Condition
+        err,msg=IsError(f'NET,IP,{ip},user_pass')
+        if err:
+            return False
         printf("""Call Redfish""",log=log,log_level=1,dsp='d')
         rf=self.CallRedfish(no_ipmitool=no_ipmitool,ip=ip)
         if rf:
             printf("""Mc Reset Cold with Redfish""",log=log,log_level=1,dsp='d')
             return rf.McResetCold(keep_on=keep_on,ip=ip)
         if not no_ipmitool:
-            err,msg=IsError(f'NET,IP,{ip}')
-            if err: return False # if error then error
             printf("""Mc Reset Cold with ipmitool""",log=log,log_level=1,dsp='d')
             return self.reset(post_keep_up=keep_on,ip=ip)
         printf("""E: Can not Reset BMC""",log=log,log_level=1,dsp='d')
@@ -3297,80 +3140,61 @@ class kBmc:
         mm,msg=self.get_cmd_module_name('smc')
         if not mm:
             return False,msg,None
+        #Check Network Error Condition
+        err,msg=IsError(f'NET,IP,{ip}')
+        if err:
+            return False,msg,None
+
         ok,user,passwd=self.find_user_pass(ip=ip)
         if ok:
-            printf("""Previous User({}), Password({}). Found available current User({}), Password({})\n****** Start recovering user/password from current available user/password......\n""".format(was_user,was_passwd,user,passwd),log=log,log_level=3)
+            if was_user != user or was_passwd != passwd:
+                printf(f"""Previous User({was_user}), Password({was_passwd}).
+                        Found available current User({user}), Password({passwd})""",log=log,log_level=3)
         else:
-            err,msg=IsError(f'NET,IP,{ip}')
-            if err:
-                return False,msg,None
-            else:
-                return False,'Can not find current available user and password',None
-        if user == org_user:
-            if passwd == org_passwd:
-                printf("""Same user and passwrd. Do not need recover""",log=log,log_level=4,mode='d')
-                return True,user,passwd
-            else:
-                #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
-                recover_cmd=mm.cmd_str("""user setpwd 2 {}""".format(FixApostrophe(org_passwd)))
-        else:
-            #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
-            recover_cmd=mm.cmd_str("""user add 2 {} {} 4""".format(org_user,FixApostrophe(org_passwd)))
-        printf("""Recover command: {}""".format(recover_cmd),log_level=7,mode='d')
-        rc=self.run_cmd(recover_cmd)
-
-        if krc(rc,chk=True):
-            printf("""Recovered BMC: from User({}) and Password({}) to User({}) and Input Password({})""".format(user,passwd,org_user,org_passwd),log=log,log_level=4)
-            ok2,user2,passwd2=self.find_user_pass(ip=ip,first_user=org_user,first_passwd=org_passwd)
-            if ok2:
-                printf("""Confirmed changed user password to {}:{}""".format(user2,passwd2),log=log,log_level=4)
-            else:
-                return False,"Looks changed command was ok. but can not found acceptable user or password"
-            self.Vars('user',user2)
-            self.Vars('passwd',passwd2)
-            return True,user2,passwd2
-        else:
-            if default_passwd:
-                printf("""Not support {}. Try again with default password({})""".format(org_passwd,default_passwd),log=log,log_level=4)
-                if user == org_user:
-                    #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
-                    recover_cmd=mm.cmd_str("""user setpwd 2 {}""".format(FixApostrophe(default_passwd)))
+            return False,'Can not find current available user and password',None
+        def recover_cmd(chk_user,chk_passwd):
+            printf(f"""** Start recover to {chk_user} and {chk_passwd}""",log=log,log_level=1)
+            recover_cmd=None
+            if user == chk_user:
+                if passwd == chk_passwd:
+                    printf("""Same user and passwrd. Do not need recover""",log=log,log_level=4,mode='d')
+                    return True,user,passwd
                 else:
-                    #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
-                    recover_cmd=mm.cmd_str("""user add 2 {} {} 4""".format(org_user,FixApostrophe(default_passwd)))
-                printf("""Recover command: {}""".format(recover_cmd),log_level=7)
-                rrc=self.run_cmd(recover_cmd)
-                if krc(rrc,chk=True):
-                    printf("""Recovered BMC: from User({}) and Password({}) to User({}) and Default Password({})""".format(user,passwd,org_user,default_passwd),log=log,log_level=4)
-                    ok2,user2,passwd2=self.find_user_pass(ip=ip)
+                    #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
+                    recover_cmd=mm.cmd_str("""user setpwd 2 {}""".format(FixApostrophe(chk_passwd)))
+            elif chk_user:
+                #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
+                recover_cmd=mm.cmd_str("""user add 2 {} {} 4""".format(chk_user,FixApostrophe(chk_passwd)))
+            if recover_cmd:
+                rc=self.run_cmd(recover_cmd)
+                if krc(rc,chk=True):
+                    printf("""Recovered BMC: from User({}) and Password({}) to User({}) and Input Password({})""".format(user,passwd,chk_user,chk_passwd),log=log,log_level=4)
+                    ok2,user2,passwd2=self.find_user_pass(ip=ip,first_user=chk_user,first_passwd=chk_passwd)
                     if ok2:
                         printf("""Confirmed changed user password to {}:{}""".format(user2,passwd2),log=log,log_level=4)
-                        self.Vars('user',user2)
-                        self.Vars('passwd',passwd2)
-                        return True,user2,passwd2
-            if hardcode:
-                printf(f"""Not support original/default password. Looks need more length. So Try again with {hardcode}""",log=log,log_level=4)
-                if user == org_user:
-                    #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
-                    recover_cmd=mm.cmd_str(f"""user setpwd 2 {hardcode}""")
-                else:
-                    #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
-                    recover_cmd=mm.cmd_str(f"""user add 2 {org_user} {hardcode} 4""")
-                printf(f"""Recover command: {recover_cmd}""",mode='d')
-                rrc=self.run_cmd(recover_cmd)
-                if krc(rrc,chk=True):
-                    printf(f"""Recovered BMC: from User({user}) and Password(original/default) to User({org_user}) and Password({hardcode})""",log=self.Vars('log'),log_level=4)
-                    ok2,user2,passwd2=self.find_user_pass(ip=ip)
-                    if ok2:
-                        printf(f"""Confirmed changed user password to {user2}:{passwd2}""",log=self.Vars('log'),log_level=4)
-                        self.Vars('user',user2)
-                        self.Vars('passwd',passwd2)
-                        return True,user2,passwd2
-        warn.set('ipmi_user',msg="Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.")
-        printf("""BMC Password: Recover ERROR!! Please checkup user-lock-mode on the BMC Configure.""",log=log,log_level=1)
+                    else:
+                        return False,"Looks changed command was ok. but can not found acceptable user or password","Looks changed command was ok. but can not found acceptable user or password"
+                    self.Vars('user',user2)
+                    self.Vars('passwd',passwd2)
+                    return True,user2,passwd2
+
+        if org_passwd:
+            ok,uu,pp=recover_cmd(org_user,org_passwd)
+            if ok:
+                return ok,uu,pp
+        if default_passwd:
+            ok,uu,pp=recover_cmd(org_user,default_passwd)
+            if ok:
+                return ok,uu,pp
+        if hardcode:
+            ok,uu,pp=recover_cmd(org_user,hardcode)
+            if ok:
+                return ok,uu,pp
+        msg="Recover ERROR!! Please checkup user-lock-mode on the BMC Configure."
+        warn.set('user_pass',msg=msg)
+        printf(msg,log=log,log_level=1)
         return False,was_user,was_passwd
 
-    #def run_cmd(self,cmd,append=None,path=None,retry=0,timeout=None,return_code={'ok':[0,True],'fail':[]},show_str=False,dbg=False,mode='app',cancel_func=None,peeling=False,progress=False,ip=None,user=None,passwd=None,cd=False,keep_cwd=False,check_password_rc=[],trace_passwd=False,output_log_size=0,auto_reset_bmc_when_bmc_redfish_error=False):
     def run_cmd(self,cmd,**opts):
         ip,user,passwd,log=GetBaseInfo(self,**opts)
         timeout=Int(opts.get('timeout'),0)
@@ -3407,10 +3231,9 @@ class kBmc:
         if not isinstance(append,str):
             append=''
         rc=None
-        #output_log_size=0 # print full
-        err,msg=IsError(f'NET,IP,{ip}')
+        err,msg=IsError(f'NET,IP,{ip},user_pass')
         if err:
-            return False,(-1,f'Network Error: {msg}',f'Network Error: {msg}',0,0,cmd,path),f'Network Error: {msg}'
+            return False,(-1,f'Error: {msg}',f'Error: {msg}',0,0,cmd,path),f'Error: {msg}'
         while peeling:
             if type(cmd)is tuple and len(cmd) == 1:
                 cmd=cmd[0]
@@ -3795,7 +3618,7 @@ class kBmc:
 
     def bootorder(self,mode=None,ipxe=False,persistent=False,force=False,boot_mode={'smc':['pxe','bios','hdd','cd','usb'],'ipmitool':['pxe','ipxe','bios','hdd']},bios_cfg=None,set_bios_uefi=True,pxe_boot_mac=None,**opts):
         ip,user,passwd,log=GetBaseInfo(self,**opts)
-        err,msg=IsError(f'NET,IP,{ip}')
+        err,msg=IsError(f'NET,IP,{ip},user_pass')
         if err: return False, msg
         rc=False,"Unknown boot mode({})".format(mode)
         if not MacV4(pxe_boot_mac): pxe_boot_mac=self.Vars('eth_mac')
@@ -4967,10 +4790,12 @@ class kBmc:
             return _monitor_(title,find,timeout,session_out,stdout)
 
     def Ping(self,host=None,**opts):
+        if 'log' not in opts:
+            opts['log']=self.Vars('log')
         if not IpV4(host,support_hostname=True):
-            host=IpV4(opts.get('ip',opts.get('host',opts.get('ipmi_ip'))),support_hostname=True)
+            host=IpV4(opts.get('ip',opts.get('host',opts.get('ipmi_ip',opts.get('bmc_ip')))),support_hostname=True)
             if not host:
-                host=IpV4(self.Vars('ip,host,ipmi_ip'),support_hostname=True)
+                host=IpV4(self.Vars(bmc_ips),support_hostname=True)
                 if not host:
                     printf(f'Can not ping to the unknown IP({host})',log=opts.get('log'),log_level=1)
                     return False
