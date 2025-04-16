@@ -268,6 +268,8 @@ def GetBaseInfo(obj,**opts):
     ip=IpV4(opts.get('ip',opts.get('host',opts.get('ipmi_ip'))),support_hostname=True)
     if not ip:
         ip=IpV4(Vars(bmc_ips,class_obj=obj),support_hostname=True)
+    if not ip:
+        raise ValueError(f'ERROR: IP Format issue({ip})')
     user=opts.get('user',opts.get('ipmi_user',Vars('user',default='ADMIN',class_obj=obj)))
     passwd=opts.get('passwd',opts.get('ipmi_passwd',opts.get('ipmi_pass',Vars('passwd',default=None,class_obj=obj))))
     log=opts.get('log',Vars('log',class_obj=obj))
