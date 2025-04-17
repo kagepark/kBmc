@@ -101,7 +101,8 @@ def Ping(host=None,**opts):
                         IsError(error_category,remove=True) #pinging now So remove network error when previously it has error
                     IsError(host,remove=True) #pinging now So remove network error when previously it has error
                     return True
-                printf('.',log=log,direct=True)
+                #printf('.',log=log,direct=True)
+                printf(Dot(),log=log,direct=True)
                 time.sleep(interval)
                 continue
             else:
@@ -559,7 +560,8 @@ class Redfish:
                             #Retry
                             # This error message required reset the power to flushing the redfish's garbage configuration
                             self.Power('reset',up=30,sensor=True)
-                            printf('.',direct=True,log=log)
+                            #printf('.',direct=True,log=log)
+                            printf(Dot(),direct=True,log=log)
                             continue 
                         elif ('general error has occurred' in mm):
                             printf(' - Error : {} command : {}'.format(mode,mm),log=log,no_intro=None,mode='d')
@@ -918,7 +920,8 @@ class Redfish:
                         return False
                 if aa is False: # Retry
                     ok=False #error
-                    printf('.',log=log,direct=True,log_level=1)
+                    #printf('.',log=log,direct=True,log_level=1)
+                    printf(Dot(),log=log,direct=True,log_level=1)
                     time.sleep(5)
                     continue
                 # reset group command
@@ -940,7 +943,8 @@ class Redfish:
                             break
                         elif xxx is False:
                             Time.Reset(name='up_state_timeout')
-                            printf('.',log=log,direct=True,log_level=1)
+                            #printf('.',log=log,direct=True,log_level=1)
+                            printf(Dot(),log=log,direct=True,log_level=1)
                             return False
                         elif IsIn(xxx,['up']):
                             if Time.Out(up_state_timeout,name='up_state_timeout'):
@@ -1118,7 +1122,8 @@ class Redfish:
                                         if ok and isinstance(aa,dict):
                                             if aa.get('DeviceEnabled'):
                                                 return aa.get('Ethernet').get('MACAddress')
-            printf('.',direct=True,log=self.Vars('log'),log_level=1)
+            #printf('.',direct=True,log=self.Vars('log'),log_level=1)
+            printf(Dot(),direct=True,log=self.Vars('log'),log_level=1)
             time.sleep(3)
 
     def _Boot_BootSourceOverrideInfo(self,rf_key='Systems/1',**opts):
@@ -1529,7 +1534,8 @@ class Redfish:
                     if chk in _b_.get('support'):
                         return True
 #                        return _b_ #Setup
-                printf('.',direct=True,log=self.Vars('log'),log_level=1)
+                #printf('.',direct=True,log=self.Vars('log'),log_level=1)
+                printf(Dot(),direct=True,log=self.Vars('log'),log_level=1)
                 time.sleep(10)
             return False # Not setup
         else:
@@ -1943,7 +1949,8 @@ class Redfish:
             if isinstance(aa,dict):
                 return True
             else:
-                printf('.',direct=True,log=self.Vars('log'),log_level=1)
+                #printf('.',direct=True,log=self.Vars('log'),log_level=1)
+                printf(Dot(),direct=True,log=self.Vars('log'),log_level=1)
                 time.sleep(1)
                 continue
         return False
@@ -2535,7 +2542,8 @@ class kBmc:
                 data['done_reason']='cancel'
                 if 'worker' in data: data.pop('worker')
                 if status_log:
-                    printf('.',no_intro=True,log=self.Vars('log'),log_level=1)
+                    #printf('.',no_intro=True,log=self.Vars('log'),log_level=1)
+                    printf(Dot(),no_intro=True,log=self.Vars('log'),log_level=1)
                 return
             if not data.get('start'): # not start tag then wait
                 time.sleep(1)
@@ -2545,7 +2553,8 @@ class kBmc:
                 data['done_reason']='stop'
                 if 'worker' in data: data.pop('worker')
                 if status_log:
-                    printf('.',no_intro=True,log=self.Vars('log'),log_level=1)
+                    #printf('.',no_intro=True,log=self.Vars('log'),log_level=1)
+                    printf(Dot(),no_intro=True,log=self.Vars('log'),log_level=1)
                 return
             elif not Ping(keep_good=0,timeout=4,log_info='i'): # not ping then wait
                 data['symbol']='x'
@@ -2575,7 +2584,8 @@ class kBmc:
                             right_start_on-=1
                             right_start_off-=20
                             data['symbol']='.'
-                            if status_log: printf(data['symbol'],log=self.Vars('log'),direct=True,log_level=1)
+                            #if status_log: printf(data['symbol'],log=self.Vars('log'),direct=True,log_level=1)
+                            if status_log: printf(Dot(data['symbol']),log=self.Vars('log'),direct=True,log_level=1)
                             time.sleep(3)
                             continue # 
                 elif curr_power_status.count('on') == 0:
@@ -2584,7 +2594,8 @@ class kBmc:
                             right_start_off-=1
                             right_start_on-=20
                             data['symbol']='.'
-                            if status_log: printf(data['symbol'],log=self.Vars('log'),direct=True,log_level=1)
+                            #if status_log: printf(data['symbol'],log=self.Vars('log'),direct=True,log_level=1)
+                            if status_log: printf(Dot(data['symbol']),log=self.Vars('log'),direct=True,log_level=1)
                             time.sleep(3)
                             continue
                 data['init']['start']={'time':TIME().Int(),'status':curr_power_status}
@@ -3060,11 +3071,13 @@ class kBmc:
                                 #Found Password. 
                                 if self.Vars('user') != uu: #If changed user
                                     printf("""[BMC]Found New User({})""".format(uu),log=log,log_level=3,mode='d',no_intro=None)
-                                    printf('.',log=log,no_intro=True)
+                                    #printf('.',log=log,no_intro=True)
+                                    printf(Dot(),log=log,no_intro=True)
                                     self.Vars('user',uu)
                                 if self.Vars('passwd') != test_pass_sample[pp]: #If changed password
                                     printf("""[BMC]Found New Password({})""".format(test_pass_sample[pp]),log=log,log_level=3,mode='d',no_intro=None)
-                                    printf('.',log=log,no_intro=True)
+                                    #printf('.',log=log,no_intro=True)
+                                    printf(Dot(),log=log,no_intro=True)
                                     self.Vars('passwd',test_pass_sample[pp])
                                 IsError('user_pass',remove=True)
                                 return True,uu,test_pass_sample[pp]
@@ -3605,7 +3618,8 @@ class kBmc:
                                 msg='Set to PXE Config'
                                 printf(msg,log=log,log_level=6)
                                 return True,msg,frc[2]
-                    printf('.',direct=True,log=log,log_level=1)
+                    #printf('.',direct=True,log=log,log_level=1)
+                    printf(Dot(),direct=True,log=log,log_level=1)
                     frc_msg='got {} Config{}'.format(frc[0],' with UEFI mode' if crc[1] else '')
                     time.sleep(6)
                 printf('Can not find {}PXE Config, Currently it {}'.format('i' if ipxe else '',frc_msg),log=log,log_level=6)
@@ -4111,7 +4125,8 @@ class kBmc:
                         if cnt > 5:
                             printf(' Confirm it works',log=log,no_intro=None,mode='d')
                             return False #is is working
-                printf('.',log=log,direct=True,mode='d')
+                #printf('.',log=log,direct=True,mode='d')
+                printf(Dot(),log=log,direct=True,mode='d')
                 time.sleep(3)
             return True #Stuck
         else:
