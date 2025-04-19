@@ -3136,7 +3136,7 @@ class kBmc:
         if err:
             return False
         printf("""Call Redfish""",log=log,log_level=1,dsp='d')
-        rf=self.CallRedfish(no_ipmitool=no_ipmitool,ip=ip)
+        rf=self.CallRedfish()
         if rf:
             printf("""Mc Reset Cold with Redfish""",log=log,log_level=1,dsp='d')
             return rf.McResetCold(keep_on=keep_on,ip=ip)
@@ -3229,7 +3229,7 @@ class kBmc:
         dbg=opts.get('dbg',False)
         show_str=opts.get('show_str',False)
         output_log_size=Int(opts.get('output_log_size'),0)
-        auto_reset_bmc_when_bmc_redfish_error=opts.get('auto_reset_bmc_when_bmc_redfish_error',False)
+        auto_reset_bmc_when_bmc_redfish_error=BoolOperation(opts.get('auto_reset_bmc_when_bmc_redfish_error'),default=False)
         trace_passwd=opts.get('trace_passwd',False)
         keep_cwd=opts.get('keep_cwd',False)
         cd=opts.get('cd',False)
@@ -3393,8 +3393,10 @@ class kBmc:
                     printf('Check IPMI User and Password by {}: Found ({}/{})'.format(rc_err_bmc_user,ipmi_user,ipmi_pass),log=log,log_level=1,dsp='d')
                     if cur_user == ipmi_user and cur_pass == ipmi_pass:
                         printf('Looks Stuck at BMC, So reset the BMC and try again',start_newline=True,log=log,log_level=1,dsp='d')
-                        if not self.McResetCold():
-                            return False,(-1,'Looks Stuck at BMC and Can not reset the BMC','Looks Stuck at BMC and Can not reset the BMC',0,0,cmd_str,path),'reset bmc'
+                        if auto_reset_bmc_when_bmc_redfish_error:
+                            printf('Try to Reset BMC(Cold) according to auto_reset_bmc_when_bmc_redfish_error option',log=log,log_level=1,dsp='d')
+                            if not self.McResetCold():
+                                return False,(-1,'Looks Stuck at BMC and Can not reset the BMC','Looks Stuck at BMC and Can not reset the BMC',0,0,cmd_str,path),'reset bmc'
                     user='{}'.format(ipmi_user)
                     passwd='''{}'''.format(ipmi_pass)
                 else:
@@ -4134,6 +4136,7 @@ class kBmc:
             return True
 
     def do_power(self,cmd,retry=0,verify=False,timeout=1200,post_keep_up=40,post_keep_down=0,pre_keep_up=0,lanmode=None,cancel_func=None,fail_down_time=300,fail_up_time=300,mode=None,command_gap=5,error=True,mc_reset=False,off_on_interval=0,sensor=None,end_newline=True,keep_init_state_timeout_rf=60,monitor_timeout_rf=300,failed_timeout_keep_off=240,failed_timeout_keep_on=120,**opts):
+        auto_reset_bmc_when_bmc_redfish_error=BoolOperation(opts.get('auto_reset_bmc_when_bmc_redfish_error'),default=False)
         #failed_timeout_keep_off:default 240: if keep off state after power action then it will failed power action 
         #failed_timeout_keep_on:default 120: if keep on state after power action then it will failed power action 
         ip,user,passwd,log=GetBaseInfo(self,**opts)
@@ -4345,8 +4348,9 @@ class kBmc:
                             printf('{}\n - try again power {} after {}sec{}.'.format(msg,verify_status,retry_sleep,msg_ext),start_newline=True,log=log,log_level=1)
                             if not high_temp and mc_reset:
                                 if fail_down > 1 and fail_down%2==0 and fail_down < retry:
-                                    printf(' - Mc Reset Cold',no_intro=True,log=log,log_level=1)
-                                    self.McResetCold(keep_on=retry_sleep)
+                                    if auto_reset_bmc_when_bmc_redfish_error:
+                                        printf(' - Mc Reset Cold',no_intro=True,log=log,log_level=1)
+                                        self.McResetCold(keep_on=retry_sleep)
                             else:
                                 time.sleep(retry_sleep)
                             fail_down+=1
@@ -4385,8 +4389,9 @@ class kBmc:
                             printf(" - Something weird. Looks BMC issue, {} and can't power down after power {} command.\n - Try again power {}".format(pre_msg,verify_status,verify_status),start_newline=True,log=log,log_level=1)
                             if mc_reset:
                                 if fail_down > 1 and fail_down%2==0 and fail_down < retry:
-                                    printf(' - Mc Reset Cold',no_intro=True,log=log,log_level=1)
-                                    self.McResetCold(keep_on=20)
+                                    if auto_reset_bmc_when_bmc_redfish_error:
+                                        printf(' - Mc Reset Cold',no_intro=True,log=log,log_level=1)
+                                        self.McResetCold(keep_on=20)
                             else:
                                 time.sleep(20)
                             fail_down+=1
