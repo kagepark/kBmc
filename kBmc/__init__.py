@@ -2172,13 +2172,13 @@ class kBmc:
                 env_bmc.set('test_passwd',test_passwd)
             else:
                 self.test_passwd=test_passwd
-        cancel_args=Get(opts,cancel_args,err=True,default={})
+        cancel_args=Get(opts,'cancel_args',err=True,default={})
         if cancel_args:
             if save_at_global:
                 env_bmc.set('cancel_args',cancel_args)
             else:
                 self.cancel_args=cancel_args
-        cancel_func=Get(opts,cancel_func,err=True,default=None)
+        cancel_func=Get(opts,'cancel_func',err=True,default=None)
         if cancel_func:
             if save_at_global:
                 env_bmc.set('cancel_func',cancel_func)
