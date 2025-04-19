@@ -2172,6 +2172,18 @@ class kBmc:
                 env_bmc.set('test_passwd',test_passwd)
             else:
                 self.test_passwd=test_passwd
+        cancel_args=Get(opts,cancel_args,err=True,default={})
+        if cancel_args:
+            if save_at_global:
+                env_bmc.set('cancel_args',cancel_args)
+            else:
+                self.cancel_args=cancel_args
+        cancel_func=Get(opts,cancel_func,err=True,default=None)
+        if cancel_func:
+            if save_at_global:
+                env_bmc.set('cancel_func',cancel_func)
+            else:
+                self.cancel_func=cancel_func
         dedicated_only=opts.get('dedicated_only')
         if dedicated_only: 
             if save_at_global:
@@ -2986,7 +2998,7 @@ class kBmc:
                 return True,found
         return False,('','','','')
 
-    def find_user_pass(self,default_range=12,check_cmd='ipmi power status',cancel_func=None,cancel_args=None,error=True,trace=False,extra_test_user=[],extra_test_pass=[],no_redfish=False,first_user=None,first_passwd=None,failed_passwd=None,mc_reset=False,monitor_interval=None,check_only=False,**opts):
+    def find_user_pass(self,default_range=12,check_cmd='ipmi power status',cancel_func=None,error=True,trace=False,extra_test_user=[],extra_test_pass=[],no_redfish=False,first_user=None,first_passwd=None,failed_passwd=None,mc_reset=False,monitor_interval=None,check_only=False,**opts):
         #return 
         # False: Error
         # None : Not found
