@@ -4480,6 +4480,23 @@ class kBmc:
                         return True,a[0]
             return False,None
 
+    def error(self,_type=None,msg=None,clear=False,_type_output=None,log_mode='d'):
+        # _type:
+        #  ip : ip address issue (format, port issue)
+        #  net : network issue (can't ping, can not access, ...)
+        #  user_pass : BMC user/password issue
+        #  power : Power control issue
+        #  break : make break to whole BMC process or not
+        #  None  : Any Error then error
+        # _type_output: str or value : return error value(dictionary's value)
+        #              None         : return error (dictionary type)
+        # clear: True: remove error condition
+        return IsError(key=_type,value=msg,remove=clear)
+
+    def warn(self,_type=None,msg=None,log_mode='d'):
+        #No more use
+        return False,None
+
     def cancel(self,msg=None,log_level=1,log_mode='s',parent=2,task_all_stop=True,cancel_args={},**opts):
         ip,user,passwd,log=GetBaseInfo(self,**opts)
         breaked,msg=IsBreak('break')
