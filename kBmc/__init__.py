@@ -3188,10 +3188,10 @@ class kBmc:
                     return True,user,passwd
                 else:
                     #SMCIPMITool.jar IP ID PASS user setpwd 2 <New Pass>
-                    recover_cmd=mm.cmd_str("""user setpwd 2 {}""".format(FixApostrophe(chk_passwd)))
+                    recover_cmd=mm.cmd_str("""user setpwd 2 {}""".format(FixApostropheInString(chk_passwd)))
             elif chk_user:
                 #SMCIPMITool.jar IP ID PASS user add 2 <New User> <New Pass> 4
-                recover_cmd=mm.cmd_str("""user add 2 {} {} 4""".format(chk_user,FixApostrophe(chk_passwd)))
+                recover_cmd=mm.cmd_str("""user add 2 {} {} 4""".format(chk_user,FixApostropheInString(chk_passwd)))
             if recover_cmd:
                 rc=self.run_cmd(recover_cmd)
                 if krc(rc,chk=True):
@@ -4600,7 +4600,7 @@ class kBmc:
                     if cmd_str_dict[0]:
                         base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':ip,'user':user,'passwd':passwd})
                         cmd_str='''{} {}'''.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
-                    rc=rshell('''screen -c {} -dmSL {} {}'''.format(screen_tmp_file,FixApostrophe(title),cmd_str))
+                    rc=rshell('''screen -c {} -dmSL {} {}'''.format(screen_tmp_file,FixApostropheInString(title),cmd_str))
                     if rc[0] == 0:
                         for ii in range(0,50):
                             if os.path.isfile(screen_log_file):
