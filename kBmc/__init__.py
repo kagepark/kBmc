@@ -315,8 +315,8 @@ class Ipmitool:
             if find_executable('ipmitool') is False:
                 self.ready=False
 
-    def Vars(self,key=None,value={None},default=None,shared_name=None):
-        return Vars(key,value,default,shared_name,class_obj=(self,self.bmc))
+    def Vars(self,key=None,value={None},default=None,name=None):
+        return Vars(key,value,default,name,class_obj=(self,self.bmc))
 
     def cmd_str(self,cmd,**opts):
         if not self.Vars('ready'):
@@ -354,8 +354,8 @@ class Smcipmitool:
         self.power_mode=opts.get('power_mode',{'on':['ipmi power up'],'off':['ipmi power down'],'reset':['ipmi power reset'],'off_on':['ipmi power down','ipmi power up'],'on_off':['ipmi power up','ipmi power down'],'cycle':['ipmi power cycle'],'status':['ipmi power status'],'shutdown':['ipmi power softshutdown']})
         self.return_code={'ok':[0,144],'error':[180],'err_bmc_user':[146],'err_connection':[145]}
 
-    def Vars(self,key=None,value={None},default=None,shared_name=None):
-        return Vars(key,value,default,shared_name,class_obj=(self,self.bmc))
+    def Vars(self,key=None,value={None},default=None,name=None):
+        return Vars(key,value,default,name,class_obj=(self,self.bmc))
 
     def cmd_str(self,cmd,**opts):
         cmd_a=Split(cmd)
@@ -419,8 +419,8 @@ class Redfish:
         if cancel_args: self.cancel_args=cancel_args
         self.timeout=Int(Get(opts,['timeout','time_out'],default=None,err=True,peel='force'),default=1800)
 
-    def Vars(self,key=None,value={None},default=None,shared_name=None):
-        return Vars(key,value,default,shared_name,class_obj=(self,self.bmc))
+    def Vars(self,key=None,value={None},default=None,name=None):
+        return Vars(key,value,default,name,class_obj=(self,self.bmc))
 
     def Cmd(self,cmd,**opts):
         ip,user,passwd,log=GetBaseInfo((self,self.bmc),**opts)
@@ -2233,8 +2233,8 @@ class kBmc:
             if i not in self.cmd_module:
                 self.cmd_module.append(i)
 
-    def Vars(self,key=None,value={None},default=None,shared_name=None):
-        return Vars(key,value,default,shared_name,class_obj=self)
+    def Vars(self,key=None,value={None},default=None,name=None):
+        return Vars(key,value,default,name,class_obj=self)
 
     def CallRedfish(self,force=True):
         rf=self.Vars('rf')
@@ -3010,20 +3010,32 @@ class kBmc:
         if err:
             return False,msg,msg
         #Manage user
-        test_user=Uniq(self.Vars('test_user',default=['ADMIN'])[:])
+        test_user=self.Vars('test_user',default=[])
+        if not test_user:
+            test_user=self.Vars('test_user',name='ipmi')
+            if not test_user:
+                test_user=self.Vars('test_user',name='global')
         if extra_test_user:
             for i in Iterable(extra_test_user,split=','):
                 if i not in test_user: test_user.append(i)
+        test_user=Uniq(Iterable(test_user)[:])
         test_user=MoveData(test_user,'ADMIN',to='first')        #Default
         test_user=MoveData(test_user,cur_user,to='first')      #move current user to first
         if isinstance(first_user,str) and first_user:
             test_user=MoveData(test_user,first_user,to='first') #move want user to first
  
         #Manage password
-        test_passwd=Uniq(self.Vars('test_passwd',default=['ADMIN'])[:])
+        test_passwd=self.Vars('test_passwd',default=[])
+        if not test_passwd:
+            test_passwd=self.Vars('test_passwd',name='ipmi')
+            if not test_passwd:
+                test_passwd=self.Vars('test_passwd',name='global')
+                if not test_passwd:
+                    test_passwd=self.Vars('test_pass')
         if extra_test_pass:
             for i in Iterable(extra_test_pass,split=','):
                 if i not in test_passwd: test_passwd.append(i)
+        test_passwd=Uniq(Iterable(test_passwd)[:])
         if isinstance(failed_passwd,str) and failed_passwd:
             for i in Iterable(failed_passwd,split=','): # Append base password
                 test_passwd=MoveData(test_passwd,i,to='last') # move failed passwd to last
@@ -3042,7 +3054,6 @@ class kBmc:
         tt=(len(test_passwd) // default_range) + 1
         tested_user_pass=[]
         print_msg=False
- 
         for mm in Iterable(self.Vars('cmd_module')):
             for t in range(0,tt):
                 if t == 0:
