@@ -3093,12 +3093,12 @@ class kBmc:
                             if chk_user_pass:
                                 #Found Password. 
                                 if self.Vars('user') != uu: #If changed user
-                                    printf("""[BMC]Found New User({})""".format(uu),log=log,log_level=3,mode='d',no_intro=None)
+                                    printf("""Found New User({})""".format(uu),log=log,log_level=3,mode='d',no_intro=None)
                                     #printf('.',log=log,no_intro=True)
                                     printf(Dot(),log=log,no_intro=True)
                                     self.Vars('user',uu)
                                 if self.Vars('passwd') != test_pass_sample[pp]: #If changed password
-                                    printf("""[BMC]Found New Password({})""".format(test_pass_sample[pp]),log=log,log_level=3,mode='d',no_intro=None)
+                                    printf("""Found New Password({})""".format(test_pass_sample[pp]),log=log,log_level=3,mode='d',no_intro=None)
                                     #printf('.',log=log,no_intro=True)
                                     printf(Dot(),log=log,no_intro=True)
                                     self.Vars('passwd',test_pass_sample[pp])
@@ -3112,8 +3112,8 @@ class kBmc:
                                     if not print_msg:
                                         printf("""Check BMC USER and PASSWORD from the POOL:""",end='',log=log,log_level=3)
                                         print_msg=True
-                                    printf("""p""",log=log,direct=True,log_level=3,dsp='n')
-                                    printf('''Failed message: {}\nTry with "{}" and "{}"'''.format(Get(rc,2),uu,test_pass_sample[pp]),no_intro=None,log=log,dsp='d')
+                                    printf(Dot(),log=log,direct=True,log_level=3,dsp='n')
+                                    printf('''Failed message: {} with "{}" and "{}"'''.format(Get(rc,2),uu,test_pass_sample[pp]),no_intro=None,log=log,dsp='d')
                                     time.sleep(monitor_interval) # make to some slow check for BMC locking
                         else:
                             msg=f"""Can not ping to the {ip}"""
@@ -3413,7 +3413,7 @@ class kBmc:
                     if not ok:
                         IsError('user_pass',"Can not find working IPMI USER and PASSWORD")
                         return False,rc,'Can not find working IPMI USER and PASSWORD','user error'
-                    printf('Check IPMI User and Password by {}: Found ({}/{})'.format(rc_err_bmc_user,ipmi_user,ipmi_pass),log=log,log_level=1,dsp='d')
+                    #printf('Check IPMI User and Password by {}: Found ({}/{})'.format(rc_err_bmc_user,ipmi_user,ipmi_pass),log=log,log_level=1,dsp='d')
                     if cur_user == ipmi_user and cur_pass == ipmi_pass:
                         printf('Looks Stuck at BMC, So reset the BMC and try again',start_newline=True,log=log,log_level=1,dsp='d')
                         if auto_reset_bmc_when_bmc_redfish_error:
