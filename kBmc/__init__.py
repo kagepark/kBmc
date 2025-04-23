@@ -3363,7 +3363,8 @@ class kBmc:
                 if 'Function access denied' in Get(rc,1):
                     return False,rc,'Locked BMC'
                 elif rc_0 == 1:
-                    return False,rc,'Command file not found'
+                    #return False,rc,'Command file not found'
+                    return False,rc,rc[2] if Get(rc,2) else 'Command issue'
                 elif rc_0 == 0 or IsIn(rc_0,rc_ok):
                     return True,rc,'ok'
                 elif IsIn(rc_0,rc_err_bmc_redfish): # retry after reset the BMC
@@ -4236,7 +4237,7 @@ class kBmc:
                         return True,'canceling' #cancel
                     else:
                         printf('Power status got some error',log=log,log_level=3)
-                        printf(' - reason : {}'.format(err),log=log,no_intro=True,mode='d')
+                        printf(' - reason : {}'.format(err),log=log,no_intro=None,mode='d')
                         IsError('power',"Power status got some error ({})".format(err))
                         time.sleep(3) 
                         continue #Trye with next command
