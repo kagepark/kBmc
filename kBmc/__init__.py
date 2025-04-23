@@ -2236,7 +2236,7 @@ class kBmc:
     def Vars(self,key=None,value={None},default=None,name=None):
         return Vars(key,value,default,name,class_obj=self)
 
-    def CallRedfish(self,force=True):
+    def CallRedfish(self,force=True,**opts):
         rf=self.Vars('rf')
         if rf: return rf
         if not force and not self.Vars('redfish'):
