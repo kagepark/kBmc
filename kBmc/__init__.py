@@ -184,15 +184,9 @@ def Vars(key=None,value={None},default=None,name=None,read_key_split=',',class_o
                 if a != {None}: return env_errors,k,a
             elif k:
                 # Not special case, just global, ipji, ethernet only
-                a=_Read(env_global,k)
-                if a != {None}:
-                    return env_global,k,a
                 a=_Read(env_ipmi,k)
                 if a != {None}:
                     return env_ipmi,k,a
-                a=_Read(env_eth,k)
-                if a != {None}:
-                    return env_eth,k,a
                 if class_obj:
                     if isinstance(class_obj,(list,tuple)):
                         for oo in class_obj:
@@ -202,6 +196,12 @@ def Vars(key=None,value={None},default=None,name=None,read_key_split=',',class_o
                     else:
                         if k in class_obj.__dict__:
                             return class_obj,k,class_obj.__dict__[k]
+                a=_Read(env_eth,k)
+                if a != {None}:
+                    return env_eth,k,a
+                a=_Read(env_global,k)
+                if a != {None}:
+                    return env_global,k,a
         return None,None,{None}
 
     def _WVar(key,value,name=None,class_obj=None):
@@ -235,15 +235,29 @@ def Vars(key=None,value={None},default=None,name=None,read_key_split=',',class_o
             #Find any one
             if isinstance(key,str):
                 if key in ['ip','ipmi_ip','bmc_ip']:
-                    key='ipmi_ip,ip'
+                    key='ip,ipmi_ip,bmc_ip'
                 elif key in ['mac','ipmi_mac','bmc_mac']:
-                    key='ipmi_mac,mac'
-                elif key in ['user','ipmi_user']:
-                    key='ipmi_user,user'
-                elif key in ['passwd','ipmi_pass']:
-                    key='ipmi_pass,passwd'
-                elif key in ['passwd_len','ipmi_passwd_len']:
-                    key='ipmi_passwd_len,passwd_len'
+                    key='mac,ipmi_mac,bmc_mac'
+                elif key in ['user','ipmi_user','bmc_user']:
+                    key='user,ipmi_user,bmc_user'
+                elif key in ['passwd','ipmi_pass','password','ipmi_passwd','ipmi_password','bmc_pass','bmc_passwd','bmc_password']:
+                    key='passwd,ipmi_passwd,bmc_passwd,ipmi_pass,bmc_pass,password,ipmi_password,bmc_password'
+                elif key in ['passwd_len','ipmi_passwd_len','password_len']:
+                    key='passwd_len,ipmi_passwd_len,password_len'
+                elif key in ['ipmi_upass','upass','uniq_passwd','bmc_upass','upasswd']:
+                    key='upass,uniq_passwd,upasswd,ipmi_upass,bmc_upass'
+                elif key in ['ipmi_opass','org_pass','org_passwd','bmc_opass']:
+                    key='org_passwd,org_pass,ipmi_opass,bmc_opass'
+                elif key in ['test_pass','test_passwd','test_password','test_passwords']:
+                    key='test_pass,test_passwd,test_password,test_passwords'
+                elif key in ['dpass','dpasswd','default_pass','default_passwd','default_password','bmc_dpass']:
+                    key='dpass,dpasswd,default_pass,default_passwd,default_password,bmc_dpass'
+                elif key in ['eth_ip','lan_ip','ethernet_ip']:
+                    key='eth_ip,lan_ip,ethernet_ip'
+                elif key in ['eth_mac','lan_mac','ethernet_mac']:
+                    key='eth_mac,lan_mac,ethernet_mac'
+                elif key in ['cipher','ipmi_cipher','bmc_cipher']:
+                    key='cipher,ipmi_cipher,bmc_cipher'
             a=_RVar(key,name=name,class_obj=class_obj)[2]
             if a == {None}: return default
             return a
@@ -2866,7 +2880,7 @@ class kBmc:
                 return True
         return False
 
-    def check(self,cancel_func=None,trace=False,timeout=None):
+    def check(self,cancel_func=None,trace=False,timeout=None,**opts):
         ip,cur_user,cur_passwd,log=GetBaseInfo(self,**opts)
         #Check Network Error Condition
         err,msg=IsError(f'NET,IP,{ip}')
@@ -2895,10 +2909,10 @@ class kBmc:
             ok,user,passwd=self.find_user_pass(trace=trace,check_only=True if self.Vars('no_find_user_pass') else False)
             if ok:
                 if cur_user != user:
-                    printf(f'Update User from {cur_user} to {user}',log=log,log_level=1,dsp='e')
+                    printf(f'Update User from {cur_user} to {user}',log=log,log_level=1,dsp='w')
                     self.Vars('user',user)
                 if cur_passwd!= passwd:
-                    printf(f'Update Password from {cur_passwd} to {passwd}',log=log,log_level=1,dsp='e')
+                    printf(f'Update Password from {cur_passwd} to {passwd}',log=log,log_level=1,dsp='w')
                     self.Vars('passwd',passwd)
                 rc=True
         else:
@@ -3019,6 +3033,10 @@ class kBmc:
             for i in Iterable(extra_test_user,split=','):
                 if i not in test_user: test_user.append(i)
         test_user=Uniq(Iterable(test_user)[:])
+        org_user=self.Vars('org_user')
+        default_user=self.Vars('default_user')
+        if default_user: test_user=MoveData(test_user,default_user,to='first')
+        if org_user: test_user=MoveData(test_user,org_user,to='first') # move original passwd
         test_user=MoveData(test_user,'ADMIN',to='first')        #Default
         test_user=MoveData(test_user,cur_user,to='first')      #move current user to first
         if isinstance(first_user,str) and first_user:
@@ -3093,15 +3111,15 @@ class kBmc:
                             if chk_user_pass:
                                 #Found Password. 
                                 if self.Vars('user') != uu: #If changed user
+                                    self.Vars('user',uu)
                                     printf("""Found New User({})""".format(uu),log=log,log_level=3,mode='d',no_intro=None)
                                     #printf('.',log=log,no_intro=True)
                                     printf(Dot(),log=log,no_intro=True)
-                                    self.Vars('user',uu)
                                 if self.Vars('passwd') != test_pass_sample[pp]: #If changed password
+                                    self.Vars('passwd',test_pass_sample[pp])
                                     printf("""Found New Password({})""".format(test_pass_sample[pp]),log=log,log_level=3,mode='d',no_intro=None)
                                     #printf('.',log=log,no_intro=True)
                                     printf(Dot(),log=log,no_intro=True)
-                                    self.Vars('passwd',test_pass_sample[pp])
                                 IsError('user_pass',remove=True)
                                 return True,uu,test_pass_sample[pp]
                             #If it has multi test password then mark to keep testing password
@@ -3368,13 +3386,13 @@ class kBmc:
                 elif rc_0 == 0 or IsIn(rc_0,rc_ok):
                     return True,rc,'ok'
                 elif IsIn(rc_0,rc_err_bmc_redfish): # retry after reset the BMC
-                    printf(f'Looks Stuck at BMC because rc({rc_0}) in the condition {rc_err_bmc_redfish}',log=log,log_level=1,dsp='d')
+                    printf(f'Looks Stuck at BMC because rc({rc_0}) in the condition {rc_err_bmc_redfish}\n{Get(rc,1)}\n{Get(rc,2)}',log=log,log_level=1,dsp='d')
                     if auto_reset_bmc_when_bmc_redfish_error:
                         printf('Try to Reset BMC(Cold) according to auto_reset_bmc_when_bmc_redfish_error option',log=log,log_level=1,dsp='d')
                         if not self.McResetCold():
                             return False,(-1,'Looks Stuck at BMC and Can not reset the BMC','Looks Stuck at BMC and Can not reset the BMC',0,0,cmd_str,path),'reset bmc'
                     else:
-                        return False,(-1,'Looks Stuck at BMC','Looks Stuck at BMC',0,0,cmd_str,path),'bmc error'
+                        return False,(rc_0,Get(rc,1),Get(rc,2),0,0,cmd_str,path),'bmc error because rc({rc_0}) in {rc_err_bmc_redfish} condition'
                 elif IsIn(rc_0,rc_err_connection): # retry condition1
                     msg='err_connection'
                     printf('Connection error condition:{}, return:{}'.format(rc_err_connection,Get(rc,0)),start_newline=True,log=log,log_level=7)
@@ -3402,25 +3420,28 @@ class kBmc:
                         IsBreak('break',"Canceling")
                         return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
                     elif ping_rc is False:
-                        printf('Lost Network',start_newline=True,log=log,log_level=1,dsp='d')
-                        IsError(ip,"{} lost network (over 30min)(2)({}-{})".format(ip,ping_start,ping_end))
-                        return False,rc,'Lost Network, Please check your server network(2)'
+                        msg=f'{ip} lost network over 30min ({ping_start}-{ping_end})'
+                        printf(msg,start_newline=True,log=log,log_level=1,dsp='d')
+                        IsError(ip,msg)
+                        return False,rc,msg
                     # Find Password
                     if self.Vars('no_find_user_pass') is True:
-                        return False,rc,'Error for IPMI USER or PASSWORD','user error'
+                        return False,rc,'Error for IPMI USER or PASSWORD'
                     cur_user=self.Vars('user')
                     cur_pass=self.Vars('passwd')
                     ok,ipmi_user,ipmi_pass=self.find_user_pass(failed_passwd=cur_pass)
                     if not ok:
                         IsError('user_pass',"Can not find working IPMI USER and PASSWORD")
-                        return False,rc,'Can not find working IPMI USER and PASSWORD','user error'
-                    #printf('Check IPMI User and Password by {}: Found ({}/{})'.format(rc_err_bmc_user,ipmi_user,ipmi_pass),log=log,log_level=1,dsp='d')
+                        return False,rc,'Can not find working IPMI USER and PASSWORD'
                     if cur_user == ipmi_user and cur_pass == ipmi_pass:
-                        printf('Looks Stuck at BMC, So reset the BMC and try again',start_newline=True,log=log,log_level=1,dsp='d')
+                        printf(f'Looks Stuck at BMC because right user({cur_user}) password({cur_pass}) but return code({rc_0}) is in BMC User error condition({rc_err_bmc_user})',start_newline=True,log=log,log_level=1,dsp='d')
                         if auto_reset_bmc_when_bmc_redfish_error:
                             printf('Try to Reset BMC(Cold) according to auto_reset_bmc_when_bmc_redfish_error option',log=log,log_level=1,dsp='d')
                             if not self.McResetCold():
                                 return False,(-1,'Looks Stuck at BMC and Can not reset the BMC','Looks Stuck at BMC and Can not reset the BMC',0,0,cmd_str,path),'reset bmc'
+                        msg=f"Can not run with user({cur_user}) and password({cur_pass})"
+                        IsError('user_pass',msg)
+                        return False,rc,msg
                     user='{}'.format(ipmi_user)
                     passwd='''{}'''.format(ipmi_pass)
                 else:
@@ -3435,16 +3456,17 @@ class kBmc:
                             IsBreak('break',"Canceling")
                             return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
                         elif ping_rc is False:
-                            printf('Lost Network',log=log,log_level=1,dsp='d')
-                            IsError(ip,"{} lost network (over 30min)(3)({} - {})".format(ip,ping_start,ping_end))
-                            return False,rc,'Lost Network, Please check your server network(3)'
+                            msg=f"{ip} lost network (over 30min)(3)({ping_start} - {ping_end})"
+                            printf(msg,log=log,log_level=1,dsp='d')
+                            IsError(ip,msg)
+                            return False,rc,msg
                         # Find Password
                         if self.Vars('no_find_user_pass') is True:
-                            return False,rc,'Error for IPMI USER or PASSWORD','user error'
+                            return False,rc,'Error for IPMI USER or PASSWORD'
                         ok,ipmi_user,ipmi_pass=self.find_user_pass(ip=ip)
                         if not ok:
                             IsError('user_pass',"Can not find working IPMI USER and PASSWORD")
-                            return False,rc,'Can not find working IPMI USER and PASSWORD','user error'
+                            return False,rc,'Can not find working IPMI USER and PASSWORD'
                         printf('Check IPMI User and Password by ipmitool command: Found ({}/{})'.format(ipmi_user,ipmi_pass),log=log,log_level=1,dsp='d')
                         user='{}'.format(ipmi_user)
                         passwd='''{}'''.format(ipmi_pass)
