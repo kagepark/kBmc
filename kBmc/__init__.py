@@ -3128,7 +3128,8 @@ class kBmc:
                                 if len(test_pass_sample) > 1:
                                     #If not found current password then try next
                                     if not print_msg:
-                                        printf("""Check BMC USER and PASSWORD from the POOL:""",end='',log=log,log_level=3)
+                                        printf(f"Check BMC USER and PASSWORD from the POOL:",end='',log=log,log_level=3)
+                                        printf(f"{test_passwd}",end='',log=log,log_level=3,mode='d',no_intro=None)
                                         print_msg=True
                                     printf(Dot(),log=log,direct=True,log_level=3,dsp='n')
                                     printf('''Failed message: {} with "{}" and "{}"'''.format(Get(rc,2),uu,test_pass_sample[pp]),no_intro=None,log=log,dsp='d')
@@ -3410,7 +3411,7 @@ class kBmc:
                         IsError(ip,"{} lost network (over 30min)(1)({} - {})".format(ip,ping_start,ping_end))
                         return False,rc,'Lost Network, Please check your server network(1)'
                 elif IsIn(rc_0,rc_err_bmc_user) and retry_passwd > 1 and i < 1: # retry condition1
-                    printf('Issue in BMC Login issue({})'.format(rc_err_bmc_user),log=log,log_level=1,dsp='d')
+                    printf('Issue in BMC Login issue({})'.format(rc_err_bmc_user),log=log,log_level=1)
                     #Check connection
                     ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                     ping_rc=Ping(keep_bad=1800,keep_good=0,log_info='i')
