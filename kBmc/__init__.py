@@ -4378,7 +4378,7 @@ class kBmc:
                                 msg_ext='(cool down over 5min)'
                                 retry_sleep=300
                             else:
-                                msg="{} the power over {}".format(pre_msg,Human_Unit(failed_timeout_keep_off,unit='M'))
+                                msg="{} the power over {}".format(pre_msg,Human_Unit(failed_timeout_keep_off,unit='S'))
                                 retry_sleep=20
                                 msg_ext=''
                             if fail_down > retry:
