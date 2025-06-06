@@ -174,14 +174,17 @@ def Vars(key=None,value={None},default=None,name=None,read_key_split=',',class_o
                 a=_Read(env_ipmi,k)
                 if a != {None}: return env_ipmi,k,a
             elif name in ['__Lan__','lan','eth','ethernet']:
-                a=_Read(env_ipmi,k)
-                if a != {None}: return env_ipmi,k,a
+                a=_Read(env_eth,k)
+                if a != {None}: return env_eth,k,a
             elif name in ['__Error__','error']:
                 a=_Read(env_errors,k)
                 if a != {None}: return env_errors,k,a
             elif name in ['__Break__','break']:
                 a=_Read(env_break,k)
-                if a != {None}: return env_errors,k,a
+                if a != {None}: return env_break,k,a
+            elif name in ['kBmc','bmc']:
+                a=_Read(env_bmc,k)
+                if a != {None}: return env_bmc,k,a
             elif k:
                 # Not special case, just global, ipji, ethernet only
                 a=_Read(env_ipmi,k)
@@ -202,6 +205,9 @@ def Vars(key=None,value={None},default=None,name=None,read_key_split=',',class_o
                 a=_Read(env_global,k)
                 if a != {None}:
                     return env_global,k,a
+                a=_Read(env_bmc,k)
+                if a != {None}:
+                    return env_bmc,k,a
         return None,None,{None}
 
     def _WVar(key,value,name=None,class_obj=None):
@@ -257,7 +263,10 @@ def Vars(key=None,value={None},default=None,name=None,read_key_split=',',class_o
                 elif key in ['eth_mac','lan_mac','ethernet_mac']:
                     key='eth_mac,lan_mac,ethernet_mac'
                 elif key in ['cipher','ipmi_cipher','bmc_cipher']:
-                    key='cipher,ipmi_cipher,bmc_cipher'
+                    #key='cipher,ipmi_cipher,bmc_cipher'
+                    key='pmi_cipher'
+                elif key in ['interface','ipmi_interface','bmc_interface']:
+                    key='ipmi_interface'
             a=_RVar(key,name=name,class_obj=class_obj)[2]
             if a == {None}: return default
             return a
@@ -337,8 +346,8 @@ class Ipmitool:
             printf('Install ipmitool package(yum install ipmitool)',log=self.Vars('log'),log_level=1,dsp='e')
             return False,'ipmitool file not found',None,self.Vars('return_code'),None
         cmd_a=Split(cmd)
-        option=opts.get('option',self.Vars('ipmi_interface',default='lanplus'))
-        cipher=opts.get('cipher',self.Vars('ipmi_cipher'))
+        option=opts.get('option',self.Vars('ipmi_interface',default='lanplus',name='kBmc'))
+        cipher=opts.get('cipher',self.Vars('ipmi_cipher',name='kBmc'))
         if IsIn('ipmi',cmd_a,idx=0) and IsIn('power',cmd_a,idx=1) and Get(cmd_a,2) in self.power_mode:
             cmd_a[0] = 'chassis'
         elif IsIn('ipmi',cmd_a,idx=0) and IsIn('reset',cmd_a,idx=1):
