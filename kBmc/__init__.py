@@ -264,7 +264,7 @@ def Vars(key=None,value={None},default=None,name=None,read_key_split=',',class_o
                     key='eth_mac,lan_mac,ethernet_mac'
                 elif key in ['cipher','ipmi_cipher','bmc_cipher']:
                     #key='cipher,ipmi_cipher,bmc_cipher'
-                    key='pmi_cipher'
+                    key='ipmi_cipher'
                 elif key in ['interface','ipmi_interface','bmc_interface']:
                     key='ipmi_interface'
             a=_RVar(key,name=name,class_obj=class_obj)[2]
