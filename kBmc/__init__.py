@@ -2014,10 +2014,11 @@ class Redfish:
     def McResetCold(self,keep_on=30,rf_key='/Managers/1/Actions/Manager.Reset',**opts):
         printf("""Reset BMC by redfish""",log=self.Vars('log'),dsp='d')
         rc=self.Post(rf_key,**opts)
+        ip,user,passwd,log=GetBaseInfo((self,self.bmc),**opts)
         if rc is True:
              time.sleep(5)
              printf("""Wait until response from BMC""",log=self.Vars('log'),dsp='d')
-             return Ping(keep_good=keep_on)
+             return Ping(ip,keep_good=keep_on)
         return rc
 
     def FactoryDefault(self,keep_on=30,rf_key='/Managers/1/Actions/Oem/SmcManagerConfig.Reset',**opts):
@@ -2582,7 +2583,7 @@ class kBmc:
                     #printf('.',no_intro=True,log=self.Vars('log'),log_level=1)
                     printf(Dot(),no_intro=True,log=self.Vars('log'),log_level=1)
                 return
-            elif not Ping(keep_good=0,timeout=4,log_info='i'): # not ping then wait
+            elif not self.Ping(keep_good=0,timeout=4,log_info='i'): # not ping then wait
                 data['symbol']='x'
                 time.sleep(3)
                 continue
@@ -2881,14 +2882,15 @@ class kBmc:
         return False
 
     def check(self,cancel_func=None,trace=False,timeout=None,**opts):
+        rc=False
         ip,cur_user,cur_passwd,log=GetBaseInfo(self,**opts)
         #Check Network Error Condition
         err,msg=IsError(f'NET,IP,{ip}')
         if err:
-            return False
+            return False,ip,cur_user,cur_passwd
         #This function check ip,user,password
         timeout=Int(timeout,default=Int(self.Vars('timeout'),default=300))
-        if Ping(keep_good=0,timeout=timeout):
+        if Ping(ip,keep_good=0,timeout=timeout):
             if self.Vars('checked_port') is False:
                 cc=False
                 direct_print=False
@@ -3400,7 +3402,7 @@ class kBmc:
                     printf('Connection Error:',log=log,log_level=1,dsp='d',direct=True)
                     #Check connection
                     ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                    ping_rc=Ping(keep_bad=1800,keep_good=0,log_info='i')
+                    ping_rc=Ping(ip,keep_bad=1800,keep_good=0,log_info='i')
                     ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                     if ping_rc == 0:
                         IsBreak('break',"Canceling")
@@ -3414,7 +3416,7 @@ class kBmc:
                     printf('Issue in BMC Login issue({})'.format(rc_err_bmc_user),log=log,log_level=1)
                     #Check connection
                     ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                    ping_rc=Ping(keep_bad=1800,keep_good=0,log_info='i')
+                    ping_rc=Ping(ip,keep_bad=1800,keep_good=0,log_info='i')
                     ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                     if ping_rc == 0:
                         printf(' !! Canceling Job',start_newline=True,log=log,log_level=1,dsp='d')
@@ -3450,7 +3452,7 @@ class kBmc:
                         printf('Issue of ipmitool command',log=log,log_level=1,dsp='d')
                         #Check connection
                         ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                        ping_rc=Ping(keep_bad=1800,keep_good=0,log_info='i')
+                        ping_rc=Ping(ip,keep_bad=1800,keep_good=0,log_info='i')
                         ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                         if ping_rc == 0:
                             printf(' !! Canceling Job',log=log,log_level=1,dsp='d')
