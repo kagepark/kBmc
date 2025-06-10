@@ -125,7 +125,8 @@ def Ping(host=None,**opts):
             breaked,msg=IsBreak(cancel_func,**cancel_args)
             if breaked:
                 printf(msg,log=log,dsp=log_mode)
-                break
+                timeout=30 # reduce timeout for Cancel function
+                #break
         printf(env_bmc.get('tag_unknown'),log=log,direct=True)
         time.sleep(interval)
     return False
@@ -3288,8 +3289,8 @@ class kBmc:
         cd=opts.get('cd',False)
         progress=opts.get('progress',False)
         peeling=opts.get('peeling',False)
-        cancel_func=opts.get('cancel_func')
-        cancel_args=opts.get('cancel_args')
+#        cancel_func=opts.get('cancel_func')
+#        cancel_args=opts.get('cancel_args')
         mode=opts.get('mode','app')
         path=opts.get('path')
         if 'check_password_rc' in opts:
@@ -3354,9 +3355,6 @@ class kBmc:
  - Path     : %s
  - Timeout  : %-15s  - Progress : %s
  - Check_RC : %s'''%(cmd_str,path,timeout,progress,return_code),log=log,log_level=1,dsp=cmd_show)
-                #if self.cancel():
-                if Cancel(self,**opts):
-                    return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
                 #BMC Remote shell need network
                 err,msg=IsError(f'NET,IP,{ip}')
                 if err:
@@ -3503,6 +3501,10 @@ class kBmc:
                                 return False,rc,'unknown issue'
                         except:
                             return 'unknown',rc,'Unknown result'
+
+                #Canceled. So no more keep running
+                if Cancel(self,**opts):
+                    return False,(-1,'canceling','canceling',0,0,cmd_str,path),'canceling'
         if rc is None:
             return False,(-1,'No more test','',0,0,cmd_str,path),'Out of testing'
         else:
