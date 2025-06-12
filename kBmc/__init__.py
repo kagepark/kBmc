@@ -86,7 +86,7 @@ def Ping(host=None,**opts):
     log_mode=opts.get('mode',opts.get('log_mode',Vars('log_mode','a')))
     cancel_func=opts.get('cancel_func',env_breaking.get('cancel_func'))
     cancel_args=opts.get('cancel_args',env_breaking.get('cancel_args',default={}))
-    timeout=Int(opts.get('timeout',Vars('timeout')),default=1800)
+    timeout=Int(opts.get('timeout',opts.get('time_out',opts.get('ping_out',Vars('ping_out,timeout,time_out')))),default=1800)
     if log_info != 'i':
         if not log:
             log_info='s'
@@ -498,6 +498,7 @@ class Redfish:
             return False,msg
 
     def Get(self,cmd,auto_search_passwd_in_bmc=True,**opts):
+        timeout=opts.get('timeout',opts.get('time_out',opts.get('ping_out',600)))
         ip,user,passwd,log=GetBaseInfo((self,self.bmc),**opts)
         if not isinstance(cmd,str) or not cmd: return False
         if not IpV4(ip,support_hostname=True):
@@ -505,8 +506,9 @@ class Redfish:
             return False,"ERROR: Wrong IP({}) format".format(ip)
         ok=False
         msg='Redfish Request Error'
+        Time=TIME()
         for i in range(0,2):
-            if Ping(ip,timeout=600,log_info='i'):
+            if Ping(ip,timeout=timeout,log_info='i'):
                 data = WEB().Request(self.Cmd(cmd,host=ip),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=env_bmc.get('log'))
                 ok,msg=self._RfResult_(data)
                 if not ok:
@@ -518,18 +520,20 @@ class Redfish:
                     return False,msg
                 return ok,msg
             else:
-                msg="Can not access the ip({}) over {}min.".format(ip,(i+1)*10)
+                msg="Can not access the ip({}) over {}.".format(ip,Time.Spend(unit='H',integer=False,human_unit=True))
                 printf(msg,log=log,mode='d')
                 ok=False
         return ok,msg
 
     def Post(self,cmd,json=None,data=None,files=None,mode='post',retry=3,patch_reset=False,wait_after_reset=30,auto_search_passwd_in_bmc=True,**opts):
         ip,user,passwd,log=GetBaseInfo((self,self.bmc),**opts)
+        timeout=opts.get('timeout',opts.get('time_out',opts.get('ping_out',1800)))
         #False: Error condition
         #True : Post OK
         #0    : property issue 
-        if not Ping(ip,timeout=1800,log_info='i'):
-            printf("ERROR: Can not access the ip({}) over 30min.".format(host),log=log)
+        Time=TIME()
+        if not Ping(ip,timeout=timeout,log_info='i'):
+            printf("ERROR: Can not access the ip({}) over {}".format(host,Time.Spend(unit='H',integer=False,human_unit=True)),log=log)
             return False
         if not isinstance(cmd,str):
             printf("ERROR: Not support command({})".format(cmd),log=log)
@@ -1965,15 +1969,14 @@ class Redfish:
         return False
 
     def IsEnabled(self,timeout=10,rf_key='Systems',**opts):
-        old=TIME().Int()
-        while TIME().Int() - old < timeout:
+        Time=TIME()
+        while not Time.Out(timeout):
             ok,aa=self.Get(rf_key,**opts)
             if not ok:
                 return False
             if isinstance(aa,dict):
                 return True
             else:
-                #printf('.',direct=True,log=self.Vars('log'),log_level=1)
                 printf(Dot(),direct=True,log=self.Vars('log'),log_level=1)
                 time.sleep(1)
                 continue
@@ -2022,13 +2025,14 @@ class Redfish:
         return out
 
     def McResetCold(self,keep_on=30,rf_key='/Managers/1/Actions/Manager.Reset',**opts):
+        timeout=opts.get('timeout',opts.get('time_out',opts.get('ping_out',1800)))
         printf("""Reset BMC by redfish""",log=self.Vars('log'),dsp='d')
         rc=self.Post(rf_key,**opts)
         ip,user,passwd,log=GetBaseInfo((self,self.bmc),**opts)
         if rc is True:
              time.sleep(5)
              printf("""Wait until response from BMC""",log=self.Vars('log'),dsp='d')
-             return Ping(ip,keep_good=keep_on)
+             return Ping(ip,keep_good=keep_on,timeout=timeout)
         return rc
 
     def FactoryDefault(self,keep_on=30,rf_key='/Managers/1/Actions/Oem/SmcManagerConfig.Reset',**opts):
@@ -3029,6 +3033,7 @@ class kBmc:
         # False: Error
         # None : Not found
         # True : Found
+        timeout=opts.get('timeout',opts.get('time_out',opts.get('ping_out',1800)))
         ip,cur_user,cur_passwd,log=GetBaseInfo(self,**opts)
         monitor_interval=Int(monitor_interval,default=Int(self.Vars('find_user_pass_interval'),default=3))
         # Check Network
@@ -3154,7 +3159,7 @@ class kBmc:
                                 return False,None,None
 
                             printf("""So check to stable ping (timeout:30min)""",log=log,log_level=1,dsp='d',end='')
-                            if Ping(ip,keep_good=10,timeout=1800): # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
+                            if Ping(ip,keep_good=10,timeout=timeout): # Timeout :kBmc defined timeout(default:30min), count:1, just pass when pinging
                                 # Comeback ping
                                 # Try again with same password
                                 continue
@@ -3293,6 +3298,8 @@ class kBmc:
 #        cancel_args=opts.get('cancel_args')
         mode=opts.get('mode','app')
         path=opts.get('path')
+        ping_out=opts.get('ping_out',opts.get('pingout',1800))
+        ping_bad=opts.get('ping_bad',opts.get('pingbad',1200))
         if 'check_password_rc' in opts:
             check_password_rc=opts['check_password_rc']
         else:
@@ -3409,7 +3416,7 @@ class kBmc:
                     printf('Connection Error:',log=log,log_level=1,dsp='d',direct=True)
                     #Check connection
                     ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                    ping_rc=Ping(ip,keep_bad=1800,keep_good=0,log_info='i')
+                    ping_rc=Ping(ip,timeout=ping_out,keep_bad=ping_bad,keep_good=0,log_info='i')
                     ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                     if ping_rc == 0:
                         IsBreak('break',"Canceling")
@@ -3423,7 +3430,7 @@ class kBmc:
                     printf('Issue in BMC Login issue({})'.format(rc_err_bmc_user),log=log,log_level=1)
                     #Check connection
                     ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                    ping_rc=Ping(ip,keep_bad=1800,keep_good=0,log_info='i')
+                    ping_rc=Ping(ip,timeout=ping_out,keep_bad=ping_bad,keep_good=0,log_info='i')
                     ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                     if ping_rc == 0:
                         printf(' !! Canceling Job',start_newline=True,log=log,log_level=1,dsp='d')
@@ -3459,7 +3466,7 @@ class kBmc:
                         printf('Issue of ipmitool command',log=log,log_level=1,dsp='d')
                         #Check connection
                         ping_start=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-                        ping_rc=Ping(ip,keep_bad=1800,keep_good=0,log_info='i')
+                        ping_rc=Ping(ip,timeout=ping_out,keep_bad=ping_bad,keep_good=0,log_info='i')
                         ping_end=datetime.datetime.now().strftime("%Y/%m/%d %H:%M:%S")
                         if ping_rc == 0:
                             printf(' !! Canceling Job',log=log,log_level=1,dsp='d')
@@ -3511,6 +3518,7 @@ class kBmc:
             return False,rc,'Out of testing'
 
     def reset(self,retry=0,post_keep_up=20,pre_keep_up=0,retry_interval=5,cancel_func=None,timeout=1800,**opts):
+        timeout=opts.get('timeout',opts.get('time_out',opts.get('ping_out',1800)))
         ip,user,passwd,log=GetBaseInfo(self,**opts)
         # Check Network
         for i in range(0,1+retry):
@@ -3518,11 +3526,11 @@ class kBmc:
             for mm in Iterable(self.Vars('cmd_module')):
                 err,msg=IsError(f'NET,IP,{ip}')
                 if err: return False,msg
-                if Ping(ip=ip,keep_good=pre_keep_up):
+                if Ping(ip=ip,keep_good=pre_keep_up,timeout=timeout):
                     rc=self.run_cmd(mm.cmd_str('ipmi reset'))
                     if krc(rc,chk=True):
                         time.sleep(5)
-                        if Ping(ip=ip,keep_good=post_keep_up):
+                        if Ping(ip=ip,keep_good=post_keep_up,timeout=timeout):
                             return True,'Pinging to BMC after reset BMC'
                         else:
                             return False,'Can not Pinging to BMC after reset BMC'
@@ -3532,6 +3540,7 @@ class kBmc:
         return False,'Can not Pinging to BMC. I am not reset the BMC. please check the network first!'
 
     def get_mac(self,**opts):
+        timeout=opts.get('timeout',opts.get('time_out',opts.get('ping_out',1800)))
         #Get BMC Mac address
         if self.Vars('mac'):
             return True,self.Vars('mac')
@@ -3541,7 +3550,7 @@ class kBmc:
             for i in range(0,2):
                 err,msg=IsError(f'NET,IP,{ip},user_pass')
                 if err: return False,msg
-                if not Ping(ip,keep_good=0): return False,f'Can not access at {ip}'
+                if not Ping(ip,keep_good=0,timeout=timeout): return False,f'Can not access at {ip}'
                 name=mm.__name__
                 cmd_str=mm.cmd_str('ipmi lan mac')
                 full_str=cmd_str[1]['base'].format(ip=ip,user=user,passwd=passwd)+' '+cmd_str[1]['cmd']
@@ -3569,12 +3578,13 @@ class kBmc:
         return False,None
 
     def dhcp(self,**opts):
+        timeout=opts.get('timeout',opts.get('time_out',opts.get('ping_out',1800)))
         ip,user,passwd,log=GetBaseInfo(self,**opts)
         for mm in Iterable(self.Vars('cmd_module')):
             # Check Network
             err,msg=IsError(f'NET,IP,{ip},user_pass')
             if err: return False,msg
-            if not Ping(ip,keep_good=0): return False,f'Can not access at {ip}'
+            if not Ping(ip,keep_good=0,timeout=timeout): return False,f'Can not access at {ip}'
 
             name=mm.__name__
             rc=self.run_cmd(mm.cmd_str('ipmi lan dhcp'))
@@ -3591,12 +3601,13 @@ class kBmc:
         return False,None
 
     def gateway(self,**opts):
+        timeout=opts.get('timeout',opts.get('time_out',opts.get('ping_out',1800)))
         ip,user,passwd,log=GetBaseInfo(self,**opts)
         for mm in Iterable(self.Vars('cmd_module')):
             # Check Network
             err,msg=IsError(f'NET,IP,{ip},user_pass')
             if err: return False,msg
-            if not Ping(ip,keep_good=0): return False,f'Can not access at {ip}'
+            if not Ping(ip,keep_good=0,timeout=timeout): return False,f'Can not access at {ip}'
 
             name=mm.__name__
             rc=self.run_cmd(mm.cmd_str('ipmi lan gateway'))
@@ -3613,12 +3624,13 @@ class kBmc:
         return False,None
 
     def netmask(self,**opts):
+        timeout=opts.get('timeout',opts.get('time_out',opts.get('ping_out',1800)))
         ip,user,passwd,log=GetBaseInfo(self,**opts)
         for mm in Iterable(self.Vars('cmd_module')):
             # Check Network
             err,msg=IsError(f'NET,IP,{ip}')
             if err: return False,msg
-            if not Ping(ip,keep_good=0): return False,f'Can not access at {ip}'
+            if not Ping(ip,keep_good=0,timeout=timeout): return False,f'Can not access at {ip}'
             name=mm.__name__
             rc=self.run_cmd(mm.cmd_str('ipmi lan netmask'))
             if krc(rc,chk='error'):
@@ -3643,8 +3655,9 @@ class kBmc:
         # Check Network
         ip,user,passwd,log=GetBaseInfo(self,**opts)
         err,msg=IsError(f'NET,IP,{ip},user_pass')
+        timeout=opts.get('timeout',opts.get('time_out',opts.get('ping_out',1800)))
         if err: return False,msg
-        if not Ping(ip,keep_good=0): return False,f'Can not access at {ip}'
+        if not Ping(ip,keep_good=0,timeout=timeout): return False,f'Can not access at {ip}'
 
         if not force:
             crc=self.bootorder(mode='status')
@@ -3664,7 +3677,7 @@ class kBmc:
 
         br_rc=self.bootorder(mode='pxe',ipxe=ipxe,force=True,persistent=persistent,set_bios_uefi=set_bios_uefi,pxe_boot_mac=pxe_boot_mac,ip=ip)
         if br_rc[0]:
-            if self.power('on'):
+            if self.power('on',timeout=timeout):
                 time.sleep(10)
                 frc_msg=''
                 for i in range(0,200):
@@ -3696,6 +3709,7 @@ class kBmc:
 
     def bootorder(self,mode=None,ipxe=False,persistent=False,force=False,boot_mode={'smc':['pxe','bios','hdd','cd','usb'],'ipmitool':['pxe','ipxe','bios','hdd']},bios_cfg=None,set_bios_uefi=True,pxe_boot_mac=None,**opts):
         ip,user,passwd,log=GetBaseInfo(self,**opts)
+        timeout=opts.get('timeout',opts.get('time_out',1800))
         err,msg=IsError(f'NET,IP,{ip},user_pass')
         if err: return False, msg
         rc=False,"Unknown boot mode({})".format(mode)
@@ -3729,7 +3743,7 @@ class kBmc:
                     return False,'Can not power on the server'
                 #Error then next
 
-            if self.power('off',verify=True):
+            if self.power('off',verify=True,timeout=timeout):
                 if self.is_down(timeout=1200,interval=5,sensor_off_monitor=5,keep_off=5)[0]:
 
                     if mode == 'pxe' and IsIn(ipxe,['on',True,'True']):
@@ -4010,8 +4024,9 @@ class kBmc:
         return rf.Network()
 
     def summary(self,**opts): # BMC is ready(hardware is ready)
+        timeout=opts.get('timeout',opts.get('time_out',opts.get('ping_out',1800)))
         ip,user,passwd,log=GetBaseInfo(self,**opts)
-        if Ping(ip,bad=30) is False:
+        if Ping(ip,bad=30,timeout=timeout) is False:
             print('%10s : %s'%("Ping","Fail"))
             return False
         print('%10s : %s'%("Ping","OK"))
