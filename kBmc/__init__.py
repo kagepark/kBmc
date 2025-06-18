@@ -3088,7 +3088,7 @@ class kBmc:
                 first_passwd=first_passwd.split(',')
             if isinstance(first_passwd,(list,tuple)):
                 for fpi in range(len(first_passwd)-1,-1,-1):
-                    test_passwd=MoveData(test_passwd,first_passwd[fp],to='first') # move want first check passwd
+                    test_passwd=MoveData(test_passwd,first_passwd[fpi],to='first') # move want first check passwd
         tt=1
         #if len(self.test_passwd) > default_range: tt=2
         tt=(len(test_passwd) // default_range) + 1
