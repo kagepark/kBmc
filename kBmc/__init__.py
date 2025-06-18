@@ -3082,8 +3082,12 @@ class kBmc:
         if org_passwd: test_passwd=MoveData(test_passwd,org_passwd,to='first') # move original passwd
         test_passwd=MoveData(test_passwd,'ADMIN',to='first')
         test_passwd=MoveData(test_passwd,cur_passwd,to='first') # move current passwd
-        if isinstance(first_passwd,str) and first_passwd:
-            test_passwd=MoveData(test_passwd,first_passwd,to='first') # move want first check passwd
+        if first_passwd:
+            if isinstance(first_passwd,str):
+                first_passwd=first_passwd.split(',')
+            if isinstance(first_passwd,(list,tuple)):
+                for fpi in range(len(first_passwd)-1,-1,-1):
+                    test_passwd=MoveData(test_passwd,first_passwd[fp],to='first') # move want first check passwd
         tt=1
         #if len(self.test_passwd) > default_range: tt=2
         tt=(len(test_passwd) // default_range) + 1
