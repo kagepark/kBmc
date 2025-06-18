@@ -2898,6 +2898,7 @@ class kBmc:
     def check(self,cancel_func=None,trace=False,timeout=None,**opts):
         rc=False
         ip,cur_user,cur_passwd,log=GetBaseInfo(self,**opts)
+        first_passwd=opts.get('first_passwd')
         #Check Network Error Condition
         err,msg=IsError(f'NET,IP,{ip}')
         if err:
@@ -2922,7 +2923,7 @@ class kBmc:
                     printf("{} is not IPMI IP(2)".format(ip),log=log,log_level=1,dsp='e')
                     IsError('IP',f"{ip} is not IPMI IP")
                     return False,ip,cur_user,cur_passwd
-            ok,user,passwd=self.find_user_pass(trace=trace,check_only=True if self.Vars('no_find_user_pass') else False)
+            ok,user,passwd=self.find_user_pass(trace=trace,check_only=True if self.Vars('no_find_user_pass') else False,first_passwd=first_passwd)
             if ok:
                 if cur_user != user:
                     printf(f'Update User from {cur_user} to {user}',log=log,log_level=1,dsp='w')
@@ -3304,6 +3305,7 @@ class kBmc:
         path=opts.get('path')
         ping_out=opts.get('ping_out',opts.get('pingout',1800))
         ping_bad=opts.get('ping_bad',opts.get('pingbad',1200))
+        first_passwd=opts.get('first_password',opts.get('bmc_first_password',opts.get('first_passwd')))
         if 'check_password_rc' in opts:
             check_password_rc=opts['check_password_rc']
         else:
@@ -3377,7 +3379,7 @@ class kBmc:
                         if self.no_find_user_pass is True:
                             return 'error',rc,'Your command got Password error'
                         printf('Password issue, try again after check BMC user/password',start_newline=True,log=log,log_level=4,dsp='d')
-                        ok,ip,user,passwd=self.check(trace=trace_passwd)
+                        ok,ip,user,passwd=self.check(trace=trace_passwd,first_passwd=first_passwd)
                         time.sleep(2)
                         continue
                 except:
@@ -3450,7 +3452,7 @@ class kBmc:
                         return False,rc,'Error for IPMI USER or PASSWORD'
                     cur_user=self.Vars('user')
                     cur_pass=self.Vars('passwd')
-                    ok,ipmi_user,ipmi_pass=self.find_user_pass(failed_passwd=cur_pass)
+                    ok,ipmi_user,ipmi_pass=self.find_user_pass(failed_passwd=cur_pass,first_passwd=first_passwd)
                     if not ok:
                         IsError('user_pass',"Can not find working IPMI USER and PASSWORD")
                         return False,rc,'Can not find working IPMI USER and PASSWORD'
@@ -3484,7 +3486,7 @@ class kBmc:
                         # Find Password
                         if self.Vars('no_find_user_pass') is True:
                             return False,rc,'Error for IPMI USER or PASSWORD'
-                        ok,ipmi_user,ipmi_pass=self.find_user_pass(ip=ip)
+                        ok,ipmi_user,ipmi_pass=self.find_user_pass(ip=ip,first_passwd=first_passwd)
                         if not ok:
                             IsError('user_pass',"Can not find working IPMI USER and PASSWORD")
                             return False,rc,'Can not find working IPMI USER and PASSWORD'
