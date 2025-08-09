@@ -3220,6 +3220,7 @@ class kBmc:
                         if Cancel(self,**opts): #Canceled
                             printf(f"Last Tested user({uu}) password({test_pass_sample[pp]}) before stopped by cancel",log=log,log_level=3)
                             return False,None,None
+                        time.sleep(2)
                     #If it has multi test user then mark to changed user for testing
                     if len(test_user) > 1:
                         if self.Vars('log_level') < 7 and not trace:
