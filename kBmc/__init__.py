@@ -2450,7 +2450,7 @@ class kBmc:
         # count : how many loop
         # printed : fix printing 
         def is_on_off_up(data,mode='a',sensor_time=None,sensor_off_time=420,before=None,checked_redfish=False,on_off_keep_count_for_before=3,on_off_keep_counts=[0,0]):
-            print(f'>>> before:{before} : data:{data}')
+            #print(f'>>> before:{before} : data:{data}')
             #<sensor>,<redfish>,<ipmi/tool>
             # data: [Sensor data(ipmitool/smcipmitool), Redfish data, ipmitool/smcipmitool data)]
             # mode: a: auto, r: redfish only, t: ipmitool only, s: ipmitool sensor temporature only
