@@ -446,21 +446,42 @@ class Redfish:
     def Vars(self,key=None,value={None},default=None,name=None):
         return Vars(key,value,default,name,class_obj=(self,self.bmc))
 
-    def Cmd(self,cmd,**opts):
+    def Cmd(self,cmd,base=None,**opts):
+        #X : /redfish/v1/Systems/1
+        #G : /redfish/v1/Systems/System_0
         ip,user,passwd,log=GetBaseInfo((self,self.bmc),**opts)
-        if cmd.startswith('/redfish/v1'):
-            return "https://{}{}".format(ip,cmd)
-        elif cmd.startswith('redfish/v1'):
-            return "https://{}/{}".format(ip,cmd)
-        elif cmd.startswith('https:') and 'redfish' in cmd.split('/') and ip is None:
-            return "{}".format(cmd)
-        elif cmd.startswith('/'):
-            return "https://{}/redfish/v1{}".format(ip,cmd)
-        else:
-            return "https://{}/redfish/v1/{}".format(ip,cmd)
+        cmd_a=cmd.split('/')
+        if not cmd_a[0]:
+            cmd_a=cmd_a[1:]
+        if base is None:
+            base='/redfish/v1'
+        if base is not False and base != cmd:
+            base_a=base.split('/')
+            if not base_a[0]:
+                base_a=base_a[1:]
+            bi=0
+            for c in range(0,len(cmd_a)):
+                if cmd_a[c] in base_a:
+                    bi=base_a.index(cmd_a[c])
+                else:
+                    break
+            if bi == 0:
+                cmd=f"/{'/'.join(base_a)}/{'/'.join(cmd_a)}"
+            else:
+                if len(cmd_a) > c and cmd_a[c] not in base_a:
+                    cmd=f"/{'/'.join(base_a[:bi+1])}/{'/'.join(cmd_a[c:])}"
+                else:
+                    cmd=f"/{'/'.join(base_a[:bi+1])}"
+        return WEB().url_join(ip,cmd,method='https')
+        #if cmd.startswith('/redfish/v1') or cmd.startswith('redfish/v1'):
+        #    return WEB().url_join(ip,cmd,method='https')
+        #elif cmd.startswith('https:') and 'redfish' in cmd.split('/') and ip is None:
+        #    return WEB().url_join(cmd[6:],method='https')
+        #else:
+        #    return WEB().url_join(ip,base,cmd,method='https')
 
     def _RfResult_(self,data,dbg=False,**opts):
-        ip,user,passwd,log=GetBaseInfo((self,self.bmc),**opts)
+        log=opts.get('log',Vars('log',class_obj=self))
         if isinstance(data,(list,tuple)):
             if dbg: printf(' - code:{}\n - msg:{}'.format(data[1].status_code,data[1].text),no_intro=None,log=log,mode='d')
             if data[0]:
@@ -479,7 +500,7 @@ class Redfish:
                                 err_msg=err_dic.get('Message')
                         if not err_msg:
                             err_msg=err_dic
-                        if isinstance(err_msg,str) and 'unauthorized' in err_msg.lower():
+                        if isinstance(err_msg,str) and ('unauthorized' in err_msg.lower() or 'authorization error' in err_msg.lower()):
                             return False,'unauthorized'
                     if data[1].status_code == 200: #Pass with dictionary
                         return True, data_dic
@@ -509,8 +530,8 @@ class Redfish:
         Time=TIME()
         for i in range(0,2):
             if Ping(ip,timeout=timeout,log_info='i'):
-                data = WEB().Request(self.Cmd(cmd,host=ip),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=env_bmc.get('log'))
-                ok,msg=self._RfResult_(data)
+                base_data = WEB().Request(self.Cmd('/redfish/v1',host=ip),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=env_bmc.get('log'))
+                ok,msg=self._RfResult_(base_data)
                 if not ok:
                     if msg == 'unauthorized':
                         if self.Vars('bmc') and not self.Vars('no_find_user_pass') and auto_search_passwd_in_bmc:
@@ -518,6 +539,21 @@ class Redfish:
                             if ok is True:
                                 continue # Try again with new password
                     return False,msg
+                if cmd != '/redfish/v1':
+                    group=None
+                    for g in cmd.split('/'):
+                        if g and g not in ['redfish','v1']:
+                            group=g
+                            break
+                    if group and group in msg:
+                        data = WEB().Request(self.Cmd(cmd,host=ip,base=msg[group].get('@odata.id')),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=env_bmc.get('log'))
+                    else:
+                        #Get correct path for X,H,B(Systems/1) and G (/Systems/System_0)
+                        base_data = WEB().Request(self.Cmd('Systems',host=ip),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=env_bmc.get('log'))
+                        ok,msg=self._RfResult_(base_data)
+                        #Using correct path for command
+                        data = WEB().Request(self.Cmd(cmd,host=ip,base=msg.get('Members',[{}])[0].get('@odata.id')),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=env_bmc.get('log'))
+                        ok,msg=self._RfResult_(data)
                 return ok,msg
             else:
                 msg="Can not access the ip({}) over {}.".format(ip,Time.Spend(unit='H',integer=False,human_unit=True))
@@ -1988,7 +2024,8 @@ class Redfish:
             if aa[0]:
                 if aa[1].get('Current interface') == 'HTML 5':
                     if mode == 'url':
-                        return True,'https://{}/{}'.format(self.Vars('ip'),aa[1].get('URI'))
+                        #return True,'https://{}/{}'.format(self.Vars('ip'),aa[1].get('URI'))
+                        return True,WEB().url_join(self.Vars('ip'),aa[1].get('URI'),method='https')
                     else:
                         import webbrowser
                         webbrowser.open_new('https://{}/{}'.format(self.Vars('ip'),aa[1].get('URI')))
@@ -2413,6 +2450,7 @@ class kBmc:
         # count : how many loop
         # printed : fix printing 
         def is_on_off_up(data,mode='a',sensor_time=None,sensor_off_time=420,before=None,checked_redfish=False,on_off_keep_count_for_before=3,on_off_keep_counts=[0,0]):
+            print(f'>>> before:{before} : data:{data}')
             #<sensor>,<redfish>,<ipmi/tool>
             # data: [Sensor data(ipmitool/smcipmitool), Redfish data, ipmitool/smcipmitool data)]
             # mode: a: auto, r: redfish only, t: ipmitool only, s: ipmitool sensor temporature only
@@ -2442,6 +2480,8 @@ class kBmc:
                 #if data[2] == 'on':
                 if data[2] == 'on' and on_off_keep_counts[1] >= 3: # [off, off, on] case
                     #How to know this is ipmitool command stuck or not?
+                    if IsIn(before,['on']):
+                        return 'off',sensor_time
                     return 'up',sensor_time
                 else:
                     on_off_keep_counts[1]+=1
@@ -2449,19 +2489,18 @@ class kBmc:
             elif data.count('on') >= 2: # right on
                 on_off_keep_counts=[0,0]
                 return 'on',sensor_time
-            elif IsIn(data[0],['off']) and IsIn(data[1],['up']) and IsIn(data[2],['on']): #right up
-                #if IsIn(before,['on']):
+            elif IsIn(data[0],['off']) and IsIn(data[1],['up','off',False]) and IsIn(data[2],['on']): #right up
                 if IsIn(before,['on']) or (before == 'off' and on_off_keep_counts[0] > 0 and on_off_keep_counts[0] <= on_off_keep_count_for_before):
                     on_off_keep_counts[0]+=1
                     return 'off',sensor_time
                 return 'up',sensor_time
-            #New case, sensor(temporature) and redfish are off but ipmitool command on then return off and up
-            elif IsIn(data[0],['off']) and IsIn(data[1],['off']) and IsIn(data[2],['on']): #right up
-                #if IsIn(before,['on']):
-                if IsIn(before,['on']) or (before == 'off' and on_off_keep_counts[0] > 0 and on_off_keep_counts[0] <= on_off_keep_count_for_before):
-                    on_off_keep_counts[0]+=1
-                    return 'off',sensor_time
-                return 'up',sensor_time
+            ##New case, sensor(temporature) and redfish are off but ipmitool command on then return off and up
+            #elif IsIn(data[0],['off']) and IsIn(data[1],['off',False]) and IsIn(data[2],['on']): #right up
+            #    #if IsIn(before,['on']):
+            #    if IsIn(before,['on']) or (before == 'off' and on_off_keep_counts[0] > 0 and on_off_keep_counts[0] <= on_off_keep_count_for_before):
+            #        on_off_keep_counts[0]+=1
+            #        return 'off',sensor_time
+            #    return 'up',sensor_time
             #Only single data case
             if checked_redfish: # Only working on redfish
                 if IsIn(data[0],[None,False,'none']) and IsIn(data[2],[None,False,'none']):
@@ -2496,6 +2535,8 @@ class kBmc:
                                 return 'off',sensor_time
                             elif IsIn(data[2],['on']):#if ipmitool stuck then how to catch it?
                                 if IsIn(data[0],['off']):
+                                    if IsIn(before,['on']):
+                                        return 'off',sensor_time
                                     return 'up',sensor_time
                             elif IsIn(data[0],['up']):
                                 if IsIn(before,['on']):
@@ -3117,6 +3158,7 @@ class kBmc:
                             cmd_str=mm.cmd_str(check_cmd,passwd=test_pass_sample[pp])
                             full_str=cmd_str[1]['base'].format(ip=ip,user=uu,passwd=test_pass_sample[pp])+' '+cmd_str[1]['cmd']
                             rc=rshell(full_str)
+                            #printf(f""">>> DBG: cmd:{full_str} => {rc}""",log=log,log_level=3,mode='d',no_intro=None)
                             chk_user_pass=False
                             if rc[0] in cmd_str[3]['ok']:
                                 chk_user_pass=True
@@ -4251,7 +4293,10 @@ class kBmc:
         _cc_=False
 
         curr_power_status,checked_redfish=self.power_get_status(checked_redfish=False)
-        if curr_power_status[0]==curr_power_status[1]==curr_power_status[2]=='none':
+        #printf(f'<<<<< DBG:cur:{curr_power_status}, chk rf:{checked_redfish}',no_intro=True,log=log,log_level=1)
+        # Password failed!!!
+        if (curr_power_status[0]==curr_power_status[1]==curr_power_status[2]=='none') or \
+                (curr_power_status[0]==curr_power_status[2]=='none' and curr_power_status[1] is False):
             #if password issue(???) then checkup password
             self.find_user_pass(ip=ip)
             curr_power_status,checked_redfish=self.power_get_status(checked_redfish=False)
