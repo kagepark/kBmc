@@ -546,10 +546,13 @@ class Redfish:
                             group=g
                             break
                     if group and group in msg:
-                        data = WEB().Request(self.Cmd(cmd,host=ip,base=msg[group].get('@odata.id')),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=env_bmc.get('log'))
+                        cmd_str=self.Cmd(cmd,host=ip,base=msg[group].get('@odata.id'))
+                        data = WEB().Request(cmd_str,auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=env_bmc.get('log'))
+                        ok,msg=self._RfResult_(data)
                     else:
+                        cmd_str=self.Cmd('Systems',host=ip)
                         #Get correct path for X,H,B(Systems/1) and G (/Systems/System_0)
-                        base_data = WEB().Request(self.Cmd('Systems',host=ip),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=env_bmc.get('log'))
+                        base_data = WEB().Request(cmd_str,auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=env_bmc.get('log'))
                         ok,msg=self._RfResult_(base_data)
                         #Using correct path for command
                         data = WEB().Request(self.Cmd(cmd,host=ip,base=msg.get('Members',[{}])[0].get('@odata.id')),auth=(user, passwd),ping=True,timeout=30,command_timeout=90,ping_good=10,log=env_bmc.get('log'))
@@ -1203,16 +1206,19 @@ class Redfish:
             naa['error']=aa
             return naa
         naa['cmd']=rf_key
-        boot_info=aa.get('Boot',{})
-        if boot_info:
-            naa['next']=boot_info.get('BootNext')
-            naa['mode']=boot_info.get('BootSourceOverrideMode')
-            naa['1']=boot_info.get('BootSourceOverrideTarget')
-            naa['enable']=boot_info.get('BootSourceOverrideEnabled')
-            naa['order']=[]
-            naa['help']={}
-            if 'BootSourceOverrideMode@Redfish.AllowableValues' in boot_info: naa['help']['mode']=boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues')
-            if 'BootSourceOverrideTarget@Redfish.AllowableValues' in boot_info: naa['help']['boot']=boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues')
+        if 'Boot' in aa and isinstance(aa['Boot'], dict):
+            boot_info=aa['Boot']
+            if boot_info:
+                naa['next']=boot_info.get('BootNext')
+                naa['mode']=boot_info.get('BootSourceOverrideMode')
+                naa['1']=boot_info.get('BootSourceOverrideTarget')
+                naa['enable']=boot_info.get('BootSourceOverrideEnabled')
+                naa['order']=[]
+                naa['help']={}
+                if 'BootSourceOverrideMode@Redfish.AllowableValues' in boot_info: naa['help']['mode']=boot_info.get('BootSourceOverrideMode@Redfish.AllowableValues')
+                if 'BootSourceOverrideTarget@Redfish.AllowableValues' in boot_info: naa['help']['boot']=boot_info.get('BootSourceOverrideTarget@Redfish.AllowableValues')
+        else:
+            printf("[DEBUG] Can not find 'Boot' parameter in the /redfish/v1/Systems/1",log=self.Vars('log'),log_level=1,mode='d')
         return naa
 
     def GetBiosAttributes(self,FindKey=None,FindData=None,boot_attr=None,get_bootkey=False,rf_key='Systems/1/Bios',**opts):
@@ -1265,26 +1271,27 @@ class Redfish:
         ok,fixed_boot_order_info=self.Get(rf_key,**opts)
         if not ok or not isinstance(fixed_boot_order_info,dict):
             return pxe_boot_mac,pxe_mac_id,pxe_boot_macs,mode,orders
-        mode=fixed_boot_order_info.get('BootModeSelected')
-        orders=fixed_boot_order_info.get('FixedBootOrder')
         for i in Iterable(fixed_boot_order_info.get('UEFINetwork')):
             m=self.FindMac(i)
             if m and m not in pxe_boot_macs:
                 pxe_boot_macs.append(m)
-        for i in range(len(orders)):
-            m=self.FindMac(orders[i])
-            if m:
-                pxe_mac=m
-            if pxe_mac and not pxe_mac_id:
-                if pxe_boot_mac:
-                    if pxe_boot_mac in pxe_boot_macs:
-                        if pxe_mac != pxe_boot_mac:
-                            pxe_mac=None
+        mode=fixed_boot_order_info.get('BootModeSelected')
+        orders=fixed_boot_order_info.get('FixedBootOrder')
+        if orders:
+            for i in range(len(orders)):
+                m=self.FindMac(orders[i])
+                if m:
+                    pxe_mac=m
+                if pxe_mac and not pxe_mac_id:
+                    if pxe_boot_mac:
+                        if pxe_boot_mac in pxe_boot_macs:
+                            if pxe_mac != pxe_boot_mac:
+                                pxe_mac=None
+                                continue
+                        elif mode == 'keep':
                             continue
-                    elif mode == 'keep':
-                        continue
-                pxe_mac_id=i
-                break
+                    pxe_mac_id=i
+                    break
         if mode == 'keep' and pxe_boot_mac:
             return pxe_boot_mac,pxe_mac_id,pxe_boot_macs,mode,orders
         #Auto
@@ -1333,10 +1340,11 @@ class Redfish:
             naa['order']=[]
             naa['pxe_boot_id']=pxe_mac_id
             naa['pxe_boot_mac']=pxe_boot_mac
-            for i in range(len(orders)):
-                bb={'name':orders[i],'id':i}
-                BB_INFO(orders[i],bb,attributes=boot_attr)
-                naa['order'].append(bb)
+            if orders:
+                for i in range(len(orders)):
+                    bb={'name':orders[i],'id':i}
+                    BB_INFO(orders[i],bb,attributes=boot_attr)
+                    naa['order'].append(bb)
             return naa
 
         naa=SMC_OEM_SPECIAL_BOOTORDER(next_pxe_id=next_pxe_id,pxe_boot_mac=pxe_boot_mac)
@@ -3795,20 +3803,29 @@ class kBmc:
             if self.power('off',verify=True,timeout=timeout):
                 if self.is_down(timeout=1200,interval=5,sensor_off_monitor=5,keep_off=5)[0]:
 
-                    if mode == 'pxe' and IsIn(ipxe,['on',True,'True']):
-                        # ipmitool -I lanplus -H 172.16.105.74 -U ADMIN -P 'ADMIN' raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00
-                        if persistent:
-                            ipmi_cmd='raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00'
+                    _chk_=self.run_cmd(mm.cmd_str('chassis bootdev'))
+                    possible_mode=[]
+                    if krc(_chk_,chk=True):
+                        for i in _chk_[1][2].split('\n'):
+                            if 'force' in i.lower() and 'boot' in i.lower():
+                                possible_mode.append(i.split(':')[0].strip())
+                        if (mode == 'pxe' and IsIn(ipxe,['on',True,'True'])) or (mode == 'ipxe' and 'pxe' in possible_mode ):
+                            #pxe only with ipxe or pxe
+                            # ipmitool -I lanplus -H 172.16.105.74 -U ADMIN -P 'ADMIN' raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00
+                            if persistent:
+                                ipmi_cmd='raw 0x00 0x08 0x05 0xe0 0x04 0x00 0x00 0x00'
+                            else:
+                                ipmi_cmd='chassis bootdev pxe options=efiboot'
+                            rc=self.run_cmd(mm.cmd_str(ipmi_cmd))
+                            printf("{1} Boot mode set to iPXE at {0}".format(ip,'Persistently' if persistent else 'Temporarily'),log=log,log_level=7)
                         else:
-                            ipmi_cmd='chassis bootdev {0} options=efiboot'.format(mode)
-                        rc=self.run_cmd(mm.cmd_str(ipmi_cmd))
-                        printf("{1} Boot mode set to iPXE at {0}".format(ip,'Persistently' if persistent else 'Temporarily'),log=log,log_level=7)
-                    else:
-                        rc=self.run_cmd(mm.cmd_str('chassis bootdev {0}{1}'.format(mode,' options=persistent' if persistent else '')))
-                        printf("{2} Boot mode set to {0} at {1}".format(mode,ip,'Persistently' if persistent else 'Temporarily'),log=log,log_level=7)
-                    if krc(rc,chk=True):
-                        return True,rc[1][1]
-                    return rc
+                            #mode will pxe,ipxe,disk,cdrom,bios.floppy,.....
+                            rc=self.run_cmd(mm.cmd_str('chassis bootdev {0}{1}'.format(mode,' options=persistent' if persistent else '')))
+                            printf("{2} Boot mode set to {0} at {1}".format(mode,ip,'Persistently' if persistent else 'Temporarily'),log=log,log_level=7)
+                        if krc(rc,chk=True):
+                            return True,rc[1][1]
+                        return rc
+                    return _chk_
                 else:
                     printf('The server still UP over 20min',log=log,log_level=6)
                     return False,'The server still UP over 20min'
@@ -3897,7 +3914,8 @@ class kBmc:
                         status=rf_boot_info.get('order',{}).get('1','').lower()
                         persistent=True if rf_boot_info.get('order',{}).get('enable','') == 'Continuous' else False
                     # if status is False then it can't correctly read Redfish. So keep check with ipmitool
-                    if status is not False:
+                    #if status is not False:
+                    if status:
                         #print('>>>>>rf.Boot() result:',[status,efi,persistent])
                         return [status,efi,persistent]
                 #If received bios_cfg file
@@ -3921,6 +3939,7 @@ class kBmc:
                 #If not special, so get information from ipmitool
                 else:
                     rc=self.run_cmd(mm.cmd_str('chassis bootparam get 5'))
+                    #print('>>> boot order flags:',rc)
                     # Boot Flags :
                     #   - Boot Flag Invalid                # Invalid :not setup, Valid : Setup
                     #   - Options apply to only next boot  # only next boot: one time at next time, all tuture boots : persistent boot
