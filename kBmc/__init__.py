@@ -1348,7 +1348,7 @@ class Redfish:
             return naa
 
         naa=SMC_OEM_SPECIAL_BOOTORDER(next_pxe_id=next_pxe_id,pxe_boot_mac=pxe_boot_mac)
-        if isinstance(naa,dict): return naa
+        if isinstance(naa,dict) and naa.get('mode') and naa.get('pxe_boot_id') is not None: return naa
         #Get BIOS Boot order information
         rf_key='Systems/1/Bios'
         naa={}
