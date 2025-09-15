@@ -34,7 +34,8 @@ env_global=Environment(name='__Global__')
 env_eth=Environment(name='__Lan__')
 env_breaking=Environment(name='__Break__')
 env_error=Environment(name='__Error__')
-#kBmc Module's symbol
+#kBmc Module's symbol (Default values)
+# if ipmi_interface and ipmi_cipher are in env_ipmi then use env_ipmi's value
 env_bmc=Environment(name='__kBmc_Global__',
         power_tag_on='¯',
         power_tag_up='∸',
@@ -347,8 +348,10 @@ class Ipmitool:
             printf('Install ipmitool package(yum install ipmitool)',log=self.Vars('log'),log_level=1,dsp='e')
             return False,'ipmitool file not found',None,self.Vars('return_code'),None
         cmd_a=Split(cmd)
-        option=opts.get('option',self.Vars('ipmi_interface',default='lanplus',name='kBmc'))
-        cipher=opts.get('cipher',self.Vars('ipmi_cipher',name='kBmc'))
+        #option=opts.get('option',self.Vars('ipmi_interface',default='lanplus',name='kBmc'))
+        #cipher=opts.get('cipher',self.Vars('ipmi_cipher',name='kBmc'))
+        option=opts.get('option',opts.get('interface',opts.get('ipmi_interface',opts.get('bmc_interface',self.Vars('ipmi_interface',default='lanplus')))))
+        cipher=opts.get('cipher',opts.get('ipmi_cipher',opts.get('bmc_cipher',self.Vars('ipmi_cipher'))))
         if IsIn('ipmi',cmd_a,idx=0) and IsIn('power',cmd_a,idx=1) and Get(cmd_a,2) in self.power_mode:
             cmd_a[0] = 'chassis'
         elif IsIn('ipmi',cmd_a,idx=0) and IsIn('reset',cmd_a,idx=1):
