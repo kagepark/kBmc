@@ -36,6 +36,8 @@ env_breaking=Environment(name='__Break__')
 env_error=Environment(name='__Error__')
 #kBmc Module's symbol (Default values)
 # if ipmi_interface and ipmi_cipher are in env_ipmi then use env_ipmi's value
+# cipher 3 is normal security
+# but, default is not defined for the cipher for normal case
 env_bmc=Environment(name='__kBmc_Global__',
         power_tag_on='¯',
         power_tag_up='∸',
@@ -46,7 +48,6 @@ env_bmc=Environment(name='__kBmc_Global__',
         tag_working='>',
         tag_fail='x',
         ipmi_interface='lanplus',
-        ipmi_cipher=3,
         printf_caller_detail=printf_caller_detail,
         printf_caller_tree=printf_caller_tree,
         printf_log_base=printf_log_base
