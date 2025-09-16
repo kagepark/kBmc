@@ -4696,7 +4696,7 @@ class kBmc:
                             if Get(i_a,-1) == 'ADMINISTRATOR':
                                 found=Get(i_a,1)
                                 if defined_user == found:
-                                    return True,i_a(0)
+                                    return True,i_a[0]
                         else:
                             if str(admin_id) in i_a:
                                 if Get(i_a,-1) == 'ADMINISTRATOR':
