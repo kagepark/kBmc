@@ -2145,6 +2145,7 @@ class kBmc:
         self.__name__='kBmc'
         save_at_global=opts.get('save_at_global',False)
         self.find_user_passwd_with_redfish=opts.get('find_user_passwd_with_redfish',False)
+
         env=Get(inps,0) if Get(inps,0,err=True) else Get(opts,['ip','ipmi_ip'],default=None,err=True,peel='force')
         ip=None
         if isinstance(env,dict):
@@ -2232,6 +2233,14 @@ class kBmc:
                 env_bmc.set('hardcode',hardcode)
             else:
                 self.hardcode=hardcode
+
+        cipher=Get(opts['cipher','ipmi_cipher','bmc_cipher'])
+        if IsInt(cipher):
+            if save_at_global:
+                env_bmc.set('ipmi_cipher',cipher)
+            else:
+                env_ipmi.set('ipmi_cipher',cipher)
+
         test_user=opts.get('test_user')
         if test_user:
             if isinstance(test_user,str): test_user=test_user.split(',')
