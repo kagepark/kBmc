@@ -4681,8 +4681,9 @@ class kBmc:
 
     def is_admin_user(self,**opts):
         ip,user,passwd,log=GetBaseInfo(self,**opts)
-        admin_id=opts.get('admin_id',2)
-        defined_user=self.Vars('user')
+        #admin_id=opts.get('admin_id',2)
+        admin_id=opts.get('admin_id')
+        defined_user=opts.get('find_user',opts.get('user',self.Vars('user')))
         found=None
         for mm in Iterable(self.cmd_module):
             #name=mm.__name__
@@ -4691,11 +4692,17 @@ class kBmc:
                 if krc(rc,chk=True):
                     for i in Split(Get(Get(rc,1),1),'\n'):
                         i_a=Strip(i).split()
-                        if str(admin_id) in i_a:
+                        if admin_id is None:
                             if Get(i_a,-1) == 'ADMINISTRATOR':
                                 found=Get(i_a,1)
                                 if defined_user == found:
-                                    return True,found
+                                    return True,i_a(0)
+                        else:
+                            if str(admin_id) in i_a:
+                                if Get(i_a,-1) == 'ADMINISTRATOR':
+                                    found=Get(i_a,1)
+                                    if defined_user == found:
+                                        return True,found
                 else:
                     if self.Vars('no_find_user_pass') is True: break
                     ok,user,passwd=self.find_user_pass(ip=ip)
