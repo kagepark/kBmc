@@ -2323,6 +2323,9 @@ class kBmc:
     def Vars(self,key=None,value={None},default=None,name=None):
         return Vars(key,value,default,name,class_obj=self)
 
+    def GetBaseInfo(self):
+        return GetBaseInfo(self)
+
     def CallRedfish(self,force=True,**opts):
         rf=self.Vars('rf')
         if rf: return rf
