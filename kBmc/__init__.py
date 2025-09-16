@@ -2234,7 +2234,7 @@ class kBmc:
             else:
                 self.hardcode=hardcode
 
-        cipher=Get(opts['cipher','ipmi_cipher','bmc_cipher'])
+        cipher=Get(opts,['cipher','ipmi_cipher','bmc_cipher'])
         if IsInt(cipher):
             if save_at_global:
                 env_bmc.set('ipmi_cipher',cipher)
