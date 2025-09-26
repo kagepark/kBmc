@@ -3895,45 +3895,48 @@ class kBmc:
                 #If redfish
                 rf=self.CallRedfish()
                 if rf:
-                    ok,rf_boot_info=rf.Boot()
-                    #print('>>>>>rf.Boot():',rf_boot_info)
-                    #Detail information : output : dictionary
-                    if mode == 'detail':
-                        return rf_boot_info
+                    #ok,rf_boot_info=rf.Boot()
+                    rf_boot_info=rf.Boot()
+                    if isinstance(rf_boot_info,tuple):
+                        rf_boot_info=rf_boot_info[1] #if tuple output then take data, ignore return code
 
-                    #Simple information : [status, uefi, persistent]
-                    if rf_boot_info.get('order',{}).get('enable','') == 'Disabled': #Follow BIOS setting
-                        if rf_boot_info.get('bios',{}).get('mode','') == 'Dual':
-                            order_value=Get(rf_boot_info.get('bios',{}).get('order',[]),0)
-                            if isinstance(order_value,dict): #New Redfish format(covert to old format)
-                                order_value=Get(order_value,'name')
-                            if isinstance(order_value,str):
-                                if 'UEFI PXE' in order_value:
-                                    status='pxe'
-                                    efi=True
-                                    persistent=True
-                                elif 'Network:IBA' in order_value:
-                                    status='pxe'
-                                    efi=False
-                                    persistent=True
-                        else:
-                            efi=True if rf_boot_info.get('bios',{}).get('mode','') == 'UEFI' else False
-                            order_info=Get(rf_boot_info.get('bios',{}).get('order',[]),0,default={})
-                            if isinstance(order_info,dict): #New Redfish format(covert to old format)
-                                order_info=order_info.get('name')
-                            if isinstance(order_info,str):
-                                if 'Network:' in order_info:
-                                    status='pxe'
-                                    persistent=True
-                    else: # Follow instant overwriten Boot-Order
-                        efi=True if rf_boot_info.get('order',{}).get('mode','') == 'UEFI' else False
-                        status=rf_boot_info.get('order',{}).get('1','').lower()
-                        persistent=True if rf_boot_info.get('order',{}).get('enable','') == 'Continuous' else False
-                    # if status is False then it can't correctly read Redfish. So keep check with ipmitool
-                    #if status is not False:
-                    if status:
-                        #print('>>>>>rf.Boot() result:',[status,efi,persistent])
-                        return [status,efi,persistent]
+                    if isinstance(rf_boot_info,dict): # it should be dict
+                        #Detail information : output : dictionary
+                        if mode == 'detail':
+                            return rf_boot_info
+                        #Simple information : [status, uefi, persistent]
+                        if rf_boot_info.get('order',{}).get('enable','') == 'Disabled': #Follow BIOS setting
+                            if rf_boot_info.get('bios',{}).get('mode','') == 'Dual':
+                                order_value=Get(rf_boot_info.get('bios',{}).get('order',[]),0)
+                                if isinstance(order_value,dict): #New Redfish format(covert to old format)
+                                    order_value=Get(order_value,'name')
+                                if isinstance(order_value,str):
+                                    if 'UEFI PXE' in order_value:
+                                        status='pxe'
+                                        efi=True
+                                        persistent=True
+                                    elif 'Network:IBA' in order_value:
+                                        status='pxe'
+                                        efi=False
+                                        persistent=True
+                            else:
+                                efi=True if rf_boot_info.get('bios',{}).get('mode','') == 'UEFI' else False
+                                order_info=Get(rf_boot_info.get('bios',{}).get('order',[]),0,default={})
+                                if isinstance(order_info,dict): #New Redfish format(covert to old format)
+                                    order_info=order_info.get('name')
+                                if isinstance(order_info,str):
+                                    if 'Network:' in order_info:
+                                        status='pxe'
+                                        persistent=True
+                        else: # Follow instant overwriten Boot-Order
+                            efi=True if rf_boot_info.get('order',{}).get('mode','') == 'UEFI' else False
+                            status=rf_boot_info.get('order',{}).get('1','').lower()
+                            persistent=True if rf_boot_info.get('order',{}).get('enable','') == 'Continuous' else False
+                        # if status is False then it can't correctly read Redfish. So keep check with ipmitool
+                        #if status is not False:
+                        if status:
+                            #print('>>>>>rf.Boot() result:',[status,efi,persistent])
+                            return [status,efi,persistent]
                 #If received bios_cfg file
                 if bios_cfg:
                     bios_cfg=self.find_uefi_legacy(bioscfg=bios_cfg)
