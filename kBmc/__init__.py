@@ -3896,7 +3896,7 @@ class kBmc:
                 rf=self.CallRedfish()
                 if rf:
                     #ok,rf_boot_info=rf.Boot()
-                    rf_boot_info=rf.Boot()
+                    rf_boot_info=rf.Boot(pxe_boot_mac=pxe_boot_mac)
                     if isinstance(rf_boot_info,tuple):
                         rf_boot_info=rf_boot_info[1] #if tuple output then take data, ignore return code
 
@@ -3906,7 +3906,8 @@ class kBmc:
                             return rf_boot_info
                         #Simple information : [status, uefi, persistent]
                         if rf_boot_info.get('order',{}).get('enable','') == 'Disabled': #Follow BIOS setting
-                            if rf_boot_info.get('bios',{}).get('mode','') == 'Dual':
+                            bios_mode=rf_boot_info.get('bios',{}).get('mode','')
+                            if bios_mode == 'Dual':
                                 order_value=Get(rf_boot_info.get('bios',{}).get('order',[]),0)
                                 if isinstance(order_value,dict): #New Redfish format(covert to old format)
                                     order_value=Get(order_value,'name')
@@ -3920,12 +3921,16 @@ class kBmc:
                                         efi=False
                                         persistent=True
                             else:
-                                efi=True if rf_boot_info.get('bios',{}).get('mode','') == 'UEFI' else False
+                                efi=True if bios_mode == 'UEFI' else False
                                 order_info=Get(rf_boot_info.get('bios',{}).get('order',[]),0,default={})
                                 if isinstance(order_info,dict): #New Redfish format(covert to old format)
-                                    order_info=order_info.get('name')
+                                    if pxe_boot_mac == order_info.get('mac'):
+                                        #Alreay set it PXE BOOT on BIOS with PXE Boot Mac
+                                        return ['pxe',True,True]
+                                    else:
+                                        order_info=order_info.get('name')
                                 if isinstance(order_info,str):
-                                    if 'Network:' in order_info:
+                                    if 'Network:' in order_info or 'UEFI PXE IPv' in order_info or 'Ethernet' in order_info:
                                         status='pxe'
                                         persistent=True
                         else: # Follow instant overwriten Boot-Order
