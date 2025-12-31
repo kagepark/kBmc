@@ -616,7 +616,7 @@ class Redfish:
                             _mm_=_mm_[0]
                         else: 
                             printf(' - Error: Missing DATA for {} command : {}'.format(mode,msg),log=log,no_intro=None,mode='d')
-                            return False
+                            return 0
                     if 'message' in _mm_:
                         mm=_mm_.get('message')
                     elif 'Message' in _mm_:
@@ -625,7 +625,7 @@ class Redfish:
                         mm=_mm_.get('@Message.ExtendedInfo',[{}])[-1].get('Message')
                     else:
                         printf(' - Error: Unknown : {}'.format(_mm_),log=log,no_intro=None,mode='d')
-                        return False
+                        return 0
                     if isinstance(mm,str):
                         if ('temporarily unavailable' in mm and 'Retry in  seconds' in mm) or ('Bios setting file already exists' in mm):
                             #Retry
@@ -636,7 +636,7 @@ class Redfish:
                             continue 
                         elif ('general error has occurred' in mm):
                             printf(' - Error : {} command : {}'.format(mode,mm),log=log,no_intro=None,mode='d')
-                            return False
+                            return 0
                         elif ('property Action is not in the list' in mm):
                             printf(' - Error: Remove the unknown property from the request body and resubmit the request if the operation failed',log=log,no_intro=None,mode='d')
                             return 0
@@ -2356,38 +2356,49 @@ class kBmc:
         if krc(rrc,chk=False) and Get(Get(rrc,1),0) == 1: # Not support ipmitool
             return False
         if krc(rrc,chk=True):
+            sb=False
+            if 'BCM HOST' in rrc[1][1]:
+                sb=True
             for ii in Split(rrc[1][1],'\n'):
                 ii_a=Split(ii,'|')
-                find=''
-                if name == 'smc' and len(ii_a) > 2:
-                    find=Strip(ii_a[1]).upper()
-                elif len(ii_a) > 5:
-                    find=Strip(ii_a[0]).upper()
-                else:
-                    continue
-                if '_' not in find and 'TEMP' in find and ('CPU' in find or 'SYSTEM ' in find):
-                    if name == 'smc':
-                        tmp=Strip(ii_a[2])
-                        if tmp in ['N/A','Disabled','0C/32F']:
-                            return 'off'
-                        elif 'C/' in tmp and 'F' in tmp: # Up state
-                            return 'up'
-                        elif tmp == 'No Reading':
-                            IsError('sensor',"Can not read sensor data")
-                    else: #ipmitool
-                        tmp=Strip(ii_a[3])
-                        tmp2=Strip(ii_a[4])
-                        if tmp == 'ok':
+                if sb:
+                    if 'BCM HOST' in ii_a[0]:
+                        try:
+                            int(float(ii_a[1]))
                             return 'on'
-                        elif tmp == 'na':
-                            if tmp2 == 'na': #Add H13 rule
+                        except:
+                            return 'off'
+                else:
+                    find=''
+                    if name == 'smc' and len(ii_a) > 2:
+                        find=Strip(ii_a[1]).upper()
+                    elif len(ii_a) > 5:
+                        find=Strip(ii_a[0]).upper()
+                    else:
+                        continue
+                    if '_' not in find and 'TEMP' in find and ('CPU' in find or 'SYSTEM ' in find):
+                        if name == 'smc':
+                            tmp=Strip(ii_a[2])
+                            if tmp in ['N/A','Disabled','0C/32F']:
                                 return 'off'
-                            else:
-                                try:
-                                    int(float(tmp2))
+                            elif 'C/' in tmp and 'F' in tmp: # Up state
+                                return 'up'
+                            elif tmp == 'No Reading':
+                                IsError('sensor',"Can not read sensor data")
+                        else: #ipmitool
+                            tmp=Strip(ii_a[3])
+                            tmp2=Strip(ii_a[4])
+                            if tmp == 'ok':
+                                return 'on'
+                            elif tmp == 'na':
+                                if tmp2 == 'na': #Add H13 rule
                                     return 'off'
-                                except:
-                                    pass
+                                else:
+                                    try:
+                                        int(float(tmp2))
+                                        return 'off'
+                                    except:
+                                        pass
         return 'unknown'
 
 
@@ -4055,7 +4066,7 @@ class kBmc:
                     if mac_src_a:
                         mac_source=Strip(mac_src_a[0])
                         if mac_source:
-                            if len(mac_source.split()) == 10:  
+                            if len(mac_source.split()) in [8,10]:  
                                 eth_mac=MacV4(':'.join(mac_source.split()[-6:]))
                             elif len(mac_source.split()) == 16:
                                 eth_mac=MacV4(':'.join(mac_source.split()[-12:-6]))
