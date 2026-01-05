@@ -183,8 +183,8 @@ def Vars(key=None,value={None},default=None,name=None,read_key_split=',',class_o
                 a=_Read(env_errors,k)
                 if a != {None}: return env_errors,k,a
             elif name in ['__Break__','break']:
-                a=_Read(env_break,k)
-                if a != {None}: return env_break,k,a
+                a=_Read(env_breaking,k)
+                if a != {None}: return env_breaking,k,a
             elif name in ['kBmc','bmc']:
                 a=_Read(env_bmc,k)
                 if a != {None}: return env_bmc,k,a
@@ -222,7 +222,7 @@ def Vars(key=None,value={None},default=None,name=None,read_key_split=',',class_o
             if name in ['__Error__','error']:
                 env_errors.set(key,value)
             elif name in ['__Break__','break','cancel']:
-                env_break.set(key,value)
+                env_breaking.set(key,value)
             elif name in ['__Ipmi__','ipmi']:
                 env_ipmi.set(key,value)
             elif name in ['__Lan__','eth','lan']:
@@ -576,7 +576,7 @@ class Redfish:
         #0    : property issue 
         Time=TIME()
         if not Ping(ip,timeout=timeout,log_info='i'):
-            printf("ERROR: Can not access the ip({}) over {}".format(host,Time.Spend(unit='H',integer=False,human_unit=True)),log=log)
+            printf("ERROR: Can not access the ip({}) over {}".format(ip,Time.Spend(unit='H',integer=False,human_unit=True)),log=log)
             return False
         if not isinstance(cmd,str):
             printf("ERROR: Not support command({})".format(cmd),log=log)
@@ -631,20 +631,26 @@ class Redfish:
                             #Retry
                             # This error message required reset the power to flushing the redfish's garbage configuration
                             self.Power('reset',up=30,sensor=True)
-                            #printf('.',direct=True,log=log)
                             printf(Dot(),direct=True,log=log)
                             continue 
-                        elif ('general error has occurred' in mm):
+                        else:
                             printf(' - Error : {} command : {}'.format(mode,mm),log=log,no_intro=None,mode='d')
                             return 0
-                        elif ('property Action is not in the list' in mm):
-                            printf(' - Error: Remove the unknown property from the request body and resubmit the request if the operation failed',log=log,no_intro=None,mode='d')
-                            return 0
-            if data[1].status_code == 200: #OK
+                        #elif ('general error has occurred' in mm):
+                        #    printf(' - Error : {} command : {}'.format(mode,mm),log=log,no_intro=None,mode='d')
+                        #    return 0
+                        #elif ('property Action is not in the list' in mm):
+                        #    printf(' - Error: Remove the unknown property from the request body and resubmit the request if the operation failed',log=log,no_intro=None,mode='d')
+                        #    return 0
+                        #elif ('invalid parameter Action' in mm):
+                        #    printf(' - Error: {mm}',log=log,no_intro=None,mode='d')
+                        #    return 0
+            if data[1].status_code in [200,202]: #OK:200, Already same??:202
                 if mode == 'patch': # if patch command then reset the power to apply
-                    if patch_reset:
-                        time.sleep(5)
-                        return self.Power('reset',up=Int(wait_after_reset,default=30),sensor=True)
+                    if data[1].status_code == 200:
+                        if patch_reset:
+                            time.sleep(5)
+                            return self.Power('reset',up=Int(wait_after_reset,default=30),sensor=True)
                 return True
             #Fail
             printf(' - Error: ({}:{}):{}'.format(mode,data[1].status_code,data[1].text),log=log,no_intro=None,mode='d')
@@ -813,7 +819,7 @@ class Redfish:
         keep_on=Int(opts.get('keep_up',opts.get('keep_on')),0)
         up_state_timeout=Int(opts.get('up_state_timeout'),120) # if keep up to 120seconds then change to on
         keep_off=Int(opts.get('keep_down',opts.get('keep_off',opts.get('power_down'))),30) # keep off 30 seconds
-        keep_uknown=Int(opts.get('keep_unknown'),300) # keep unknown 5min
+        keep_unknown=Int(opts.get('keep_unknown'),300) # keep unknown 5min
         up_init=None
         Time=TIME()
         UTime=TIME()
@@ -865,7 +871,7 @@ class Redfish:
                     UPSTATETime.Reset()
                     stat=env_bmc.get('tag_unknown')
                     if keep_unknown > 0:
-                        if UNTime.Out(keep_unkown): return None # Unknown
+                        if UNTime.Out(keep_unknown): return None # Unknown
             before_mon=mon
             printf(stat,direct=True,log=log,log_level=1)
             time.sleep(3)
@@ -878,7 +884,7 @@ class Redfish:
         timeout=Int(opts.get('timeout'),300)
         keep_on=Int(opts.get('keep_up',opts.get('keep_on')),0)
         keep_off=Int(opts.get('keep_down',opts.get('keep_off')),0)
-        keep_uknown=Int(opts.get('keep_unknown'),0)
+        keep_unknown=Int(opts.get('keep_unknown'),0)
         before_mon=opts.get('before',opts.get('before_mon',opts.get('before_state')))
         Time=TIME()
         DTime=TIME()
@@ -954,11 +960,14 @@ class Redfish:
             elif IsIn(cmd,['reboot','GracefulRestart','restart']):
                 return 'GracefulRestart'
 
-        def _power_(cmd,retry=2,monitor_timeout=300,keep_init_state_timeout=60,up_state_timeout=120,init_power_state=None,**opts):
+        def _power_(cmd,retry=2,monitor_timeout=300,keep_init_state_timeout=60,up_state_timeout=900,init_power_state=None,**opts):
+            #increase up_state_timeout from 3min to 15min
             ip,user,passwd,log=GetBaseInfo((self,self.bmc),**opts)
             #return None(Timeout),False(Error),True(OK)
             Time=TIME()
             Time.Reset(name='up_state_timeout')
+            printf(f'RF.Power monitor timeout: {up_state_timeout}sec',log=log,mode='d')
+
             ok=None
             rf_cmd=rf_power_json_cmd(cmd)
             rf_cmd_info=self.Get('/Systems/1/ResetActionInfo',**opts)
@@ -1364,7 +1373,8 @@ class Redfish:
         if '@Redfish.Settings' in bios_info:
              naa['cmd']=bios_info.get('@Redfish.Settings',{}).get('SettingsObject',{}).get('@odata.id')
         else:
-            naa['cmd']=cmd
+            printf('Can not find "@Redfish.Settings" in bios_info',log=self.Vars('log'),mode='d')
+            return naa
         #PXE Boot Mac
         if pxe_boot_mac in [None,'00:00:00:00:00:00']: pxe_boot_mac=self.BaseMac().get('lan')
         naa['pxe_boot_mac']=MacV4(pxe_boot_mac)
@@ -1515,7 +1525,7 @@ class Redfish:
              return False
         else:
              printf('Not support Systems/1/BootOptions on this BMC',log=log,log_level=1,mode='d')
-             return None
+             return False
 
     def _Boot_Name(self,boot):
         ##  boot
@@ -1636,14 +1646,15 @@ class Redfish:
             if self._Boot_SetHTTP(_b_,mode,https=https,retry=3) is False:
                 return False,'Can not setup BootMODE or HTTP/HTTPS protocol'
 
-        net_boot=self._Boot_NetworkBootOrder(pxe_boot_mac=pxe_boot_mac,http=http,ipv=ipv)
-        if net_boot is False: #Error
-            printf('Network Boot(PXE) setting Error: Not found Network Boot Source',log=self.Vars('log'),mode='d')
-            return False,'Network Boot(PXE) setting Error: Not found Network Boot Source'
-        else:
-            if net_boot is None:
-                printf(f'Network Boot(PXE) setting : Not support PXE Boot for {pxe_boot_mac} with http:{http} on this BMC',log=self.Vars('log'),mode='d')
-            if not isinstance(_b_,dict): _b_=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
+        #Looks don't need. because duplicated function
+        #net_boot=self._Boot_NetworkBootOrder(pxe_boot_mac=pxe_boot_mac,http=http,ipv=ipv)
+        #if net_boot is False: #Error
+        #    printf('Network Boot(PXE) setting Error: Not found Network Boot Source',log=self.Vars('log'),mode='d')
+        #    return False,'Network Boot(PXE) setting Error: Not found Network Boot Source'
+        #else:
+        #    if net_boot is None:
+        #        printf(f'Network Boot(PXE) setting : Not support PXE Boot for {pxe_boot_mac} with http:{http} on this BMC',log=self.Vars('log'),mode='d')
+        if not isinstance(_b_,dict): _b_=self._Boot_BiosBootInfo(pxe_boot_mac=pxe_boot_mac)
         #Check BIOS Boot order 
         if pxe_boot_mac:
             if self._Boot_BiosBootOrderCheck_(pxe_boot_mac,_b_=_b_)[0] is True:
@@ -1671,7 +1682,7 @@ class Redfish:
                     return False,'Can not set {} Boot at BIOS'.format('HTTPS' if http and https else 'HTTP' if http else 'PXE')
             else:
                 printf('Not support /Systems/1/Oem/Supermicro/FixedBootOrder command',log=self.Vars('log'),mode='d')
-                return None,'Not support /Systems/1/Oem/Supermicro/FixedBootOrder command'
+                return False,'Not support /Systems/1/Oem/Supermicro/FixedBootOrder command'
         printf('Not found any updating parameters',log=self.Vars('log'),mode='d')
         return None,'Not found any updating parameters'
         
@@ -2101,7 +2112,7 @@ class Redfish:
         return rc
 
     def FactoryDefaultBios(self):
-        return LoadDefaultBios()
+        return self.LoadDefaultBios()
 
     def AccountLockoutThreshold(self,count=0,**opts): # 0: Not lockout, 3: 3 times failed then lockout account
         printf("""Set Redfish Account Lockout Threshold""",log=self.Vars('log'),dsp='d')
@@ -2991,10 +3002,10 @@ class kBmc:
                         self.Vars('checked_port',True)
                         cc=True
                         break
-                    printf(".",log=log,direct=True)
+                    printf(Dot(),log=log,direct=True)
                     direct_print=True
                     time.sleep(3)
-                if direct_print: printf(".",no_intro=True,log=log,log_level=1)
+                if direct_print: printf(Dot(),no_intro=True,log=log,log_level=1)
                 if cc is False:
                     printf("{} is not IPMI IP(2)".format(ip),log=log,log_level=1,dsp='e')
                     IsError('IP',f"{ip} is not IPMI IP")
@@ -3348,7 +3359,7 @@ class kBmc:
             if ok:
                 return ok,uu,pp
         msg="Recover ERROR!! Please checkup user-lock-mode on the BMC Configure."
-        warn.set('user_pass',msg=msg)
+        #warn.set('user_pass',msg=msg)
         printf(msg,log=log,log_level=1)
         return False,was_user,was_passwd
 
@@ -3740,11 +3751,12 @@ class kBmc:
         ip,user,passwd,log=GetBaseInfo(self,**opts)
         err,msg=IsError(f'NET,IP,{ip},user_pass')
         timeout=opts.get('timeout',opts.get('time_out',opts.get('ping_out',1800)))
-        if err: return False,msg
-        if not Ping(ip,keep_good=0,timeout=timeout): return False,f'Can not access at {ip}'
+        if err: return False,msg,f'Error: {msg}'
+        if not Ping(ip,keep_good=0,timeout=timeout): return False,f'Can not access at {ip}',f'Can not access at {ip}'
 
+        printf(f'BootOrder for ipxe:{ipxe}, mac:{pxe_boot_mac}',log=log,mode='d')
         if not force:
-            crc=self.bootorder(mode='status')
+            crc=self.bootorder(mode='status',ipxe=ipxe,pxe_boot_mac=pxe_boot_mac)
             printf('Current Boot order is {}{}'.format(crc[0],' with UEFI mode' if crc[1] else ''),log=log,log_level=6)
             if crc[0] == 'pxe':
                 if ipxe:
@@ -3765,7 +3777,7 @@ class kBmc:
                 time.sleep(10)
                 frc_msg=''
                 for i in range(0,200):
-                    frc=self.bootorder(mode='status')
+                    frc=self.bootorder(mode='status',ipxe=ipxe,pxe_boot_mac=pxe_boot_mac)
                     if frc[0] == 'pxe':
                         if ipxe:
                             if frc[1]: 
@@ -3777,7 +3789,6 @@ class kBmc:
                                 msg='Set to PXE Config'
                                 printf(msg,log=log,log_level=6)
                                 return True,msg,frc[2]
-                    #printf('.',direct=True,log=log,log_level=1)
                     printf(Dot(),direct=True,log=log,log_level=1)
                     frc_msg='got {} Config{}'.format(frc[0],' with UEFI mode' if crc[1] else '')
                     time.sleep(6)
@@ -3796,7 +3807,6 @@ class kBmc:
         timeout=opts.get('timeout',opts.get('time_out',1800))
         err,msg=IsError(f'NET,IP,{ip},user_pass')
         if err: return False, msg
-        rc=False,"Unknown boot mode({})".format(mode)
         if not MacV4(pxe_boot_mac): pxe_boot_mac=self.Vars('eth_mac')
 
         def ipmitool_bootorder_setup(mm,mode,persistent,ipxe,pxe_boot_mac):
@@ -3804,7 +3814,8 @@ class kBmc:
             # Setup Boot order
             #######################
             rf=self.CallRedfish()
-            if self.Vars('redfish') and rf:
+            #if self.Vars('redfish') and rf:
+            if rf: # if redfish is available then try with redfish
                 # Update new information
                 rfp=rf.Power(cmd='on',sensor_up=10,sensor=True)
                 if rfp is True:
@@ -3816,20 +3827,26 @@ class kBmc:
                         mode='UEFI'
                     printf("[RF] Boot: boot:{}, mode:{}, keep:{}, force:{}".format(boot,mode,True if persistent else False,force),log=log,mode='d')
                     ok,rf_boot=rf.Boot(boot=boot,mode=mode,keep='keep' if persistent else 'Once',force=force,set_bios_uefi=set_bios_uefi,pxe_boot_mac=pxe_boot_mac)
-                    if ok in [True,None]: ok=True
+                    if ok in [True,None]: 
+                        if ok is True:
+                            #Redfish set boot order then it should be need reset the power
+                            #if None then don't need. Already set it up before boot up
+                            time.sleep(5)
+                            rf.Power(cmd='reset',sensor_up=5,sensor=True)
+                        ok=True
                     printf("[RF] SET : {}".format(ok),log=log,mode='d')
                     rc=ok,(ok,'{} set {} to {}'.format('Persistently' if persistent else 'Temporarily',boot,mode) if ok else rf_boot)
                     if krc(rc,chk=True):
                         return True,rc[1][1]
-                    return rc
+                    #return rc
                 elif rfp is None:
                     printf('Can not power on the server',log=log,log_level=6)
                     return False,'Can not power on the server'
                 #Error then next
+            #return False,'FAIL'
 
             if self.power('off',verify=True,timeout=timeout):
                 if self.is_down(timeout=1200,interval=5,sensor_off_monitor=5,keep_off=5)[0]:
-
                     _chk_=self.run_cmd(mm.cmd_str('chassis bootdev'))
                     possible_mode=[]
                     if krc(_chk_,chk=True):
@@ -3872,9 +3889,11 @@ class kBmc:
                 rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 4'))
             elif mode == 'usb':
                 rc=self.run_cmd(mm.cmd_str('ipmi power bootoption 6'))
+            else:
+                return False,f'Wrong boot mode({mode})'
             if krc(rc,chk=True):
                 return True,rc[1][1]
-            return rc
+            return False,rc[1][2] if rc[1][2] else rc[1][1]
 
         def ipmitool_bootorder_status(mm,mode,bios_cfg):
             #IPMITOOL command
@@ -3932,6 +3951,7 @@ class kBmc:
                                         efi=False
                                         persistent=True
                             else:
+                                #Check UEFI and first boot order
                                 efi=True if bios_mode == 'UEFI' else False
                                 order_info=Get(rf_boot_info.get('bios',{}).get('order',[]),0,default={})
                                 if isinstance(order_info,dict): #New Redfish format(covert to old format)
@@ -3956,9 +3976,9 @@ class kBmc:
                 #If received bios_cfg file
                 if bios_cfg:
                     bios_cfg=self.find_uefi_legacy(bioscfg=bios_cfg)
-                    if krc(rc,chk=True): # ipmitool bootorder
+                    if krc(bios_cfg,chk=True): # ipmitool bootorder
                         status='No override'
-                        for ii in Split(Get(rc[1],1),'\n'):
+                        for ii in Split(Get(bios_cfg[1],1),'\n'):
                             if 'Options apply to all future boots' in ii:
                                 persistent=True
                             elif 'BIOS EFI boot' in ii:
@@ -4047,9 +4067,9 @@ class kBmc:
                 else:
                     # Setup Boot order
                     return ipmitool_bootorder_setup(mm,mode,persistent,ipxe,pxe_boot_mac)
-            else:
-                return False,'Unknown module name'
-        return False,rc[-1]
+            #else:
+            #    return False,'Unknown module name'
+        return False,'Can not set bootorder'
 
     def get_eth_mac(self,port=None,**opts):
         if self.Vars('eth_mac'):
@@ -4215,8 +4235,8 @@ class kBmc:
                 return True,out
         return False,out
 
-    def get_boot_mode(self):
-        return self.bootorder(mode='status')
+    def get_boot_mode(self,ipxe=True,pxe_boot_mac=None):
+        return self.bootorder(mode='status',ipxe=ipxe,pxe_boot_mac=pxe_boot_mac)
 
     def power(self,cmd='status',retry=0,boot_mode=None,order=False,ipxe=False,log_file=None,log=None,force=False,mode=None,verify=True,post_keep_up=20,pre_keep_up=0,post_keep_down=0,timeout=1800,lanmode=None,fail_down_time=240,cancel_func=None,set_bios_uefi_mode=False,monitor_mode='a',command_gap=5,error=True,mc_reset=False,off_on_interval=0,sensor=None,keep_init_state_timeout_rf=60,monitor_timeout_rf=300,failed_timeout_keep_off=240,failed_timeout_keep_on=120,**opts):
         ip,user,passwd,log=GetBaseInfo(self,**opts)
@@ -4608,8 +4628,7 @@ class kBmc:
                                 time.sleep(2)
                             continue
                     if end_newline: printf(env_bmc.get('power_tag_on') if verify_status== 'on' else env_bmc.get('power_tag_off') ,no_intro=True,log=log,log_level=1)
-                    #return True,Get(Get(rc,1),1)
-                    return True,rc_msg
+                    return True,cmd
             #can not verify then try with next command
             time.sleep(3)
         if chkd:
@@ -4773,9 +4792,10 @@ class kBmc:
                     return False,msg
                 for i in range(0,2):
                     cmd_str_dict=mm.cmd_str(cmd)
-                    if cmd_str_dict[0]:
-                        base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':ip,'user':user,'passwd':passwd})
-                        cmd_str='''{} {}'''.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
+                    if not cmd_str_dict[0]:
+                        return False,f'ERROR: Command convert: {cmd} => {cmd_str_dict[1]}'
+                    base_cmd=sprintf(cmd_str_dict[1]['base'],**{'ip':ip,'user':user,'passwd':passwd})
+                    cmd_str='''{} {}'''.format(base_cmd[1],cmd_str_dict[1].get('cmd'))
                     rc=rshell('''screen -c {} -dmSL {} {}'''.format(screen_tmp_file,FixApostropheInString(title),cmd_str))
                     if rc[0] == 0:
                         for ii in range(0,50):
