@@ -128,7 +128,7 @@ def Ping(host=None,**opts):
             if breaked:
                 printf(msg,log=log,dsp=log_mode)
                 timeout=30 # reduce timeout for Cancel function
-                #break
+                break
         printf(env_bmc.get('tag_unknown'),log=log,direct=True)
         time.sleep(interval)
     return False
