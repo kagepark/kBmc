@@ -3790,7 +3790,7 @@ class kBmc:
                                 printf(msg,log=log,log_level=6)
                                 return True,msg,frc[2]
                     printf(Dot(),direct=True,log=log,log_level=1)
-                    frc_msg='got {} Config{}'.format(frc[0],' with UEFI mode' if crc[1] else '')
+                    frc_msg='got {} Config{}'.format(frc[0],' with UEFI mode' if frc[1] else '')
                     time.sleep(6)
                 printf('Can not find {}PXE Config, Currently it {}'.format('i' if ipxe else '',frc_msg),log=log,log_level=6)
                 return False,'Can not find {}PXE Config, Currently it {}'.format('i' if ipxe else '',frc_msg),False
